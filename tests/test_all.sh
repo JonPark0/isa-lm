@@ -36,6 +36,7 @@ if have aarch64-linux-gnu-gcc && have qemu-aarch64; then
     row "aarch64 neon_dotprod test+e2e (qemu)" "make -s ISA=neon_dotprod CROSS=aarch64-linux-gnu- test e2e"
     row "aarch64 sve VL128+VL512 (qemu)"       "make -s ISA=sve CROSS=aarch64-linux-gnu- test-sve"
     row "aarch64 isa guard (qemu cpus)"        "make -s guard-test-arm"
+    row "aarch64 neon THREADS=pthread (qemu)"  "make -s ISA=neon CROSS=aarch64-linux-gnu- THREADS=pthread test e2e"
 else skip "aarch64 (qemu)" "no aarch64-linux-gnu-gcc/qemu-aarch64"; fi
 
 if python3 -c "import pytest" 2>/dev/null; then

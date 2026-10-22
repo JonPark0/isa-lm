@@ -21,9 +21,14 @@ static void matvec_task(void *p, int tid, int nt) {
     else ml_k_matvec_q4(c->y, c->W, c->x, r0, r1);
 }
 
+/* Below this many weights a matvec finishes faster than threads can be woken
+ * and joined, so it runs on the caller alone. */
+#define PARALLEL_MIN_WEIGHTS (1 << 18)
+
 void ml_matvec(ml_pool *pool, float *y, const ml_qtensor *W, const ml_qact *x) {
     matvec_ctx c = { y, W, x };
-    ml_pool_run(pool, matvec_task, &c);
+    if ((size_t)W->rows * W->cols < PARALLEL_MIN_WEIGHTS) matvec_task(&c, 0, 1);
+    else ml_pool_run(pool, matvec_task, &c);
 }
 
 typedef struct {
@@ -56,5 +61,9 @@ static void attention_task(void *p, int tid, int nt) {
 void ml_attention(ml_pool *pool, float *out, const float *q, const float *kcache,
                   const float *vcache, float *att_scratch, const ml_config *cfg, int pos) {
     attn_ctx c = { out, q, kcache, vcache, att_scratch, cfg, pos };
-    ml_pool_run(pool, attention_task, &c);
+    /* Same cut-off as matvec, in multiply-adds: n_heads * (pos+1) * head_dim * 2. */
+    if ((size_t)cfg->n_heads * (size_t)(pos + 1) * (size_t)cfg->head_dim * 2 < PARALLEL_MIN_WEIGHTS)
+        attention_task(&c, 0, 1);
+    else
+        ml_pool_run(pool, attention_task, &c);
 }

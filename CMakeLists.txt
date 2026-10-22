@@ -85,7 +85,7 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/app/ml_bench.c)
 endif()
 
 enable_testing()
-foreach(t test_arena test_quant test_kernels test_sampler)
+foreach(t test_arena test_quant test_kernels test_sampler test_threads)
   ml_exe(${t} tests/${t}.c)
   add_test(NAME ${t} COMMAND ${t})
 endforeach()
