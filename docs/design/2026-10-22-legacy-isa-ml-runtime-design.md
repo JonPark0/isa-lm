@@ -90,8 +90,8 @@ make ISA=<isa> [THREADS=1|pthread] [ASM=0|1] [CROSS=<prefix>] [DEBUG=0|1]
 - The scalar kernels are always compiled (used as fallback and by tests).
 - `ASM=1`: a kernel listed in `kernels/<isa>/asm.mk` is built from
   `kernels/<isa>/<kernel>.S` instead of `.c`; same symbol, same C ABI
-  (SysV x64 / AAPCS / AAPCS64). Initial release ships the mechanism with no
-  `.S` kernels.
+  (SysV x64 / AAPCS / AAPCS64). Initial release ships one sample,
+  `kernels/sse2/add.S` (`ml_k_add_sse2`, SysV x64), to prove the mechanism.
 - Compilers: GCC and Clang (primary); MSVC for x64 via CMake.
 
 ## 4. Quantization Formats
@@ -131,7 +131,8 @@ void ml_k_matvec_q4 (float *y, const ml_qtensor *W, const ml_qact *x, int r0, in
 void ml_k_quantize_q8(ml_qact *out, const float *x, int k);
 void ml_k_rmsnorm   (float *o, const float *x, const float *w, int n, float eps);
 void ml_k_softmax   (float *x, int n);
-void ml_k_rope      (float *q, float *k, int pos, int head_dim, int n_heads, int n_kv_heads, float theta);
+void ml_k_rope      (float *q, float *k, const float *cos_t, const float *sin_t,
+                     int head_dim, int n_heads, int n_kv_heads); /* tables: row `pos` of precomputed [max_seq][head_dim/2] */
 void ml_k_silu_mul  (float *g, const float *u, int n);   /* g = silu(g) * u */
 void ml_k_add       (float *y, const float *x, int n);   /* y += x */
 float ml_k_dot_f32  (const float *a, const float *b, int n);           /* attention scores */
@@ -141,6 +142,14 @@ void ml_k_axpy_f32  (float *y, float a, const float *x, int n);        /* attent
 - `matvec` processes rows `[r0, r1)`; caller splits rows across threads.
   Kernels process **4 rows at a time** (one activation block load reused 4×),
   with a scalar-row tail for remainders.
+- Rounding everywhere: `quantize_q8` uses `q = trunc(x*id + copysign(0.5, x))`
+  with `id = 127/amax` (round half away from zero, expressible on every ISA
+  including ARMv7). All code builds with `-ffp-contract=off` so scalar and
+  SIMD quantization are bit-identical; SIMD kernels use FMA only via explicit
+  intrinsics.
+- RoPE uses interleaved pairs `(2i, 2i+1)` with `freq_i = theta^(-2i/head_dim)`
+  (llama2.c convention); `cos/sin` tables are precomputed at load into the arena.
+  The HF converter permutes `wq`/`wk` accordingly.
 - SIMD `exp` for `softmax`/`silu`: polynomial approximation with range
   reduction, relative error ≤ 1e-6 over [-88, 88]. Scalar uses `expf`.
 
@@ -211,7 +220,10 @@ GQA: KV head for query head `h` is `h / (n_heads / n_kv_heads)`.
 - `ml_isa_check()` runs first in every executable. x86: CPUID (+ XGETBV for
   OS AVX/AVX-512 state). ARM: `getauxval(AT_HWCAP/AT_HWCAP2)` on Linux;
   compile-time-only assumption elsewhere. `isa_check.c` is compiled without ISA
-  flags. Unsupported CPU → `ML_E_ISA` with the missing feature named.
+  flags, and so is each executable's `main` (`app/main_guard.c`), which calls
+  `ml_isa_check()` before entering the ISA-compiled `ml_main()` — no
+  ISA-specific instruction can run before the check. Unsupported CPU →
+  `ML_E_ISA` with the missing feature named.
 
 ## 7. Testing, Verification, Benchmarks
 
