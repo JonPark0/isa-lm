@@ -46,6 +46,14 @@ done
 err=$($RUN $B/ml_run $M/rand_q4.mlb --tokens 1,2 -n 8 -t 4 2>&1 >/dev/null)
 echo "$err" | grep -q "threads: $NT," && ok || bad "expected 'threads: $NT' in: $err"
 
+# stop tokens: no tokenizer -> ids 1/2 are ordinary tokens, run all -n positions;
+# --eos ID stops as soon as ID is generated
+err=$($RUN $B/ml_run $M/rand_q8.mlb --tokens 1,2 -n 20 -T 0 2>&1 >/dev/null)
+echo "$err" | grep -q "^positions: 20," && ok || bad "no-tokenizer run should use all 20 positions: $err"
+first=$($RUN $B/ml_run $M/rand_q8.mlb --tokens 1,2 -n 3 -T 0 2>/dev/null | awk '{print $2}')
+err=$($RUN $B/ml_run $M/rand_q8.mlb --tokens 1,2 -n 20 -T 0 --eos "$first" 2>&1 >/dev/null)
+echo "$err" | grep -q "^positions: 2," && ok || bad "--eos $first should stop right after the prompt (positions 2): $err"
+
 # usage
 err=$($RUN $B/ml_run 2>&1); rc=$?
 [ $rc -eq 2 ] && echo "$err" | grep -q "usage:" && ok || bad "usage rc=$rc"

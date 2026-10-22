@@ -22,6 +22,8 @@ static const char USAGE[] =
     "  -p F             top-p in [0, 1] (default 0.9)\n"
     "  -s N             random seed (default 1)\n"
     "  -t N             threads (default 1)\n"
+    "  --eos ID         stop when ID is generated (default: BOS/EOS ids 1 and 2 with -z,\n"
+    "                   otherwise run all -n positions)\n"
     "  --dump-logits F  write float32 logits for every --tokens position, then exit\n"
     "  -h, --help       show this help\n";
 
@@ -91,7 +93,7 @@ static int parse_tokens(const char *s, int *out, int max, int vocab) {
 
 int ml_main(int argc, char **argv) {
     const char *model_path = NULL, *tok_path = NULL, *prompt = NULL, *tokens_arg = NULL, *dump = NULL;
-    int steps = 64, nthreads = 1;
+    int steps = 64, nthreads = 1, eos = -1;
     float temp = 0.0f, topp = 0.9f;
     unsigned long long seed = 1;
     for (int i = 1; i < argc; i++) {
@@ -109,6 +111,7 @@ int ml_main(int argc, char **argv) {
         else if (!strcmp(a, "-p")) ok = parse_float(v, &topp);
         else if (!strcmp(a, "-s")) ok = parse_u64(v, &seed);
         else if (!strcmp(a, "-t")) ok = parse_int(v, 1, 64, &nthreads);
+        else if (!strcmp(a, "--eos")) ok = parse_int(v, 0, 1 << 24, &eos);
         else if (!strcmp(a, "--dump-logits")) dump = v;
         else return usage("unknown option");
         if (!ok) { fprintf(stderr, "error: bad value '%s' for %s\n", v, a); return usage(NULL); }
@@ -124,6 +127,7 @@ int ml_main(int argc, char **argv) {
     ml_status st = ml_model_load(&m, model_path);
     if (st != ML_OK) { fprintf(stderr, "error: %s: %s\n", model_path, ml_status_str(st)); return 1; }
     const ml_config *c = &m.cfg;
+    if (eos >= c->vocab) { ml_model_free(&m); return usage("--eos id out of range"); }
     ml_tokenizer tok;
     int have_tok = 0;
     if (tok_path) {
@@ -169,7 +173,10 @@ int ml_main(int argc, char **argv) {
         if (!logits) { fprintf(stderr, "error: token %d at position %d out of range\n", token, pos); rc = 1; break; }
         const int next = pos + 1 < np ? ptoks[pos + 1] : ml_sample(&smp, logits, c->vocab);
         pos++;
-        if (pos >= np && (next == ML_TOK_BOS || next == ML_TOK_EOS)) break;
+        /* llama2.c tokenizers use ids 1/2 as BOS/EOS; other vocabularies (e.g.
+         * Llama 3) do not, so without -z only an explicit --eos stops early. */
+        const int stop = eos >= 0 ? next == eos : (have_tok && (next == ML_TOK_BOS || next == ML_TOK_EOS));
+        if (pos >= np && stop) break;
         if (have_tok) fputs(ml_decode(&tok, token, next), stdout);
         else printf("%d ", next);
         fflush(stdout);
