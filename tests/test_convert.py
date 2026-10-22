@@ -345,3 +345,13 @@ def test_rope_scaled_model_runs_in_c(tmp_path):
     # and scaling changes the result vs. plain RoPE
     plain = ref_forward.forward(dict(rcfg, rope_scaling=None), t, toks)
     assert np.abs(plain[-1] - ref[-1]).max() > 1e-3 * np.abs(ref[-1]).max()
+
+
+def test_sync_wiki_links(tmp_path):
+    import sync_wiki
+    out = sync_wiki.convert_links(
+        "[a](user-guide.md#running) [b](design/x.md) [c](https://e.com) [d](#local) [e](../Makefile)",
+        "docs/architecture.md", "o/r", "main")
+    assert out == ("[a](User-Guide#running) [b](https://github.com/o/r/blob/main/docs/design/x.md) "
+                   "[c](https://e.com) [d](#local) [e](https://github.com/o/r/blob/main/Makefile)")
+    assert sync_wiki.convert_links("[g](docs/testing.md)", "README.md", "o/r", "main") == "[g](Testing)"

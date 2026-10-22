@@ -127,3 +127,13 @@ Thread scaling for the avx2 build with `THREADS=pthread`:
 |-------|-------:|-------:|
 | dim 512 | about 750 tok/s | 1376 tok/s |
 | dim 2048, Q4 | 24 tok/s | 76 tok/s |
+
+## Wiki
+
+The GitHub wiki is generated from `README.md` and `docs/`; edit those, then:
+
+```sh
+git clone https://github.com/JonPark0/isa-lm.wiki.git wiki
+python3 tools/sync_wiki.py wiki --repo JonPark0/isa-lm
+cd wiki && git add -A && git commit -m "Sync from docs" && git push
+```
