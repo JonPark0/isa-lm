@@ -61,3 +61,42 @@ def test_quantize_q4_layout():
     p, d = mlb.quantize_q4(x)
     assert d[0, 0] == 1.0
     assert p[0, 0] == (7 + 8) | ((-7 + 8) << 4)
+
+
+import ref_forward  # noqa: E402
+
+
+def test_ref_forward_shape(tmp_path):
+    path, *_ = _gen(tmp_path, "q8")
+    cfg, t = mlb.read_mlb(path)
+    logits = ref_forward.forward(cfg, t, [1, 5, 9])
+    assert logits.shape == (3, SMALL["vocab"])
+    assert logits.dtype == np.float32
+    assert np.all(np.isfinite(logits))
+    assert logits.std() > 1e-3   # not degenerate
+
+
+def test_ref_forward_causal(tmp_path):
+    path, *_ = _gen(tmp_path, "q8")
+    cfg, t = mlb.read_mlb(path)
+    a = ref_forward.forward(cfg, t, [3, 7])
+    b = ref_forward.forward(cfg, t, [3, 7, 11])
+    np.testing.assert_array_equal(a, b[:2])
+    assert not np.array_equal(b[1], b[2])
+
+
+def test_ref_forward_q4(tmp_path):
+    path, *_ = _gen(tmp_path, "q4")
+    cfg, t = mlb.read_mlb(path)
+    logits = ref_forward.forward(cfg, t, [2, 4])
+    assert logits.shape == (2, SMALL["vocab"]) and np.all(np.isfinite(logits))
+
+
+def test_ref_forward_cli(tmp_path):
+    path, *_ = _gen(tmp_path, "q8")
+    out = tmp_path / "l.f32"
+    rc = os.system(f"{sys.executable} tools/ref_forward.py {path} --tokens 1,2,3 --out {out}")
+    assert rc == 0
+    got = np.fromfile(out, np.float32).reshape(3, -1)
+    cfg, t = mlb.read_mlb(path)
+    np.testing.assert_array_equal(got, ref_forward.forward(cfg, t, [1, 2, 3]))
