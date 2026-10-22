@@ -9,7 +9,11 @@ PYTHON  ?= python3
 
 include mk/isa.mk
 
-BUILD := build/$(ISA)$(ARCHSUF)$(if $(filter pthread,$(THREADS)),-pt)$(if $(filter 1,$(ASM)),-asm)
+BUILD := build/$(ISA)$(ARCHSUF)$(if $(filter pthread,$(THREADS)),-pt)$(if $(filter 1,$(ASM)),-asm)$(if $(filter 1,$(DEBUG)),-dbg)
+# Extra flags get their own object dir so objects never mix flag sets.
+ifneq ($(strip $(EXTRA_CFLAGS)),)
+  BUILD := $(BUILD)-x$(shell echo '$(EXTRA_CFLAGS)' | cksum | cut -d' ' -f1)
+endif
 
 BASE_CFLAGS := -std=c11 -Wall -Wextra -Werror -ffp-contract=off -D_GNU_SOURCE -I. -MMD -MP
 ifeq ($(DEBUG),1)
@@ -44,7 +48,14 @@ $(BUILD)/obj/%.o: %.c
 $(BUILD)/test_%: $(BUILD)/obj/tests/test_%.o $(GUARD_OBJ) $(LIB_OBJ)
 	@$(CC) $(LDFLAGS) $^ -o $@ $(LDLIBS)
 
-test: $(addprefix $(BUILD)/,$(TESTS))
+MODELS := build/models/rand_q8.mlb build/models/rand_q4.mlb
+build/models/rand_%.mlb: tools/gen_random.py tools/mlb.py
+	@mkdir -p $(dir $@)
+	@$(PYTHON) tools/gen_random.py --out $@ --wtype $* --dump-emb-row 5
+
+TESTARGS_test_load := $(MODELS)
+
+test: $(addprefix $(BUILD)/,$(TESTS)) $(MODELS)
 	@set -e; $(foreach t,$(TESTS),$(RUN) $(BUILD)/$(t) $(TESTARGS_$(t));)
 
 clean:
