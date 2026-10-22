@@ -19,14 +19,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install toolchains
-        timeout-minutes: 10
+        timeout-minutes: 15
         run: |
-          # Skip man-db's index rebuild after install; on ubuntu-24.04 runners it
-          # can take tens of minutes.
-          echo 'man-db man-db/auto-update boolean false' | sudo debconf-set-selections
-          sudo rm -f /var/lib/man-db/auto-update
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
+          .github/scripts/apt-install.sh \
             qemu-user gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf libc6-dev-armhf-cross libc6-dev-arm64-cross \
             gcc-mingw-w64-x86-64 cmake ninja-build python3-numpy python3-pytest
       - name: Host CPU features
@@ -48,11 +43,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install Python deps
-        timeout-minutes: 10
-        run: |
-          echo 'man-db man-db/auto-update boolean false' | sudo debconf-set-selections
-          sudo rm -f /var/lib/man-db/auto-update
-          sudo apt-get update && sudo apt-get install -y --no-install-recommends python3-numpy python3-pytest
+        timeout-minutes: 15
+        run: .github/scripts/apt-install.sh python3-numpy python3-pytest
       - name: Host CPU features
         run: grep -m1 -i features /proc/cpuinfo
       - name: scalar
