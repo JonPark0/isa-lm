@@ -8,7 +8,7 @@
 | `make ISA=X e2e` | `tests/test_e2e.sh` runs `ml_run` against the numpy reference, the scalar build, and CLI edge cases |
 | `python3 -m pytest tests` | the Python tools: format round trips, the reference forward, both converters, RoPE scaling |
 | `make guard-test` | x86 ISA guard, using `qemu-x86_64 -cpu core2duo/Nehalem/SandyBridge/Haswell` |
-| `make guard-test-arm` | AArch64 ISA guard, using `qemu-aarch64 -cpu cortex-a53/cortex-a76/max` |
+| `make guard-test-arm` | AArch64 ISA guard, using `qemu-aarch64 -cpu cortex-a53/cortex-a76/neoverse-n2/max` |
 | `make ISA=sve CROSS=aarch64-linux-gnu- test-sve` | the SVE build at 128-bit and 512-bit vector length |
 | `make test-all` | everything above for every ISA, then a summary table |
 
@@ -84,6 +84,7 @@ model must fail with `ML_E_NOMEM` instead of corrupting memory.
 sudo apt-get install qemu-user gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf
 make ISA=neon CROSS=arm-linux-gnueabihf- test e2e
 make ISA=neon_dotprod CROSS=aarch64-linux-gnu- test e2e
+make ISA=neon_i8mm CROSS=aarch64-linux-gnu- test e2e      # qemu -cpu max has i8mm
 ```
 
 ## Sanitizers
@@ -104,8 +105,9 @@ make ISA=avx2 THREADS=pthread EXTRA_CFLAGS="-fsanitize=thread -g" EXTRA_LDFLAGS=
   - CMake and MinGW builds;
   - pytest;
   - a download of `stories15M` from llama2.c, followed by text generation.
-- **`arm64`** (ubuntu-24.04-arm) runs scalar, neon, neon_dotprod and sve tests
-  natively on Arm hardware, then prints a benchmark.
+- **`arm64`** (ubuntu-24.04-arm) runs scalar, neon, neon_dotprod, neon_i8mm
+  and sve tests natively on Arm hardware (each only if the CPU has the
+  extension), then prints a benchmark.
 
 ## Benchmarking
 
@@ -125,18 +127,21 @@ build/avx2-pt/ml_bench bench.mlb -n 128 -t 4        # THREADS=pthread build
 `ml_bench` also times the packed kernels (`matvec_q8_pk`, `matvec_q4_pk`) when
 the build has them.
 
-All results below are from a 4-vCPU x86 VM with AVX-512 VNNI. The VM is shared,
-so expect ±10% noise.
+All x86 results below are from a 4-vCPU VM with AVX-512 VNNI. The kernel and
+prefill tables were measured in one session, as the best of several runs
+pinned to one core. The VM is shared, so expect ±10% noise.
 
-**Kernel throughput, single thread** (`ml_bench`, Q4 4096×4096, GOPS):
+**Kernel throughput, single thread** (`ml_bench`, 4096×4096, GOPS):
 
-| ISA        | row-major | packed |
-|------------|----------:|-------:|
-| sse41      | 17.6 | 30.5 |
-| avx2       | 25.1 | 63.5 |
-| avxvnni    | 22.8 | 56.0 |
-| avx512vnni | 45.9 | 75.7 |
+| ISA        | Q8 row-major | Q8 packed | Q4 row-major | Q4 packed |
+|------------|-------------:|----------:|-------------:|----------:|
+| sse2       | 24.7 | 28.5 | 18.3 | 34.5 |
+| sse41      | 35.6 | 33.5 | 22.0 | 47.6 |
+| avx2       | 47.2 | 48.5 | 33.8 | 76.0 |
+| avxvnni    | 47.1 | 51.3 | 34.8 | 77.7 |
+| avx512vnni | 50.3 | 52.0 | 51.3 | 91.3 |
 
+At this size Q8 is limited by memory bandwidth, so packing mostly helps Q4.
 When the matrix fits in cache (768×768), the packed kernels reach 92 GOPS on
 avx2 and 129–139 GOPS on avx512vnni.
 
@@ -147,16 +152,24 @@ avx2 and 129–139 GOPS on avx512vnni.
 | Q8 | 26 | 39 | 81 | 116 |
 | Q4 | 24 | 53 | 98 | 181 |
 
-**Prompt prefill**, 64 tokens, dim-2048 model, `-t 1` (tok/s):
+**Prompt prefill**, 64 tokens, dim-2048 model (4 layers, hidden 5632, vocab
+32000), packed weights, `-t 1` (tok/s):
 
 | ISA        | Q8 `--batch 1` | Q8 batched | Q4 `--batch 1` | Q4 batched |
 |------------|---------------:|-----------:|---------------:|-----------:|
-| sse41      | 23.5 |  48.9 | 40.9 |  95.0 |
-| avx2       | 31.2 |  89.9 | 52.5 | 180.9 |
-| avxvnni    | 34.2 | 118.5 | 56.6 | 224.8 |
-| avx512vnni | 43.1 | 197.8 | 57.2 | 311.1 |
+| sse2       | 34.9 | 100.8 |  73.3 |  92.9 |
+| sse41      | 30.4 | 114.4 |  92.9 | 178.2 |
+| avx2       | 41.4 | 202.7 | 156.4 | 394.9 |
+| avxvnni    | 44.5 | 311.9 | 152.7 | 484.2 |
+| avx512vnni | 67.4 | 339.3 | 211.1 | 558.3 |
 
-With `-t 4`, avx512vnni prefills 665 tok/s for Q8 and 906 tok/s for Q4.
+Packing the SSE2 build raised its Q8 prefill from 51 to 93 tok/s and its Q8
+decode from 16 to 24 tok/s; Q4 decode went from 23 to about 40 tok/s.
+
+The batched kernels run each tile through a body instantiated for a constant
+token count (`PK_TILES`, `ML_UNROLL`), so the per-token accumulators stay in
+registers. Before that, GCC kept them on the stack, and batched prefill was
+1.2–1.6× slower (avx2 Q4 292, avxvnni Q8 197, avx512vnni Q4 384 tok/s).
 
 **Arm, single thread** (GitHub `ubuntu-24.04-arm` runner, Neoverse-class
 cores). These numbers come from the CI benchmark step, which publishes them as
@@ -164,12 +177,14 @@ annotations. The model is dim 1024, 4 layers, hidden 2816.
 
 | ISA | Q4 4096² GOPS (row-major → packed) | Q4 decode tok/s | Q4 prefill tok/s | Q8 prefill tok/s |
 |-----|-----------------------------------:|----------------:|-----------------:|-----------------:|
-| neon (no dot product) | 15.9 → 29.8 | 133 → 231 | 181 → 325 | 220 → 285 |
-| neon_dotprod | 28.0 → 64.9 | 210 → 412 | 316 → 793 | 418 → 895 |
+| neon (no dot product) | 16.7 → 30.6 | 152 → 267 | 184 → 326 | 224 → 290 |
+| neon_dotprod | 29.5 → 67.6 | 261 → 550 | 320 → 948 | 436 → 1144 |
+| neon_i8mm | 29.5 → 67.6 | 261 → 550 | 320 → 1167 | 433 → 1418 |
 
 The neon_dotprod packed kernels use `vdotq_laneq_s32`, so each step reads its 4
-activation bytes from a vector lane instead of broadcasting them. That alone
-raised Q8 prefill from 426 to 895 tok/s.
+activation bytes from a vector lane instead of broadcasting them. neon_i8mm
+decodes with the same kernels and prefills on `smmla`, 23–24% faster than
+`sdot`.
 
 ## Wiki
 

@@ -3,6 +3,7 @@
 #include "kernels/scalar/k_scalar.h"
 #include "kernels/sse2/k_sse2.h"
 #include "kernels/x86_common.h"
+#include "kernels/x86_pack.h"
 
 /* int8 x int8 -> 4 x int32 partial sums for 16 elements, given x already
  * sign-extended to int16 (xl = elements 0..7, xh = 8..15). */
@@ -206,4 +207,144 @@ void ml_k_axpy_f32_sse2(float *y, float a, const float *x, int n) {
     for (; i + 4 <= n; i += 4)
         _mm_storeu_ps(y + i, _mm_add_ps(_mm_loadu_ps(y + i), _mm_mul_ps(va, _mm_loadu_ps(x + i))));
     for (; i < n; i++) y[i] += a * x[i];
+}
+
+/* Packed kernels: 4-row groups (core/pack.h). SSE2 has no 8-bit multiply, so
+ * each 16-bit lane of a weight step (two bytes of one row) is split into its
+ * even byte (w & 0xFF) and odd byte (w >> 8) and multiplied with pmaddwd
+ * against activations expanded to match: the pairs (x0, x2) and (x1, x3) of
+ * the step, broadcast. Each pmaddwd then yields one partial sum per row, with
+ * no shuffles in the inner loop. Q8 is stored +128 so both halves are plain
+ * unsigned bytes; 128 * sum(x) is subtracted per block.
+ *
+ * The expansion is 16 vectors (256 bytes) per activation block, built for XC
+ * blocks at a time; one chunk covers 8192 columns. Between chunks a group's float accumulators are parked in y, which
+ * keeps the order of float operations, and so the results, independent of XC. */
+#define PK 4
+#define XC 256
+
+/* Expanded activations, PK_TILE tokens of XC blocks each (256 KB). */
+static _Thread_local __m128i pk_xe[PK_TILE][XC * 16];
+
+static void pk_expand(__m128i *o, const int8_t *q, int nblocks) {
+    for (int i = 0; i < nblocks * 8; i++, q += 4) {
+        o[2 * i]     = _mm_set1_epi32((int)(uint16_t)q[0] | (int)((uint32_t)(uint16_t)q[2] << 16));
+        o[2 * i + 1] = _mm_set1_epi32((int)(uint16_t)q[1] | (int)((uint32_t)(uint16_t)q[3] << 16));
+    }
+}
+
+/* Exact integer sums of one Q8 block for the group's 4 rows. */
+static inline __m128i pk_q8_block(const uint8_t *p, const __m128i *xv) {
+    const __m128i m8 = _mm_set1_epi16(0xFF);
+    __m128i s0 = _mm_setzero_si128(), s1 = _mm_setzero_si128();
+    for (int k = 0; k < 8; k++, p += PK * 4, xv += 2) {
+        const __m128i w = _mm_loadu_si128((const __m128i *)p);
+        s0 = _mm_add_epi32(s0, _mm_madd_epi16(_mm_and_si128(w, m8), xv[0]));
+        s1 = _mm_add_epi32(s1, _mm_madd_epi16(_mm_srli_epi16(w, 8), xv[1]));
+    }
+    return _mm_add_epi32(s0, s1);
+}
+
+/* Q4: vector v holds step v in its low nibbles and step v + 4 in its high ones. */
+static inline __m128i pk_q4_block(const uint8_t *p, const __m128i *xv) {
+    const __m128i m4 = _mm_set1_epi8(0x0F), m8 = _mm_set1_epi16(0xFF);
+    __m128i s0 = _mm_setzero_si128(), s1 = _mm_setzero_si128();
+    for (int v = 0; v < 4; v++, p += PK * 4) {
+        const __m128i w = _mm_loadu_si128((const __m128i *)p);
+        const __m128i a = _mm_and_si128(w, m4), c = _mm_and_si128(_mm_srli_epi16(w, 4), m4);
+        s0 = _mm_add_epi32(s0, _mm_madd_epi16(_mm_and_si128(a, m8), xv[2 * v]));
+        s1 = _mm_add_epi32(s1, _mm_madd_epi16(_mm_srli_epi16(a, 8), xv[2 * v + 1]));
+        s0 = _mm_add_epi32(s0, _mm_madd_epi16(_mm_and_si128(c, m8), xv[2 * v + 8]));
+        s1 = _mm_add_epi32(s1, _mm_madd_epi16(_mm_srli_epi16(c, 8), xv[2 * v + 9]));
+    }
+    return _mm_add_epi32(s0, s1);
+}
+
+/* A group's accumulators: in y while the group is whole, else in tail. */
+static inline __m128 pk_acc_load(const float *y, const float *tail, int row, int r1) {
+    return _mm_loadu_ps(row + PK <= r1 ? y + row : tail);
+}
+
+static inline void pk_acc_store(float *y, float *tail, int row, int r1, __m128 acc) {
+    _mm_storeu_ps(row + PK <= r1 ? y + row : tail, acc);
+}
+
+#define PK_MATVEC(BLOCK, STEPS, OFFSET)                                           \
+    const int nb = W->cols / QK;                                                  \
+    int xsum[PK_MAX_BLOCKS];                                                      \
+    __m128i *xe = pk_xe[0];                                                       \
+    float tail[PK];                                                               \
+    pk_block_sums(xsum, x, nb, OFFSET);                                           \
+    for (int b0 = 0; b0 < nb; b0 += XC) {                                         \
+        const int b1 = nb - b0 < XC ? nb : b0 + XC;                               \
+        pk_expand(xe, x->q + b0 * QK, b1 - b0);                                   \
+        for (int row = r0; row < r1; row += PK) {                                 \
+            const uint8_t *p = W->pq + ((size_t)(row / PK) * nb + b0) * (STEPS * PK * 4); \
+            const float *d = W->pd + (size_t)(row / PK) * nb * PK;                \
+            __m128 acc = b0 ? pk_acc_load(y, tail, row, r1) : _mm_setzero_ps();   \
+            for (int b = b0; b < b1; b++, p += STEPS * PK * 4) {                  \
+                const __m128i s = _mm_sub_epi32(BLOCK(p, xe + (b - b0) * 16), _mm_set1_epi32(xsum[b])); \
+                acc = _mm_add_ps(acc, _mm_mul_ps(_mm_cvtepi32_ps(s), _mm_mul_ps(_mm_loadu_ps(d + b * PK), _mm_set1_ps(x->d[b])))); \
+            }                                                                     \
+            pk_acc_store(y, tail, row, r1, acc);                                  \
+        }                                                                         \
+    }                                                                             \
+    if ((r1 - r0) % PK) pk_store(y, tail, r1 - (r1 - r0) % PK, PK, r1);
+
+void ml_k_matvec_q8_pk_sse2(float *y, const ml_qtensor *W, const ml_qact *x, int r0, int r1) {
+    PK_MATVEC(pk_q8_block, 8, 128)
+}
+
+void ml_k_matvec_q4_pk_sse2(float *y, const ml_qtensor *W, const ml_qact *x, int r0, int r1) {
+    PK_MATVEC(pk_q4_block, 4, 8)
+}
+
+/* Batched: each group's weights are read once per tile of PK_TILE tokens;
+ * per token the arithmetic is the matvec's, so the results match it exactly. */
+#define PK_MATMUL_TILE(BLOCK, STEPS, OFFSET)                                      \
+    const int nb = W->cols / QK;                                                  \
+    static _Thread_local int xsum[PK_TILE][PK_MAX_BLOCKS];                        \
+    __m128i (*xe)[XC * 16] = pk_xe;                                               \
+    float tail[PK_TILE][PK];                                                      \
+    pk_block_sums_batch(xsum, X, t0, T, nb, OFFSET);                              \
+    for (int b0 = 0; b0 < nb; b0 += XC) {                                         \
+        const int b1 = nb - b0 < XC ? nb : b0 + XC;                               \
+        for (int t = 0; t < T; t++)                                               \
+            pk_expand(xe[t], X->q + (size_t)(t0 + t) * X->k + b0 * QK, b1 - b0);  \
+        for (int row = r0; row < r1; row += PK) {                                 \
+            const uint8_t *p = W->pq + ((size_t)(row / PK) * nb + b0) * (STEPS * PK * 4); \
+            const float *d = W->pd + (size_t)(row / PK) * nb * PK;                \
+            __m128 acc[PK_TILE];                                                  \
+            ML_UNROLL(4) for (int t = 0; t < T; t++)                              \
+                acc[t] = b0 ? pk_acc_load(Y + (size_t)(t0 + t) * ldy, tail[t], row, r1) : _mm_setzero_ps(); \
+            for (int b = b0; b < b1; b++, p += STEPS * PK * 4) {                  \
+                const __m128 dv = _mm_loadu_ps(d + b * PK);                       \
+                ML_UNROLL(4) for (int t = 0; t < T; t++) {                        \
+                    const __m128i s = _mm_sub_epi32(BLOCK(p, xe[t] + (b - b0) * 16), _mm_set1_epi32(xsum[t][b])); \
+                    acc[t] = _mm_add_ps(acc[t], _mm_mul_ps(_mm_cvtepi32_ps(s), _mm_mul_ps(dv, _mm_set1_ps(X->d[(size_t)(t0 + t) * nb + b])))); \
+                }                                                                 \
+            }                                                                     \
+            ML_UNROLL(4) for (int t = 0; t < T; t++)                              \
+                pk_acc_store(Y + (size_t)(t0 + t) * ldy, tail[t], row, r1, acc[t]); \
+        }                                                                         \
+    }                                                                             \
+    if ((r1 - r0) % PK)                                                           \
+        for (int t = 0; t < T; t++)                                               \
+            pk_store(Y + (size_t)(t0 + t) * ldy, tail[t], r1 - (r1 - r0) % PK, PK, r1);
+
+/* One tile of T tokens; T is a constant in every call (PK_TILES). */
+ML_INLINE void matmul_q8_tile(float *Y, int ldy, const ml_qtensor *W, const ml_qbatch *X, int r0, int r1, int t0, const int T) {
+    PK_MATMUL_TILE(pk_q8_block, 8, 128)
+}
+
+ML_INLINE void matmul_q4_tile(float *Y, int ldy, const ml_qtensor *W, const ml_qbatch *X, int r0, int r1, int t0, const int T) {
+    PK_MATMUL_TILE(pk_q4_block, 4, 8)
+}
+
+void ml_k_matmul_q8_pk_sse2(float *Y, int ldy, const ml_qtensor *W, const ml_qbatch *X, int r0, int r1) {
+    PK_TILES(matmul_q8_tile, PK_TILE)
+}
+
+void ml_k_matmul_q4_pk_sse2(float *Y, int ldy, const ml_qtensor *W, const ml_qbatch *X, int r0, int r1) {
+    PK_TILES(matmul_q4_tile, PK_TILE)
 }

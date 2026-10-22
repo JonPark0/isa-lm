@@ -113,72 +113,74 @@ void ml_k_matvec_q4_pk_sse41(float *y, const ml_qtensor *W, const ml_qact *x, in
 
 /* Batched packed kernels: each weight vector feeds up to PK_TILE tokens;
  * per token the arithmetic is the matvec's, so results match it exactly. */
-void ml_k_matmul_q8_pk_sse41(float *Y, int ldy, const ml_qtensor *W, const ml_qbatch *X, int r0, int r1) {
+ML_INLINE void matmul_q8_tile(float *Y, int ldy, const ml_qtensor *W, const ml_qbatch *X, int r0, int r1, int t0, const int T) {
     const int nb = W->cols / QK;
     const __m128i ones = _mm_set1_epi16(1);
-    for (int t0 = 0; t0 < X->n; t0 += PK_TILE) {
-        const int T = X->n - t0 < PK_TILE ? X->n - t0 : PK_TILE;
-        for (int row = r0; row < r1; row += PK) {
-            const uint8_t *p = W->pq + (size_t)(row / PK) * nb * (8 * PK * 4);
-            const float *d = W->pd + (size_t)(row / PK) * nb * PK;
-            __m128 acc[PK_TILE];
-            for (int t = 0; t < PK_TILE; t++) acc[t] = _mm_setzero_ps();
-            for (int b = 0; b < nb; b++, p += 8 * PK * 4) {
-                __m128i s[PK_TILE];
-                for (int t = 0; t < PK_TILE; t++) s[t] = _mm_setzero_si128();
-                for (int k = 0; k < 8; k++) {
-                    const __m128i w = _mm_loadu_si128((const __m128i *)(p + k * PK * 4));
-                    for (int t = 0; t < T; t++) {
-                        const __m128i xv = _mm_set1_epi32(((const int32_t *)(X->q + (size_t)(t0 + t) * X->k + b * QK))[k]);
-                        s[t] = _mm_add_epi32(s[t], _mm_madd_epi16(_mm_maddubs_epi16(_mm_sign_epi8(xv, xv), _mm_sign_epi8(w, xv)), ones));
-                    }
+    for (int row = r0; row < r1; row += PK) {
+        const uint8_t *p = W->pq + (size_t)(row / PK) * nb * (8 * PK * 4);
+        const float *d = W->pd + (size_t)(row / PK) * nb * PK;
+        __m128 acc[PK_TILE];
+        ML_UNROLL(4) for (int t = 0; t < PK_TILE; t++) acc[t] = _mm_setzero_ps();
+        for (int b = 0; b < nb; b++, p += 8 * PK * 4) {
+            __m128i s[PK_TILE];
+            ML_UNROLL(4) for (int t = 0; t < PK_TILE; t++) s[t] = _mm_setzero_si128();
+            for (int k = 0; k < 8; k++) {
+                const __m128i w = _mm_loadu_si128((const __m128i *)(p + k * PK * 4));
+                ML_UNROLL(4) for (int t = 0; t < T; t++) {
+                    const __m128i xv = _mm_set1_epi32(((const int32_t *)(X->q + (size_t)(t0 + t) * X->k + b * QK))[k]);
+                    s[t] = _mm_add_epi32(s[t], _mm_madd_epi16(_mm_maddubs_epi16(_mm_sign_epi8(xv, xv), _mm_sign_epi8(w, xv)), ones));
                 }
-                const __m128 dv = _mm_loadu_ps(d + b * PK);
-                for (int t = 0; t < T; t++) acc[t] = _mm_add_ps(acc[t], _mm_mul_ps(_mm_cvtepi32_ps(s[t]), _mm_mul_ps(dv, _mm_set1_ps(X->d[(size_t)(t0 + t) * nb + b]))));
             }
-            for (int t = 0; t < T; t++) {
-                float o[PK];
-                _mm_storeu_ps(o, acc[t]);
-                pk_store(Y + (size_t)(t0 + t) * ldy, o, row, PK, r1);
+            const __m128 dv = _mm_loadu_ps(d + b * PK);
+            ML_UNROLL(4) for (int t = 0; t < T; t++) acc[t] = _mm_add_ps(acc[t], _mm_mul_ps(_mm_cvtepi32_ps(s[t]), _mm_mul_ps(dv, _mm_set1_ps(X->d[(size_t)(t0 + t) * nb + b]))));
+        }
+        ML_UNROLL(4) for (int t = 0; t < T; t++) {
+            float o[PK];
+            _mm_storeu_ps(o, acc[t]);
+            pk_store(Y + (size_t)(t0 + t) * ldy, o, row, PK, r1);
+        }
+    }
+}
+
+void ml_k_matmul_q8_pk_sse41(float *Y, int ldy, const ml_qtensor *W, const ml_qbatch *X, int r0, int r1) {
+    PK_TILES(matmul_q8_tile, PK_TILE)
+}
+
+ML_INLINE void matmul_q4_tile(float *Y, int ldy, const ml_qtensor *W, const ml_qbatch *X, int r0, int r1, int t0, const int T) {
+    const int nb = W->cols / QK;
+    static _Thread_local int xsum[PK_TILE][PK_MAX_BLOCKS];
+    const __m128i m4 = _mm_set1_epi8(0x0F), ones = _mm_set1_epi16(1);
+    pk_block_sums_batch(xsum, X, t0, T, nb, 8);
+    for (int row = r0; row < r1; row += PK) {
+        const uint8_t *p = W->pq + (size_t)(row / PK) * nb * (4 * PK * 4);
+        const float *d = W->pd + (size_t)(row / PK) * nb * PK;
+        __m128 acc[PK_TILE];
+        ML_UNROLL(4) for (int t = 0; t < PK_TILE; t++) acc[t] = _mm_setzero_ps();
+        for (int b = 0; b < nb; b++, p += 4 * PK * 4) {
+            __m128i s16[PK_TILE];
+            ML_UNROLL(4) for (int t = 0; t < PK_TILE; t++) s16[t] = _mm_setzero_si128();
+            for (int v = 0; v < 4; v++) {
+                const __m128i w = _mm_loadu_si128((const __m128i *)(p + v * PK * 4));
+                const __m128i lo = _mm_and_si128(w, m4), hi = _mm_and_si128(_mm_srli_epi16(w, 4), m4);
+                ML_UNROLL(4) for (int t = 0; t < T; t++) {
+                    s16[t] = _mm_add_epi16(s16[t], _mm_maddubs_epi16(lo, _mm_set1_epi32(((const int32_t *)(X->q + (size_t)(t0 + t) * X->k + b * QK))[v])));
+                    s16[t] = _mm_add_epi16(s16[t], _mm_maddubs_epi16(hi, _mm_set1_epi32(((const int32_t *)(X->q + (size_t)(t0 + t) * X->k + b * QK))[v + 4])));
+                }
             }
+            const __m128 dv = _mm_loadu_ps(d + b * PK);
+            ML_UNROLL(4) for (int t = 0; t < T; t++) {
+                const __m128i s = _mm_sub_epi32(_mm_madd_epi16(s16[t], ones), _mm_set1_epi32(xsum[t][b]));
+                acc[t] = _mm_add_ps(acc[t], _mm_mul_ps(_mm_cvtepi32_ps(s), _mm_mul_ps(dv, _mm_set1_ps(X->d[(size_t)(t0 + t) * nb + b]))));
+            }
+        }
+        ML_UNROLL(4) for (int t = 0; t < T; t++) {
+            float o[PK];
+            _mm_storeu_ps(o, acc[t]);
+            pk_store(Y + (size_t)(t0 + t) * ldy, o, row, PK, r1);
         }
     }
 }
 
 void ml_k_matmul_q4_pk_sse41(float *Y, int ldy, const ml_qtensor *W, const ml_qbatch *X, int r0, int r1) {
-    const int nb = W->cols / QK;
-    static _Thread_local int xsum[PK_TILE][PK_MAX_BLOCKS];
-    const __m128i m4 = _mm_set1_epi8(0x0F), ones = _mm_set1_epi16(1);
-    for (int t0 = 0; t0 < X->n; t0 += PK_TILE) {
-        const int T = X->n - t0 < PK_TILE ? X->n - t0 : PK_TILE;
-        pk_block_sums_batch(xsum, X, t0, T, nb, 8);
-        for (int row = r0; row < r1; row += PK) {
-            const uint8_t *p = W->pq + (size_t)(row / PK) * nb * (4 * PK * 4);
-            const float *d = W->pd + (size_t)(row / PK) * nb * PK;
-            __m128 acc[PK_TILE];
-            for (int t = 0; t < PK_TILE; t++) acc[t] = _mm_setzero_ps();
-            for (int b = 0; b < nb; b++, p += 4 * PK * 4) {
-                __m128i s16[PK_TILE];
-                for (int t = 0; t < PK_TILE; t++) s16[t] = _mm_setzero_si128();
-                for (int v = 0; v < 4; v++) {
-                    const __m128i w = _mm_loadu_si128((const __m128i *)(p + v * PK * 4));
-                    const __m128i lo = _mm_and_si128(w, m4), hi = _mm_and_si128(_mm_srli_epi16(w, 4), m4);
-                    for (int t = 0; t < T; t++) {
-                        s16[t] = _mm_add_epi16(s16[t], _mm_maddubs_epi16(lo, _mm_set1_epi32(((const int32_t *)(X->q + (size_t)(t0 + t) * X->k + b * QK))[v])));
-                        s16[t] = _mm_add_epi16(s16[t], _mm_maddubs_epi16(hi, _mm_set1_epi32(((const int32_t *)(X->q + (size_t)(t0 + t) * X->k + b * QK))[v + 4])));
-                    }
-                }
-                const __m128 dv = _mm_loadu_ps(d + b * PK);
-                for (int t = 0; t < T; t++) {
-                    const __m128i s = _mm_sub_epi32(_mm_madd_epi16(s16[t], ones), _mm_set1_epi32(xsum[t][b]));
-                    acc[t] = _mm_add_ps(acc[t], _mm_mul_ps(_mm_cvtepi32_ps(s), _mm_mul_ps(dv, _mm_set1_ps(X->d[(size_t)(t0 + t) * nb + b]))));
-                }
-            }
-            for (int t = 0; t < T; t++) {
-                float o[PK];
-                _mm_storeu_ps(o, acc[t]);
-                pk_store(Y + (size_t)(t0 + t) * ldy, o, row, PK, r1);
-            }
-        }
-    }
+    PK_TILES(matmul_q4_tile, PK_TILE)
 }

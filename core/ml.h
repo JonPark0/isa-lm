@@ -19,6 +19,19 @@ typedef enum {
  * inf (amax < ~3.7e-37), and such values carry no signal. */
 #define ML_QUANT_TINY 1e-30f
 
+/* For kernels: ML_INLINE forces inlining, and ML_UNROLL(n) asks for complete
+ * unrolling of the loop that follows. Together they let a tile body be
+ * instantiated for constant token counts with its per-token accumulators in
+ * registers instead of on the stack. */
+#if defined(_MSC_VER) && !defined(__clang__)
+#define ML_INLINE static __forceinline
+#define ML_UNROLL(n)
+#else
+#define ML_INLINE static inline __attribute__((always_inline))
+#define ML_PRAGMA_(x) _Pragma(#x)
+#define ML_UNROLL(n) ML_PRAGMA_(GCC unroll n)
+#endif
+
 enum { ML_F32 = 0, ML_Q8_0 = 1, ML_Q4_0 = 2 };
 
 /* Quantized weight matrix, SoA: q[rows*cols] (Q4: rows*cols/2 packed bytes),

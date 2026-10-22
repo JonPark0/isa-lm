@@ -7,7 +7,7 @@ app/       ml_run (generation CLI), ml_bench (benchmarks), main_guard.c (process
 model/     mlb.c (loader), transformer.c (forward pass, KV cache, RoPE tables),
            sampler.c, tokenizer.c
 ops/       ops.c — matvec and attention, split across the worker pool
-kernels/   scalar/ sse2/ sse41/ avx2/ avxvnni/ avx512vnni/ neon/ neon_dotprod/ sve/
+kernels/   scalar/ sse2/ sse41/ avx2/ avxvnni/ avx512vnni/ neon/ neon_dotprod/ neon_i8mm/ sve/
            x86_common.h, x86_avx.h, arm_common.h — shared SIMD helpers
 core/      ml.h (types, status codes), arena.c, file.c (mmap), quant_ref.c,
            threads.c, isa_check.c
@@ -36,7 +36,8 @@ fallback chain:
 ```
 avx512vnni → avx2 → sse41 → sse2 → scalar
 avxvnni    → avx2 → …
-sve        → neon_dotprod → neon → scalar
+neon_i8mm  → neon_dotprod → neon → scalar
+sve        → neon_dotprod → …
 ```
 
 Each enabled `kernels/<i>/k_<i>.h` defines `ML_HAS_<OP>_<I>` for the kernels it
@@ -73,7 +74,7 @@ instruction can execute on an unsupported CPU, not even in a function prologue.
 | Platform | How the CPU is checked |
 |----------|------------------------|
 | x86 | `CPUID` leaves 1, 7.0 and 7.1, plus `XGETBV` to confirm the OS saves AVX and AVX-512 state |
-| ARM Linux | `getauxval(AT_HWCAP)`: ASIMD, ASIMDDP, SVE, ARMv7 NEON |
+| ARM Linux | `getauxval(AT_HWCAP)`: ASIMD, ASIMDDP, SVE, ARMv7 NEON; `AT_HWCAP2`: I8MM |
 | other | the build configuration is trusted |
 
 ## Data flow for one token
@@ -109,15 +110,15 @@ repacks every weight matrix, except the embedding table, into a
 **row-interleaved** layout ([`core/pack.h`](../core/pack.h)):
 
 - **Row groups:** rows are grouped by G, the SIMD lane count: 16 for AVX-512
-  VNNI, 8 for AVX2 and AVX-VNNI, 4 for SSE4.1, NEON and NEON dotprod. One 32-bit
-  lane owns one row.
+  VNNI, 8 for AVX2 and AVX-VNNI, 4 for SSE2, SSE4.1 and the NEON builds. One
+  32-bit lane owns one row.
 - **Step layout:** each block is stored as 4-byte steps, with G rows per step.
   One vector load plus one dot instruction against a 4-byte activation
   broadcast (`vpdpbusd`, `pmaddubsw`+`pmaddwd`, `sdot`) advances all G rows.
 - **Scales:** the block's scales are stored contiguously for the group, so
   scaling is one vector multiply-add for G rows.
 - **Signedness:** `vpdpbusd` and `pmaddubsw` need an unsigned operand. Q4
-  nibbles are used raw (0..15); on VNNI, Q8 weights are stored +128. The
+  nibbles are used raw (0..15); on VNNI and SSE2, Q8 weights are stored +128. The
   matching `offset × Σx` is subtracted per block in int32, so the result is
   exact. AVX2 and SSE4.1 keep Q8 signed and use `psignb`. On those two, a Q4
   block's 8 `pmaddubsw` results are summed in int16 (at most 30480) before a
@@ -125,10 +126,18 @@ repacks every weight matrix, except the embedding table, into a
 
 After packing, the original mapped pages are released with
 `madvise(MADV_DONTNEED)`, so resident memory stays about the size of the model.
-`ml_run --no-pack` keeps the row-major kernels. Only the scalar and sse2 builds have no packed kernels. NEON without a dot
-product (ARMv7, Cortex-A53/A72) uses 4-row groups built on
-`vmull_s8`/`vpadalq_s16`, and sve builds use the NEON dotprod packed kernels. SSE4.1
-packs only Q4, because its 4-row Q8 groups are no faster than row-major.
+`ml_run --no-pack` keeps the row-major kernels. Only the scalar build has no
+packed kernels.
+
+- **SSE2** has no 8-bit multiply at all. Each 16-bit lane of a weight step
+  holds two bytes of one row; the kernel splits it into the even byte
+  (`w & 0xFF`) and the odd byte (`w >> 8`) and multiplies each with `pmaddwd`
+  against activations expanded once per call into matching broadcast pairs.
+  Every `pmaddwd` then yields one partial sum per row, and the inner loop has
+  no shuffles, which matters on CPUs with a single shuffle port.
+- **NEON without a dot product** (ARMv7, Cortex-A53/A72) uses
+  `vmull_s8`/`vpadalq_s16` on the same 4-row groups.
+- **sve** builds use the NEON dotprod packed kernels.
 
 ## Batched prompt prefill
 
@@ -144,6 +153,12 @@ the kernel compute-bound.
   token-by-token runs produce bit-identical logits; the tests enforce this.
 - **No classifier for prompt tokens:** prompt tokens other than the last skip
   the vocabulary-sized classifier.
+- **i8mm:** `neon_i8mm` builds run the prefill on `smmla`, which multiplies a
+  2×8 int8 matrix by the transpose of another: two weight rows against two
+  tokens, twice the work of an `sdot`. Zipping the 32-bit lanes of two
+  consecutive dotprod steps yields exactly its operands, so the packed layout
+  is unchanged. Decoding keeps `sdot`, since one token would leave half of
+  each `smmla` idle.
 - **Fallback:** builds without packed kernels, or with `--no-pack`, still batch
   the prefill but use the matvec per token.
 

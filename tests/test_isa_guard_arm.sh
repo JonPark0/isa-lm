@@ -9,6 +9,8 @@ run() {   # run <build> <cpu> <expected rc> [feature]
 }
 run neon_dotprod-aarch64 cortex-a53 3 asimddp
 run neon_dotprod-aarch64 cortex-a76 0
+run neon_i8mm-aarch64    cortex-a76 3 i8mm
+run neon_i8mm-aarch64    neoverse-n2 0
 run sve-aarch64          cortex-a76 3 sve
 run sve-aarch64          max        0
 if [ $fail -eq 0 ]; then echo "isa guard arm: $pass passed"; else echo "isa guard arm: $pass passed, $fail failed"; exit 1; fi

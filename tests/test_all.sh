@@ -41,6 +41,7 @@ else skip "armv7 (qemu)" "no arm-linux-gnueabihf-gcc/qemu-arm"; fi
 if have aarch64-linux-gnu-gcc && have qemu-aarch64; then
     row "aarch64 neon test+e2e (qemu)"         "make -s ISA=neon CROSS=aarch64-linux-gnu- test e2e"
     row "aarch64 neon_dotprod test+e2e (qemu)" "make -s ISA=neon_dotprod CROSS=aarch64-linux-gnu- test e2e"
+    row "aarch64 neon_i8mm test+e2e (qemu)"    "make -s ISA=neon_i8mm CROSS=aarch64-linux-gnu- test e2e"
     row "aarch64 sve VL128+VL512 (qemu)"       "make -s ISA=sve CROSS=aarch64-linux-gnu- test-sve"
     row "aarch64 isa guard (qemu cpus)"        "make -s guard-test-arm"
     row "aarch64 neon THREADS=pthread (qemu)"  "make -s ISA=neon CROSS=aarch64-linux-gnu- THREADS=pthread test e2e"
