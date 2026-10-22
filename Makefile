@@ -37,7 +37,7 @@ GUARD_OBJ := $(BUILD)/obj/app/main_guard.o
 TESTS := $(patsubst tests/%.c,%,$(wildcard tests/test_*.c))
 APPS  := ml_run
 
-.PHONY: all test clean guard-test e2e scalar-ref
+.PHONY: all test clean guard-test e2e scalar-ref test-sve guard-test-arm
 .SECONDARY:
 all: $(addprefix $(BUILD)/,$(TESTS) $(APPS))
 
@@ -81,3 +81,14 @@ GUARD_ISAS := scalar sse2 sse41 avx2 avxvnni avx512vnni
 guard-test:
 	@for i in $(GUARD_ISAS); do $(MAKE) -s ISA=$$i build/$$i/test_quant || exit 1; done
 	@sh tests/test_isa_guard.sh
+
+# SVE is vector-length agnostic: run the suite at 128-bit and 512-bit VL.
+test-sve:
+	@$(MAKE) -s QEMU_CPU=max,sve-max-vq=1 test e2e
+	@$(MAKE) -s QEMU_CPU=max,sve-max-vq=4 test e2e
+
+# AArch64 guard: run on emulated cores that lack dotprod / SVE.
+guard-test-arm:
+	@$(MAKE) -s ISA=neon_dotprod CROSS=aarch64-linux-gnu- build/neon_dotprod-aarch64/test_quant
+	@$(MAKE) -s ISA=sve CROSS=aarch64-linux-gnu- build/sve-aarch64/test_quant
+	@sh tests/test_isa_guard_arm.sh
