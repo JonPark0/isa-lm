@@ -45,17 +45,23 @@ static int wval(const ml_qtensor *W, int r, int c) {
     return (j < 16 ? (byte & 0xF) : (byte >> 4)) - 8;
 }
 
-static double ref_scale;   /* sum of |block terms| of the last ref_matvec_row */
+/* Condition scale of the last ref_matvec_row: sum of |w*x*dw*dx| over all
+ * products. SIMD kernels reduce lanes in float, so error is bounded by this. */
+static double ref_scale;
 
 static double ref_matvec_row(const ml_qtensor *W, const ml_qact *x, int r) {
     double s = 0;
     ref_scale = 0;
     for (int b = 0; b < W->cols / QK; b++) {
-        long long si = 0;
-        for (int j = 0; j < QK; j++) si += (long long)wval(W, r, b * QK + j) * x->q[b * QK + j];
-        double t = (double)si * W->d[(size_t)r * (W->cols / QK) + b] * x->d[b];
-        s += t;
-        ref_scale += fabs(t);
+        long long si = 0, sa = 0;
+        for (int j = 0; j < QK; j++) {
+            const long long p = (long long)wval(W, r, b * QK + j) * x->q[b * QK + j];
+            si += p;
+            sa += p < 0 ? -p : p;
+        }
+        const double sc = (double)W->d[(size_t)r * (W->cols / QK) + b] * x->d[b];
+        s += (double)si * sc;
+        ref_scale += (double)sa * fabs(sc);
     }
     return s;
 }
