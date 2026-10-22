@@ -24,6 +24,13 @@ static inline int tt_near(double a, double b, double rtol) {
     if (!tt_near(tt_x, tt_y, rtol)) { fprintf(stderr, "%s:%d: %s ~ %s failed (%.9g vs %.9g)\n", \
         __FILE__, __LINE__, #a, #b, tt_x, tt_y); tt_cur_fail = 1; } } while (0)
 
+/* Relative to max(|a|, |b|, scale): use scale = sum of |terms| for sums that
+ * may cancel. */
+#define TT_CLOSE(a, b, rtol, scale) do { double tt_x = (a), tt_y = (b), tt_s = (scale); \
+    double tt_m = fabs(tt_x) > fabs(tt_y) ? fabs(tt_x) : fabs(tt_y); if (tt_s > tt_m) tt_m = tt_s; \
+    if (fabs(tt_x - tt_y) > (rtol) * tt_m) { fprintf(stderr, "%s:%d: %s ~ %s failed (%.9g vs %.9g, scale %.3g)\n", \
+        __FILE__, __LINE__, #a, #b, tt_x, tt_y, tt_m); tt_cur_fail = 1; } } while (0)
+
 #define TT_RUN(fn) do { tt_cur_fail = 0; fn(); \
     if (tt_cur_fail) { tt_fail++; fprintf(stderr, "FAIL %s\n", #fn); } else tt_pass++; } while (0)
 

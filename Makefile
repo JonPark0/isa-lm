@@ -38,10 +38,10 @@ all: $(addprefix $(BUILD)/,$(TESTS) $(APPS))
 
 $(BUILD)/obj/%.o: %.c
 	@mkdir -p $(dir $@)
-	$(CC) $(if $(filter $<,$(NOISA_SRC)),$(BASE_CFLAGS),$(CFLAGS)) -c $< -o $@
+	@$(CC) $(if $(filter $<,$(NOISA_SRC)),$(BASE_CFLAGS),$(CFLAGS)) -c $< -o $@
 
 $(BUILD)/test_%: $(BUILD)/obj/tests/test_%.o $(LIB_OBJ)
-	$(CC) $(LDFLAGS) $^ -o $@ $(LDLIBS)
+	@$(CC) $(LDFLAGS) $^ -o $@ $(LDLIBS)
 
 test: $(addprefix $(BUILD)/,$(TESTS))
 	@set -e; $(foreach t,$(TESTS),$(RUN) $(BUILD)/$(t) $(TESTARGS_$(t));)
