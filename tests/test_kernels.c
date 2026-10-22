@@ -69,10 +69,10 @@ static double ref_matvec_row(const ml_qtensor *W, const ml_qact *x, int r) {
 typedef void (*matvec_fn)(float *, const ml_qtensor *, const ml_qact *, int, int);
 
 static void check_matvec(int type, int unit) {
-    static const int rows_l[] = { 1, 3, 4, 7, 64 }, cols_l[] = { 32, 256 }, r0_l[] = { 0, 1 };
+    static const int rows_l[] = { 1, 3, 4, 7, 64 }, cols_l[] = { 32, 96, 256 }, r0_l[] = { 0, 1 };
     matvec_fn bound = type == ML_Q8_0 ? ml_k_matvec_q8 : ml_k_matvec_q4;
     matvec_fn scal = type == ML_Q8_0 ? ml_k_matvec_q8_scalar : ml_k_matvec_q4_scalar;
-    for (int ri = 0; ri < 5; ri++) for (int ci = 0; ci < 2; ci++) for (int zi = 0; zi < 2; zi++) {
+    for (int ri = 0; ri < 5; ri++) for (int ci = 0; ci < 3; ci++) for (int zi = 0; zi < 2; zi++) {
         int rows = rows_l[ri], cols = cols_l[ci], r0 = r0_l[zi];
         if (r0 >= rows) continue;
         wbuf w = make_w(rows, cols, type, unit);
