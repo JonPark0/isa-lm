@@ -78,8 +78,14 @@ jobs:
         run: |
           if grep -qw sve /proc/cpuinfo; then make -s ISA=sve test e2e
           else echo "skip: no sve"; fi
-      - name: Benchmark
+      - name: Benchmark (packed vs row-major)
         run: |
-          python3 tools/gen_random.py --out build/models/bench_q8.mlb --dim 512 --layers 6 --heads 8 \
-            --kv-heads 4 --hidden 1376 --vocab 4096 --max-seq 128
-          for isa in scalar neon; do make -s ISA=$isa build/$isa/ml_bench; build/$isa/ml_bench build/models/bench_q8.mlb -n 128; done
+          python3 tools/gen_random.py --out build/models/bench_q4.mlb --wtype q4 --dim 1024 --layers 4 --heads 16 \
+            --kv-heads 4 --hidden 2816 --vocab 8192 --max-seq 256
+          python3 tools/gen_random.py --out build/models/bench_q8.mlb --wtype q8 --dim 1024 --layers 4 --heads 16 \
+            --kv-heads 4 --hidden 2816 --vocab 8192 --max-seq 256
+          for isa in scalar neon neon_dotprod; do
+            make -s ISA=$isa build/$isa/ml_bench
+            build/$isa/ml_bench | sed -n '3,10p'
+            for m in q8 q4; do for p in "" --no-pack; do build/$isa/ml_bench build/models/bench_$m.mlb -n 64 $p | tail -1; done; done
+          done

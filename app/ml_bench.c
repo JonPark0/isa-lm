@@ -68,12 +68,13 @@ static void bench_quantize(int k, int iters) {
 
 int ml_main(int argc, char **argv) {
     const char *model = NULL;
-    int nthreads = 1, tokens = 64;
+    int nthreads = 1, tokens = 64, no_pack = 0;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "-t") && i + 1 < argc) nthreads = atoi(argv[++i]);
         else if (!strcmp(argv[i], "-n") && i + 1 < argc) tokens = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--no-pack")) no_pack = 1;
         else if (argv[i][0] != '-') model = argv[i];
-        else { fprintf(stderr, "usage: ml_bench [MODEL.mlb] [-t threads] [-n tokens]\n"); return 2; }
+        else { fprintf(stderr, "usage: ml_bench [MODEL.mlb] [-t threads] [-n tokens] [--no-pack]\n"); return 2; }
     }
     printf("ISA: %s  (matvec_q8 -> %s, matvec_q4 -> %s, quantize_q8 -> %s)\n", ML_ISA_NAME,
            ML_STR(ml_k_matvec_q8), ML_STR(ml_k_matvec_q4), ML_STR(ml_k_quantize_q8));
@@ -89,23 +90,31 @@ int ml_main(int argc, char **argv) {
     ml_status st = ml_model_load(&m, model);
     if (st != ML_OK) { fprintf(stderr, "error: %s: %s\n", model, ml_status_str(st)); return 1; }
     ml_state s;
-    if ((st = ml_state_init(&s, &m, nthreads)) != ML_OK) {
+    if ((st = ml_state_init(&s, &m, nthreads)) != ML_OK || (!no_pack && (st = ml_model_pack(&m, s.pool)) != ML_OK)) {
         fprintf(stderr, "error: %s\n", ml_status_str(st));
         ml_model_free(&m);
         return 1;
     }
-    if (tokens > m.cfg.max_seq) tokens = m.cfg.max_seq;
-    int tok = 1;
-    const double t0 = ml_now();
-    for (int p = 0; p < tokens; p++) {
+    if (tokens > m.cfg.max_seq / 2) tokens = m.cfg.max_seq / 2;
+    /* prefill `tokens` prompt tokens, then decode `tokens` more greedily */
+    int *prompt = malloc(sizeof(int) * (size_t)tokens);
+    for (int i = 0; i < tokens; i++) prompt[i] = 1 + i % (m.cfg.vocab - 1);
+    double t0 = ml_now();
+    ml_prefill(&s, prompt, tokens, 0, NULL);
+    const double tp = ml_now() - t0;
+    int tok = prompt[tokens - 1];
+    t0 = ml_now();
+    for (int p = tokens; p < 2 * tokens; p++) {
         const float *lg = ml_forward(&s, tok, p);
         if (!lg) break;
         int best = 0;
         for (int i = 1; i < m.cfg.vocab; i++) if (lg[i] > lg[best]) best = i;
         tok = best;
     }
-    const double dt = ml_now() - t0;
-    printf("model %s: %d tokens, %.2f tok/s, threads %d\n", model, tokens, tokens / dt, ml_pool_size(s.pool));
+    const double td = ml_now() - t0;
+    printf("model %s: prefill %.1f tok/s, decode %.2f tok/s (%d tokens each, threads %d, packed %d)\n", model,
+           tokens / tp, tokens / td, tokens, ml_pool_size(s.pool), m.pack_mem ? ml_pack_group() : 0);
+    free(prompt);
     ml_state_free(&s);
     ml_model_free(&m);
     return 0;

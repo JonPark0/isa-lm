@@ -266,6 +266,12 @@
 #define ML_PACK_G 4
 #define ML_PACK_Q8_OFFSET 0
 #define ML_PACK_Q8 1
+#elif defined(ML_HAS_MATVEC_PK_NEON)
+#define ml_k_matvec_q8_pk ml_k_matvec_q8_pk_neon
+#define ml_k_matvec_q4_pk ml_k_matvec_q4_pk_neon
+#define ML_PACK_G 4
+#define ML_PACK_Q8_OFFSET 0
+#define ML_PACK_Q8 1
 #else
 #define ML_PACK_G 0
 #define ML_PACK_Q8_OFFSET 0
@@ -290,6 +296,9 @@
 #elif defined(ML_HAS_MATMUL_PK_NEON_DOTPROD)
 #define ml_k_matmul_q8_pk ml_k_matmul_q8_pk_neon_dotprod
 #define ml_k_matmul_q4_pk ml_k_matmul_q4_pk_neon_dotprod
+#elif defined(ML_HAS_MATMUL_PK_NEON)
+#define ml_k_matmul_q8_pk ml_k_matmul_q8_pk_neon
+#define ml_k_matmul_q4_pk ml_k_matmul_q4_pk_neon
 #elif ML_PACK_G
 #define ml_k_matmul_q8_pk ml_k_matmul_q8_pk_loop
 #define ml_k_matmul_q4_pk ml_k_matmul_q4_pk_loop
