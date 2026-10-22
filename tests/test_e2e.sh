@@ -57,4 +57,11 @@ for bad_opt in "-T nan" "-T inf" "-T -1" "-p nan" "-p 1.5" "-p -0.1"; do
     [ $? -eq 2 ] && ok || bad "ml_run $bad_opt should exit 2"
 done
 
+for bad_arg in "-n 5x" "-n 99999999999" "-t 2junk" "-s -1" "--tokens 4294967297" "--tokens 1,,2" "--tokens 1," "-n"; do
+    $RUN $B/ml_run $M/rand_q8.mlb --tokens 1 $bad_arg >/dev/null 2>&1
+    [ $? -eq 2 ] && ok || bad "ml_run $bad_arg should exit 2"
+done
+out=$($RUN $B/ml_run --help 2>&1); rc=$?
+[ $rc -eq 0 ] && echo "$out" | grep -q "usage:" && ok || bad "--help rc=$rc"
+
 if [ $fail -eq 0 ]; then echo "e2e $ISA: $pass passed"; else echo "e2e $ISA: $pass passed, $fail failed"; exit 1; fi

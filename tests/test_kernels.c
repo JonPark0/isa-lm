@@ -104,6 +104,7 @@ static void test_quantize_q8_bitexact(void) {
         float *x = xalloc(sizeof(float) * k);
         for (int i = 0; i < k; i++) x[i] = frand(-4, 4);
         if (k > 64) for (int i = 32; i < 64; i++) x[i] = 0.0f;   /* zero block */
+        if (k > 96) for (int i = 64; i < 96; i++) x[i] = (i & 1) ? 1e-37f : -3e-37f;   /* 127/amax = inf */
         ml_qact a = make_x(k, 1), b = make_x(k, 1);
         ml_k_quantize_q8(&a, x, k);
         ml_k_quantize_q8_scalar(&b, x, k);
@@ -157,6 +158,16 @@ static void test_softmax_extreme(void) {
     TT_NEAR(s, 1.0, 1e-5);
     TT_ASSERT(v[2] == 0.0f);
     TT_NEAR(v[0], 1.0 / (1.0 + exp(-1.0)), 1e-5);
+}
+
+static void test_softmax_all_neg_inf(void) {
+    for (int n = 1; n <= 9; n++) {
+        float v[9], w[9];
+        for (int i = 0; i < n; i++) v[i] = w[i] = -INFINITY;
+        ml_k_softmax(v, n);
+        ml_k_softmax_scalar(w, n);
+        for (int i = 0; i < n; i++) { TT_NEAR(v[i], 1.0 / n, 1e-6); TT_NEAR(w[i], 1.0 / n, 1e-6); }
+    }
 }
 
 static void test_silu_mul(void) {
@@ -260,6 +271,7 @@ int TT_ENTRY(int argc, char **argv) {
     TT_RUN(test_rmsnorm);
     TT_RUN(test_softmax);
     TT_RUN(test_softmax_extreme);
+    TT_RUN(test_softmax_all_neg_inf);
     TT_RUN(test_silu_mul);
     TT_RUN(test_add);
     TT_RUN(test_dot_f32);

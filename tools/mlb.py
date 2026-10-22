@@ -9,6 +9,7 @@ from collections import namedtuple
 import numpy as np
 
 QK = 32
+TINY = np.float32(1e-30)   # blocks with max |x| below this quantize to zero (ML_QUANT_TINY)
 ALIGN = 64
 HEADER_SIZE = 256
 WTYPES = {"f32": 0, "q8": 1, "q4": 2}
@@ -27,6 +28,7 @@ def quantize_q8(x):
     x = np.asarray(x, np.float32)
     b = x.reshape(*x.shape[:-1], -1, QK)
     amax = np.abs(b).max(axis=-1)
+    amax = np.where(amax < TINY, np.float32(0), amax).astype(np.float32)
     with np.errstate(divide="ignore"):
         idv = np.where(amax != 0, np.float32(127) / amax, np.float32(0)).astype(np.float32)
     d = (amax / np.float32(127)).astype(np.float32)
@@ -40,6 +42,7 @@ def quantize_q4(x):
     x = np.asarray(x, np.float32)
     b = x.reshape(*x.shape[:-1], -1, QK)
     amax = np.abs(b).max(axis=-1)
+    amax = np.where(amax < TINY, np.float32(0), amax).astype(np.float32)
     with np.errstate(divide="ignore"):
         idv = np.where(amax != 0, np.float32(7) / amax, np.float32(0)).astype(np.float32)
     d = (amax / np.float32(7)).astype(np.float32)

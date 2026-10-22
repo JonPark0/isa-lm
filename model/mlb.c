@@ -29,6 +29,9 @@ static ml_qtensor take_mat(cursor *c, int rows, int cols, int type) {
     }
     t.q = take(c, type == ML_Q4_0 ? n / 2 : n);
     t.d = take(c, nd);
+    /* Q8 quants must be in [-127, 127]: kernels negate weights by the
+     * activation's sign, and -128 has no int8 negation. */
+    if (c->ok && type == ML_Q8_0 && memchr(t.q, 0x80, n)) c->ok = 0;
     return t;
 }
 

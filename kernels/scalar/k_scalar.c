@@ -41,7 +41,12 @@ void ml_k_quantize_q8_scalar(ml_qact *out, const float *x, int k) {
         const float *xb = x + b * QK;
         float amax = 0.0f;
         for (int j = 0; j < QK; j++) amax = fmaxf(amax, fabsf(xb[j]));
-        const float id = amax != 0.0f ? 127.0f / amax : 0.0f;
+        if (amax < ML_QUANT_TINY) {
+            out->d[b] = 0.0f;
+            for (int j = 0; j < QK; j++) out->q[b * QK + j] = 0;
+            continue;
+        }
+        const float id = 127.0f / amax;
         out->d[b] = amax / 127.0f;
         for (int j = 0; j < QK; j++) {
             float v = truncf(xb[j] * id + copysignf(0.5f, xb[j]));
@@ -61,6 +66,10 @@ void ml_k_rmsnorm_scalar(float *o, const float *x, const float *w, int n, float 
 void ml_k_softmax_scalar(float *x, int n) {
     float mx = x[0];
     for (int i = 1; i < n; i++) mx = fmaxf(mx, x[i]);
+    if (mx == -INFINITY) {   /* every entry masked: uniform */
+        for (int i = 0; i < n; i++) x[i] = 1.0f / (float)n;
+        return;
+    }
     float sum = 0.0f;
     for (int i = 0; i < n; i++) { x[i] = expf(x[i] - mx); sum += x[i]; }
     const float inv = 1.0f / sum;

@@ -1,4 +1,5 @@
 #include <math.h>
+#include <string.h>
 #include "kernels/avx512vnni/k_avx512vnni.h"
 #include "kernels/x86_avx.h"
 
@@ -72,7 +73,12 @@ void ml_k_quantize_q8_avx512vnni(ml_qact *out, const float *x, int k) {
         const float *xb = x + b * QK;
         const __m512 v0 = _mm512_loadu_ps(xb), v1 = _mm512_loadu_ps(xb + 16);
         const float amax = _mm512_reduce_max_ps(_mm512_max_ps(_mm512_abs_ps(v0), _mm512_abs_ps(v1)));
-        const float id = amax != 0.0f ? 127.0f / amax : 0.0f;
+        if (amax < ML_QUANT_TINY) {
+            out->d[b] = 0.0f;
+            memset(out->q + b * QK, 0, QK);
+            continue;
+        }
+        const float id = 127.0f / amax;
         out->d[b] = amax / 127.0f;
         const __m512 vid = _mm512_set1_ps(id);
         const __m512 v[2] = { v0, v1 };

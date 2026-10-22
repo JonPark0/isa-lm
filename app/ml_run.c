@@ -1,4 +1,5 @@
 /* ml_run: load a .mlb model and generate tokens. */
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -11,21 +12,52 @@
 #include "model/tokenizer.h"
 #include "model/transformer.h"
 
+static const char USAGE[] =
+    "usage: ml_run MODEL.mlb [options]\n"
+    "  -z FILE          tokenizer.bin (needed for -i and text output)\n"
+    "  -i TEXT          prompt text\n"
+    "  --tokens LIST    prompt as comma-separated token ids\n"
+    "  -n N             positions to run, prompt included (default 64, max: model max_seq)\n"
+    "  -T F             temperature, 0 = greedy (default 0)\n"
+    "  -p F             top-p in [0, 1] (default 0.9)\n"
+    "  -s N             random seed (default 1)\n"
+    "  -t N             threads (default 1)\n"
+    "  --dump-logits F  write float32 logits for every --tokens position, then exit\n"
+    "  -h, --help       show this help\n";
+
 static int usage(const char *msg) {
     if (msg) fprintf(stderr, "error: %s\n", msg);
-    fprintf(stderr,
-        "usage: ml_run MODEL.mlb [options]\n"
-        "  -z FILE          tokenizer.bin (needed for -i and text output)\n"
-        "  -i TEXT          prompt text\n"
-        "  --tokens LIST    prompt as comma-separated token ids\n"
-        "  -n N             positions to run, prompt included (default 64, max: model max_seq)\n"
-        "  -T F             temperature, 0 = greedy (default 0)\n"
-        "  -p F             top-p (default 0.9)\n"
-        "  -s N             random seed (default 1)\n"
-        "  -t N             threads (default 1)\n"
-        "  --dump-logits F  write float32 logits for every --tokens position, then exit\n"
-        "build ISA: %s\n", ML_ISA_NAME);
+    fprintf(stderr, "%sbuild ISA: %s\n", USAGE, ML_ISA_NAME);
     return 2;
+}
+
+/* Strict number parsing: the whole string must be consumed and in range. */
+static int parse_int(const char *s, long lo, long hi, int *out) {
+    char *end;
+    errno = 0;
+    const long v = strtol(s, &end, 10);
+    if (end == s || *end || errno == ERANGE || v < lo || v > hi) return 0;
+    *out = (int)v;
+    return 1;
+}
+
+static int parse_u64(const char *s, unsigned long long *out) {
+    char *end;
+    errno = 0;
+    if (*s == '-' || *s == '+') return 0;
+    const unsigned long long v = strtoull(s, &end, 10);
+    if (end == s || *end || errno == ERANGE) return 0;
+    *out = v;
+    return 1;
+}
+
+static int parse_float(const char *s, float *out) {
+    char *end;
+    errno = 0;
+    const float v = strtof(s, &end);
+    if (end == s || *end || errno == ERANGE) return 0;
+    *out = v;
+    return 1;
 }
 
 static double now_s(void) {
@@ -41,18 +73,20 @@ static double now_s(void) {
 #endif
 }
 
-/* Parses "1,2,3" into out; returns count, or -1 on a bad entry or overflow. */
-static int parse_tokens(const char *s, int *out, int max) {
+/* Parses "1,2,3" into out; returns count, or -1 on an empty, non-numeric or
+ * out-of-range entry, or more than max entries. */
+static int parse_tokens(const char *s, int *out, int max, int vocab) {
     int n = 0;
-    while (*s) {
+    for (;;) {
         char *end;
-        long v = strtol(s, &end, 10);
-        if (end == s || n >= max) return -1;
+        errno = 0;
+        const long v = strtol(s, &end, 10);
+        if (end == s || errno == ERANGE || v < 0 || v >= vocab || n >= max) return -1;
         out[n++] = (int)v;
-        s = *end == ',' ? end + 1 : end;
-        if (*end && *end != ',') return -1;
+        if (*end == '\0') return n;
+        if (*end != ',') return -1;
+        s = end + 1;
     }
-    return n;
 }
 
 int ml_main(int argc, char **argv) {
@@ -62,25 +96,27 @@ int ml_main(int argc, char **argv) {
     unsigned long long seed = 1;
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
+        if (!strcmp(a, "-h") || !strcmp(a, "--help")) { printf("%sbuild ISA: %s\n", USAGE, ML_ISA_NAME); return 0; }
         if (a[0] != '-') { if (model_path) return usage("more than one model given"); model_path = a; continue; }
         if (i + 1 >= argc) return usage("option needs a value");
         const char *v = argv[++i];
+        int ok = 1;
         if (!strcmp(a, "-z")) tok_path = v;
         else if (!strcmp(a, "-i")) prompt = v;
         else if (!strcmp(a, "--tokens")) tokens_arg = v;
-        else if (!strcmp(a, "-n")) steps = atoi(v);
-        else if (!strcmp(a, "-T")) temp = (float)atof(v);
-        else if (!strcmp(a, "-p")) topp = (float)atof(v);
-        else if (!strcmp(a, "-s")) seed = strtoull(v, NULL, 10);
-        else if (!strcmp(a, "-t")) nthreads = atoi(v);
+        else if (!strcmp(a, "-n")) ok = parse_int(v, 1, 1 << 24, &steps);
+        else if (!strcmp(a, "-T")) ok = parse_float(v, &temp);
+        else if (!strcmp(a, "-p")) ok = parse_float(v, &topp);
+        else if (!strcmp(a, "-s")) ok = parse_u64(v, &seed);
+        else if (!strcmp(a, "-t")) ok = parse_int(v, 1, 64, &nthreads);
         else if (!strcmp(a, "--dump-logits")) dump = v;
         else return usage("unknown option");
+        if (!ok) { fprintf(stderr, "error: bad value '%s' for %s\n", v, a); return usage(NULL); }
     }
     if (!model_path) return usage(NULL);
     if (prompt && !tok_path) return usage("-i needs -z tokenizer");
     if (prompt && tokens_arg) return usage("give -i or --tokens, not both");
     if (dump && !tokens_arg) return usage("--dump-logits needs --tokens");
-    if (steps < 1 || nthreads < 1) return usage("bad numeric option");
     if (!(temp >= 0.0f && temp <= 1e30f)) return usage("-T must be a finite number >= 0");
     if (!(topp >= 0.0f && topp <= 1.0f)) return usage("-p must be in [0, 1]");
 
@@ -100,10 +136,8 @@ int ml_main(int argc, char **argv) {
     int *ptoks = malloc(sizeof(int) * (size_t)(prompt ? strlen(prompt) + 3 : (size_t)maxp));
     int np = 0, rc = 0;
     if (tokens_arg) {
-        np = parse_tokens(tokens_arg, ptoks, maxp);
-        if (np < 0 || np > c->max_seq) { rc = usage("--tokens: bad list or longer than max_seq"); goto out_tok; }
-        for (int i = 0; i < np; i++)
-            if (ptoks[i] < 0 || ptoks[i] >= c->vocab) { rc = usage("--tokens: id out of range"); goto out_tok; }
+        np = parse_tokens(tokens_arg, ptoks, maxp, c->vocab);
+        if (np < 0 || np > c->max_seq) { rc = usage("--tokens: bad id, id out of range, or longer than max_seq"); goto out_tok; }
     } else if (prompt) {
         np = ml_encode(&tok, prompt, 1, 0, ptoks, (int)strlen(prompt) + 3);
     }

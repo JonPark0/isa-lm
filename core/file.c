@@ -33,7 +33,8 @@ ml_status ml_file_map(ml_file *f, const char *path) {
                            FILE_ATTRIBUTE_NORMAL, NULL);
     if (h == INVALID_HANDLE_VALUE) return ML_E_IO;
     LARGE_INTEGER sz;
-    if (!GetFileSizeEx(h, &sz) || sz.QuadPart == 0) { CloseHandle(h); return ML_E_IO; }
+    if (!GetFileSizeEx(h, &sz)) { CloseHandle(h); return ML_E_IO; }
+    if (sz.QuadPart == 0) { CloseHandle(h); return ML_E_FORMAT; }
     HANDLE m = CreateFileMappingA(h, NULL, PAGE_READONLY, 0, 0, NULL);
     CloseHandle(h);
     if (!m) return ML_E_IO;
@@ -61,7 +62,8 @@ ml_status ml_file_map(ml_file *f, const char *path) {
     int fd = open(path, O_RDONLY);
     if (fd < 0) return ML_E_IO;
     struct stat st;
-    if (fstat(fd, &st) != 0 || st.st_size == 0) { close(fd); return ML_E_IO; }
+    if (fstat(fd, &st) != 0) { close(fd); return ML_E_IO; }
+    if (st.st_size == 0) { close(fd); return ML_E_FORMAT; }   /* nothing to map */
     void *p = mmap(NULL, (size_t)st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
     close(fd);
     if (p == MAP_FAILED) return ML_E_IO;

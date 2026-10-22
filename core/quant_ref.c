@@ -23,6 +23,7 @@ void ml_quantize_row_q4(int8_t *q, float *d, const float *x, int k) {
         const float *xb = x + b * QK;
         float amax = 0.0f;
         for (int j = 0; j < QK; j++) amax = fmaxf(amax, fabsf(xb[j]));
+        if (amax < ML_QUANT_TINY) amax = 0.0f;
         const float id = amax != 0.0f ? 7.0f / amax : 0.0f;
         d[b] = amax / 7.0f;
         uint8_t nib[QK];
