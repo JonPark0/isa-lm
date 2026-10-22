@@ -52,9 +52,9 @@ LIB_OBJ := $(LIB_SRC:%.c=$(BUILD)/obj/%.o) $(ASM_SRC:%.S=$(BUILD)/obj/%.o)
 GUARD_OBJ := $(BUILD)/obj/app/main_guard.o
 
 TESTS := $(patsubst tests/%.c,%,$(wildcard tests/test_*.c))
-APPS  := ml_run
+APPS  := ml_run ml_bench
 
-.PHONY: all test clean guard-test e2e scalar-ref test-sve guard-test-arm
+.PHONY: all test clean guard-test e2e scalar-ref test-sve guard-test-arm bench test-all
 .SECONDARY:
 all: $(addprefix $(BUILD)/,$(TESTS) $(APPS))
 
@@ -80,7 +80,7 @@ $(TOKENIZER): tools/gen_tokenizer.py
 	@mkdir -p $(dir $@)
 	@$(PYTHON) tools/gen_tokenizer.py --vocab 96 --out $@
 
-$(BUILD)/ml_run: $(BUILD)/obj/app/ml_run.o $(GUARD_OBJ) $(LIB_OBJ)
+$(BUILD)/ml_%: $(BUILD)/obj/app/ml_%.o $(GUARD_OBJ) $(LIB_OBJ)
 	@$(CC) $(LDFLAGS) $^ -o $@ $(LDLIBS)
 
 # Host scalar build: the reference e2e compares generated text against.
@@ -113,3 +113,10 @@ guard-test-arm:
 	@$(MAKE) -s ISA=neon_dotprod CROSS=aarch64-linux-gnu- build/neon_dotprod-aarch64/test_quant
 	@$(MAKE) -s ISA=sve CROSS=aarch64-linux-gnu- build/sve-aarch64/test_quant
 	@sh tests/test_isa_guard_arm.sh
+
+bench: $(BUILD)/ml_bench
+	@$(RUN) $(BUILD)/ml_bench $(BENCH_MODEL)
+
+# Whole matrix with a summary table (see tests/test_all.sh).
+test-all:
+	@sh tests/test_all.sh
