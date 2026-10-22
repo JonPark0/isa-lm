@@ -35,9 +35,9 @@ LIB_OBJ := $(LIB_SRC:%.c=$(BUILD)/obj/%.o)
 GUARD_OBJ := $(BUILD)/obj/app/main_guard.o
 
 TESTS := $(patsubst tests/%.c,%,$(wildcard tests/test_*.c))
-APPS  :=
+APPS  := ml_run
 
-.PHONY: all test clean guard-test
+.PHONY: all test clean guard-test e2e scalar-ref
 .SECONDARY:
 all: $(addprefix $(BUILD)/,$(TESTS) $(APPS))
 
@@ -54,6 +54,20 @@ build/models/rand_%.mlb: tools/gen_random.py tools/mlb.py
 	@$(PYTHON) tools/gen_random.py --out $@ --wtype $* --dump-emb-row 5
 
 TESTARGS_test_load := $(MODELS)
+TOKENIZER := build/models/tok96.bin
+$(TOKENIZER): tools/gen_tokenizer.py
+	@mkdir -p $(dir $@)
+	@$(PYTHON) tools/gen_tokenizer.py --vocab 96 --out $@
+
+$(BUILD)/ml_run: $(BUILD)/obj/app/ml_run.o $(GUARD_OBJ) $(LIB_OBJ)
+	@$(CC) $(LDFLAGS) $^ -o $@ $(LDLIBS)
+
+# Host scalar build: the reference e2e compares generated text against.
+scalar-ref:
+	@$(MAKE) -s ISA=scalar CROSS= THREADS=1 ASM=0 DEBUG=0 EXTRA_CFLAGS= RUN= build/scalar/ml_run
+
+e2e: $(BUILD)/ml_run $(MODELS) $(TOKENIZER) scalar-ref
+	@sh tests/test_e2e.sh $(ISA) $(BUILD) "$(RUN)"
 
 test: $(addprefix $(BUILD)/,$(TESTS)) $(MODELS)
 	@set -e; $(foreach t,$(TESTS),$(RUN) $(BUILD)/$(t) $(TESTARGS_$(t));)
