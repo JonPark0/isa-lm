@@ -1,6 +1,7 @@
 #include <math.h>
 #include <string.h>
 #include "config/ml_config.h"
+#include "core/clock.h"
 #include "core/quant_ref.h"
 #include "model/transformer.h"
 #include "ops/ops.h"
@@ -18,6 +19,13 @@ static double rope_inv_freq(const ml_config *c, int i) {
     const double smooth = (orig / wavelen - lo) / (hi - lo);
     return (1.0 - smooth) * inv / f + smooth * inv;
 }
+
+const char *const ml_prof_names[ML_PROF_COUNT] = { "qkv", "attention", "wo", "ffn", "classifier", "other" };
+
+/* Runs stmt, adding its wall time to prof[cat] when profiling is on. */
+#define PROF(cat, stmt) do {                                                  \
+        if (s->profile) { const double t0_ = ml_now(); stmt; s->prof[cat] += ml_now() - t0_; } \
+        else { stmt; } } while (0)
 
 ml_status ml_state_init(ml_state *s, ml_model *m, int nthreads) {
     memset(s, 0, sizeof *s);
@@ -84,37 +92,36 @@ float *ml_forward(ml_state *s, int token, int pos) {
     const int h2 = c->head_dim / 2;
     const float *cs = s->rope_cos + (size_t)pos * h2, *sn = s->rope_sin + (size_t)pos * h2;
 
-    ml_dequant_row(s->x, &m->tok_emb, token);
+    PROF(ML_PROF_OTHER, ml_dequant_row(s->x, &m->tok_emb, token));
     for (int l = 0; l < c->n_layers; l++) {
         const ml_layer *L = &m->layers[l];
         float *kc = s->kcache + (size_t)l * c->max_seq * c->kv_dim;
         float *vc = s->vcache + (size_t)l * c->max_seq * c->kv_dim;
         float *k = kc + (size_t)pos * c->kv_dim, *v = vc + (size_t)pos * c->kv_dim;
 
-        ml_k_rmsnorm(s->xb, s->x, L->attn_norm, c->dim, c->norm_eps);
-        ml_k_quantize_q8(&s->qa_dim, s->xb, c->dim);
-        ml_matvec(s->pool, s->q, &L->wq, &s->qa_dim);
-        ml_matvec(s->pool, k, &L->wk, &s->qa_dim);
-        ml_matvec(s->pool, v, &L->wv, &s->qa_dim);
-        ml_k_rope(s->q, k, cs, sn, c->head_dim, c->n_heads, c->n_kv_heads);
+        PROF(ML_PROF_OTHER, ml_k_rmsnorm(s->xb, s->x, L->attn_norm, c->dim, c->norm_eps);
+                            ml_k_quantize_q8(&s->qa_dim, s->xb, c->dim));
+        PROF(ML_PROF_QKV, ml_matvec(s->pool, s->q, &L->wq, &s->qa_dim);
+                          ml_matvec(s->pool, k, &L->wk, &s->qa_dim);
+                          ml_matvec(s->pool, v, &L->wv, &s->qa_dim));
+        PROF(ML_PROF_OTHER, ml_k_rope(s->q, k, cs, sn, c->head_dim, c->n_heads, c->n_kv_heads));
 
-        ml_attention(s->pool, s->xb, s->q, kc, vc, s->att, c, pos);
-        ml_k_quantize_q8(&s->qa_dim, s->xb, c->dim);
-        ml_matvec(s->pool, s->xb2, &L->wo, &s->qa_dim);
-        ml_k_add(s->x, s->xb2, c->dim);
-
-        ml_k_rmsnorm(s->xb, s->x, L->ffn_norm, c->dim, c->norm_eps);
-        ml_k_quantize_q8(&s->qa_dim, s->xb, c->dim);
-        ml_matvec(s->pool, s->hb, &L->w1, &s->qa_dim);
-        ml_matvec(s->pool, s->hb2, &L->w3, &s->qa_dim);
-        ml_k_silu_mul(s->hb, s->hb2, c->hidden_dim);
-        ml_k_quantize_q8(&s->qa_hidden, s->hb, c->hidden_dim);
-        ml_matvec(s->pool, s->xb2, &L->w2, &s->qa_hidden);
-        ml_k_add(s->x, s->xb2, c->dim);
+        PROF(ML_PROF_ATTN, ml_attention(s->pool, s->xb, s->q, kc, vc, s->att, c, pos));
+        PROF(ML_PROF_OTHER, ml_k_quantize_q8(&s->qa_dim, s->xb, c->dim));
+        PROF(ML_PROF_WO, ml_matvec(s->pool, s->xb2, &L->wo, &s->qa_dim));
+        PROF(ML_PROF_OTHER, ml_k_add(s->x, s->xb2, c->dim);
+                            ml_k_rmsnorm(s->xb, s->x, L->ffn_norm, c->dim, c->norm_eps);
+                            ml_k_quantize_q8(&s->qa_dim, s->xb, c->dim));
+        PROF(ML_PROF_FFN, ml_matvec(s->pool, s->hb, &L->w1, &s->qa_dim);
+                          ml_matvec(s->pool, s->hb2, &L->w3, &s->qa_dim));
+        PROF(ML_PROF_OTHER, ml_k_silu_mul(s->hb, s->hb2, c->hidden_dim);
+                            ml_k_quantize_q8(&s->qa_hidden, s->hb, c->hidden_dim));
+        PROF(ML_PROF_FFN, ml_matvec(s->pool, s->xb2, &L->w2, &s->qa_hidden));
+        PROF(ML_PROF_OTHER, ml_k_add(s->x, s->xb2, c->dim));
     }
-    ml_k_rmsnorm(s->xb, s->x, m->final_norm, c->dim, c->norm_eps);
-    ml_k_quantize_q8(&s->qa_dim, s->xb, c->dim);
-    ml_matvec(s->pool, s->logits, &m->wcls, &s->qa_dim);
+    PROF(ML_PROF_OTHER, ml_k_rmsnorm(s->xb, s->x, m->final_norm, c->dim, c->norm_eps);
+                        ml_k_quantize_q8(&s->qa_dim, s->xb, c->dim));
+    PROF(ML_PROF_CLS, ml_matvec(s->pool, s->logits, &m->wcls, &s->qa_dim));
     return s->logits;
 }
 

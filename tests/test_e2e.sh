@@ -54,6 +54,13 @@ first=$($RUN $B/ml_run $M/rand_q8.mlb --tokens 1,2 -n 3 -T 0 2>/dev/null | awk '
 err=$($RUN $B/ml_run $M/rand_q8.mlb --tokens 1,2 -n 20 -T 0 --eos "$first" 2>&1 >/dev/null)
 echo "$err" | grep -q "^positions: 2," && ok || bad "--eos $first should stop right after the prompt (positions 2): $err"
 
+# --profile: per-stage time breakdown on stderr, output unchanged
+$RUN $B/ml_run $M/rand_q8.mlb --tokens 1,2,3 -n 12 -T 0 > $T/noprof.txt 2>/dev/null
+err=$($RUN $B/ml_run $M/rand_q8.mlb --tokens 1,2,3 -n 12 -T 0 --profile 2>&1 > $T/prof.txt)
+if cmp -s $T/noprof.txt $T/prof.txt && echo "$err" | grep -q "^profile:" \
+    && for k in qkv attention wo ffn classifier other; do echo "$err" | grep -q " $k "; done; then ok
+else bad "--profile output: $err"; fi
+
 # usage
 err=$($RUN $B/ml_run 2>&1); rc=$?
 [ $rc -eq 2 ] && echo "$err" | grep -q "usage:" && ok || bad "usage rc=$rc"

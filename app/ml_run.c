@@ -3,13 +3,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
-#ifdef _WIN32
-#include <windows.h>
-#endif
 #include "config/ml_config.h"
 #include "model/sampler.h"
 #include "model/tokenizer.h"
+#include "core/clock.h"
 #include "model/transformer.h"
 
 static const char USAGE[] =
@@ -25,6 +22,7 @@ static const char USAGE[] =
     "  --eos ID         stop when ID is generated (default: BOS/EOS ids 1 and 2 with -z,\n"
     "                   otherwise run all -n positions)\n"
     "  --dump-logits F  write float32 logits for every --tokens position, then exit\n"
+    "  --profile        print time spent per stage (qkv, attention, wo, ffn, classifier, other)\n"
     "  -h, --help       show this help\n";
 
 static int usage(const char *msg) {
@@ -62,19 +60,6 @@ static int parse_float(const char *s, float *out) {
     return 1;
 }
 
-static double now_s(void) {
-#ifdef _WIN32
-    LARGE_INTEGER f, t;
-    QueryPerformanceFrequency(&f);
-    QueryPerformanceCounter(&t);
-    return (double)t.QuadPart / (double)f.QuadPart;
-#else
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (double)ts.tv_sec + ts.tv_nsec * 1e-9;
-#endif
-}
-
 /* Parses "1,2,3" into out; returns count, or -1 on an empty, non-numeric or
  * out-of-range entry, or more than max entries. */
 static int parse_tokens(const char *s, int *out, int max, int vocab) {
@@ -93,12 +78,14 @@ static int parse_tokens(const char *s, int *out, int max, int vocab) {
 
 int ml_main(int argc, char **argv) {
     const char *model_path = NULL, *tok_path = NULL, *prompt = NULL, *tokens_arg = NULL, *dump = NULL;
+    int profile = 0;
     int steps = 64, nthreads = 1, eos = -1;
     float temp = 0.0f, topp = 0.9f;
     unsigned long long seed = 1;
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
         if (!strcmp(a, "-h") || !strcmp(a, "--help")) { printf("%sbuild ISA: %s\n", USAGE, ML_ISA_NAME); return 0; }
+        if (!strcmp(a, "--profile")) { profile = 1; continue; }
         if (a[0] != '-') { if (model_path) return usage("more than one model given"); model_path = a; continue; }
         if (i + 1 >= argc) return usage("option needs a value");
         const char *v = argv[++i];
@@ -163,10 +150,11 @@ int ml_main(int argc, char **argv) {
         goto out_state;
     }
 
+    s.profile = profile;
     ml_sampler smp;
     if (ml_sampler_init(&smp, c->vocab, temp, topp, seed) != ML_OK) { rc = 1; goto out_state; }
     if (steps > c->max_seq) steps = c->max_seq;
-    const double t0 = now_s();
+    const double t0 = ml_now();
     int token = ptoks[0], pos = 0;
     while (pos < steps) {
         float *logits = ml_forward(&s, token, pos);
@@ -183,9 +171,17 @@ int ml_main(int argc, char **argv) {
         token = next;
     }
     putchar('\n');
-    const double dt = now_s() - t0;
+    const double dt = ml_now() - t0;
     fprintf(stderr, "positions: %d, tok/s: %.2f, threads: %d, isa: %s\n", pos, dt > 0 ? pos / dt : 0.0,
             ml_pool_size(s.pool), ML_ISA_NAME);
+    if (profile) {
+        double total = 0.0;
+        for (int i = 0; i < ML_PROF_COUNT; i++) total += s.prof[i];
+        fprintf(stderr, "profile:");
+        for (int i = 0; i < ML_PROF_COUNT; i++)
+            fprintf(stderr, " %s %.1f%%", ml_prof_names[i], total > 0 ? 100.0 * s.prof[i] / total : 0.0);
+        fprintf(stderr, " (forward %.1f ms over %d positions)\n", total * 1e3, pos);
+    }
     ml_sampler_free(&smp);
 out_state:
     ml_state_free(&s);
