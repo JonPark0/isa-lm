@@ -30,6 +30,17 @@ for wt in q8 q4; do
         && ok || bad "--no-pack ref $wt"
 done
 
+# batched prefill gives the same logits as token-by-token, byte for byte
+for wt in q8 q4; do
+    $RUN $B/ml_run $M/rand_$wt.mlb --tokens $TOKENS --dump-logits $T/$wt.b1.f32 --batch 1 \
+        && $RUN $B/ml_run $M/rand_$wt.mlb --tokens $TOKENS --dump-logits $T/$wt.b5.f32 --batch 5 \
+        && cmp -s $T/$wt.f32 $T/$wt.b1.f32 && cmp -s $T/$wt.f32 $T/$wt.b5.f32 \
+        && ok || bad "batched prefill logits differ ($wt)"
+done
+$RUN $B/ml_run $M/rand_q8.mlb -z $TOK -i "abcdefghij" -n 24 -T 0 --batch 1 > $T/gb1.txt 2>/dev/null \
+    && $RUN $B/ml_run $M/rand_q8.mlb -z $TOK -i "abcdefghij" -n 24 -T 0 > $T/gb.txt 2>/dev/null \
+    && cmp -s $T/gb1.txt $T/gb.txt && ok || bad "generation with batched prefill differs from --batch 1"
+
 # greedy: same text as the host scalar build
 $RUN $B/ml_run $M/rand_q8.mlb -z $TOK -i "ab" -n 16 -T 0 > $T/greedy.txt 2>/dev/null \
     && $SCALAR $M/rand_q8.mlb -z $TOK -i "ab" -n 16 -T 0 > $T/greedy.ref.txt 2>/dev/null \

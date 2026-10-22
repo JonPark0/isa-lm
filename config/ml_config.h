@@ -272,6 +272,17 @@
 #define ML_PACK_Q8 0
 #endif
 
+/* Batched packed kernels: native where the packed ISA has one, else a loop
+ * over the packed matvec. */
+#include "kernels/pk_loop.h"
+#if defined(ML_HAS_MATVEC_PK_AVX512VNNI) && defined(ML_HAS_MATMUL_PK_AVX512VNNI)
+#define ml_k_matmul_q8_pk ml_k_matmul_q8_pk_avx512vnni
+#define ml_k_matmul_q4_pk ml_k_matmul_q4_pk_avx512vnni
+#elif ML_PACK_G
+#define ml_k_matmul_q8_pk ml_k_matmul_q8_pk_loop
+#define ml_k_matmul_q4_pk ml_k_matmul_q4_pk_loop
+#endif
+
 #if defined(ML_ISA_SCALAR)
 #define ML_ISA_NAME "scalar"
 #elif defined(ML_ISA_AVX512VNNI)

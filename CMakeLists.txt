@@ -50,7 +50,7 @@ if(ML_THREADS)
   find_package(Threads REQUIRED)
 endif()
 
-file(GLOB LIB_SRC core/*.c ops/*.c model/*.c)
+file(GLOB LIB_SRC core/*.c ops/*.c model/*.c kernels/common/*.c)
 list(REMOVE_ITEM LIB_SRC ${CMAKE_SOURCE_DIR}/core/isa_check.c)
 foreach(i ${CHAIN})
   file(GLOB K kernels/${i}/*.c)

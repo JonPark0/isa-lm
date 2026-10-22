@@ -23,6 +23,7 @@ static const char USAGE[] =
     "  --eos ID         stop when ID is generated (default: BOS/EOS ids 1 and 2 with -z,\n"
     "                   otherwise run all -n positions)\n"
     "  --dump-logits F  write float32 logits for every --tokens position, then exit\n"
+    "  --batch N        prompt tokens per batched prefill step, 1..32 (default 32; 1 = token by token)\n"
     "  --no-pack        keep weights row-major (no repacking at load: less memory, slower)\n"
     "  --profile        print time spent per stage (qkv, attention, wo, ffn, classifier, other)\n"
     "  -h, --help       show this help\n";
@@ -81,7 +82,7 @@ static int parse_tokens(const char *s, int *out, int max, int vocab) {
 int ml_main(int argc, char **argv) {
     const char *model_path = NULL, *tok_path = NULL, *prompt = NULL, *tokens_arg = NULL, *dump = NULL;
     int profile = 0, no_pack = 0;
-    int steps = 64, nthreads = 1, eos = -1;
+    int steps = 64, nthreads = 1, eos = -1, batch = ML_BATCH_MAX;
     float temp = 0.0f, topp = 0.9f;
     unsigned long long seed = 1;
     for (int i = 1; i < argc; i++) {
@@ -105,6 +106,7 @@ int ml_main(int argc, char **argv) {
         else if (!strcmp(a, "-s")) ok = parse_u64(v, &seed);
         else if (!strcmp(a, "-t")) ok = parse_int(v, 1, 64, &nthreads);
         else if (!strcmp(a, "--eos")) ok = parse_int(v, 0, 1 << 24, &eos);
+        else if (!strcmp(a, "--batch")) ok = parse_int(v, 1, ML_BATCH_MAX, &batch);
         else if (!strcmp(a, "--dump-logits")) dump = v;
         else return usage("unknown option");
         if (!ok) { fprintf(stderr, "error: bad value '%s' for %s\n", v, a); return usage(NULL); }
@@ -153,21 +155,38 @@ int ml_main(int argc, char **argv) {
         goto out_state;
     }
 
+    s.batch = batch;
+    s.profile = profile;
     if (dump) {
         FILE *f = fopen(dump, "wb");
-        if (!f) { fprintf(stderr, "error: cannot write %s\n", dump); rc = 1; goto out_state; }
-        for (int p = 0; p < np; p++) fwrite(ml_forward(&s, ptoks[p], p), sizeof(float), (size_t)c->vocab, f);
-        /* ptoks were range-checked against vocab and max_seq above */
+        float *all = malloc(sizeof(float) * (size_t)np * c->vocab);
+        if (!f || !all) { fprintf(stderr, "error: cannot write %s\n", dump); if (f) fclose(f); free(all); rc = 1; goto out_state; }
+        ml_prefill(&s, ptoks, np, 0, all);   /* ptoks were range-checked against vocab and max_seq above */
+        fwrite(all, sizeof(float), (size_t)np * c->vocab, f);
         fclose(f);
+        free(all);
         goto out_state;
     }
 
-    s.profile = profile;
     ml_sampler smp;
     if (ml_sampler_init(&smp, c->vocab, temp, topp, seed) != ML_OK) { rc = 1; goto out_state; }
     if (steps > c->max_seq) steps = c->max_seq;
-    const double t0 = ml_now();
+    /* Prompt: all but the last token go through batched prefill (no logits
+     * needed); generation then continues token by token. */
     int token = ptoks[0], pos = 0;
+    const int npre = np - 1 < steps - 1 ? np - 1 : steps - 1;
+    double tp = 0.0;
+    if (npre > 0) {
+        const double t = ml_now();
+        ml_prefill(&s, ptoks, npre, 0, NULL);
+        tp = ml_now() - t;
+        for (pos = 0; pos < npre; pos++) {
+            if (have_tok) fputs(ml_decode(&tok, ptoks[pos], ptoks[pos + 1]), stdout);
+            else printf("%d ", ptoks[pos + 1]);
+        }
+        token = ptoks[npre];
+    }
+    const double t0 = ml_now();
     while (pos < steps) {
         float *logits = ml_forward(&s, token, pos);
         if (!logits) { fprintf(stderr, "error: token %d at position %d out of range\n", token, pos); rc = 1; break; }
@@ -183,7 +202,9 @@ int ml_main(int argc, char **argv) {
         token = next;
     }
     putchar('\n');
-    const double dt = ml_now() - t0;
+    const double dt = ml_now() - t0 + tp;
+    if (npre > 0)
+        fprintf(stderr, "prefill: %d tokens in %.1f ms (%.1f tok/s)\n", npre, tp * 1e3, tp > 0 ? npre / tp : 0.0);
     fprintf(stderr, "positions: %d, tok/s: %.2f, threads: %d, isa: %s, packed: %d\n", pos, dt > 0 ? pos / dt : 0.0,
             ml_pool_size(s.pool), ML_ISA_NAME, m.pack_mem ? ml_pack_group() : 0);
     if (profile) {

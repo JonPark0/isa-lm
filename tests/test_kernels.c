@@ -125,6 +125,51 @@ static void check_matvec_pk(int type, int unit) {
 #endif
 }
 
+/* Batched (prefill) kernels: every token's column must equal the packed
+ * matvec result bit for bit, for token counts around the kernel's tile. */
+static void check_matmul_pk(int type, int unit) {
+#if ML_PACK_G
+    static const int ns[] = { 1, 3, 4, 5, 9 };
+    const int rows = 3 * ML_PACK_G + 5, cols = 96, r0 = ML_PACK_G;
+    wbuf w = make_w(rows, cols, type, unit);
+    ml_qtensor P = w.W;
+    uint8_t *pq = xalloc(ml_pack_quant_bytes(&w.W, ML_PACK_G));
+    float *pd = xalloc(ml_pack_scale_bytes(&w.W, ML_PACK_G));
+    ml_pack(&w.W, pq, pd, ML_PACK_G, ML_PACK_Q8_OFFSET);
+    P.pq = pq; P.pd = pd;
+    for (int ni = 0; ni < 5; ni++) {
+        const int n = ns[ni], ldy = rows + 3;
+        ml_qbatch X = { xalloc(n * cols), xalloc(sizeof(float) * n * cols / QK), n, cols };
+        for (int t = 0; t < n; t++) {
+            ml_qact xt = make_x(cols, unit);
+            memcpy(X.q + t * cols, xt.q, cols);
+            memcpy(X.d + t * (cols / QK), xt.d, sizeof(float) * cols / QK);
+            free(xt.q); free(xt.d);
+        }
+        float *Y = xalloc(sizeof(float) * n * ldy), *yv = xalloc(sizeof(float) * rows);
+        for (int i = 0; i < n * ldy; i++) Y[i] = 12345.0f;
+        if (type == ML_Q8_0) ml_k_matmul_q8_pk(Y, ldy, &P, &X, r0, rows);
+        else ml_k_matmul_q4_pk(Y, ldy, &P, &X, r0, rows);
+        for (int t = 0; t < n; t++) {
+            ml_qact xt = { X.q + t * cols, X.d + t * (cols / QK), cols };
+            if (type == ML_Q8_0) ml_k_matvec_q8_pk(yv, &P, &xt, r0, rows);
+            else ml_k_matvec_q4_pk(yv, &P, &xt, r0, rows);
+            for (int r = 0; r < ldy; r++) {
+                if (r < r0 || r >= rows) TT_ASSERT(Y[t * ldy + r] == 12345.0f);
+                else TT_ASSERT(Y[t * ldy + r] == yv[r]);
+            }
+        }
+        free(X.q); free(X.d); free(Y); free(yv);
+    }
+    free(w.q); free(w.d); free(pq); free(pd);
+#else
+    (void)type; (void)unit;
+#endif
+}
+
+static void test_matmul_q8_pk(void) { check_matmul_pk(ML_Q8_0, 0); }
+static void test_matmul_q4_pk(void) { check_matmul_pk(ML_Q4_0, 0); }
+
 static void test_matvec_q8_pk_exact(void)  { check_matvec_pk(ML_Q8_0, 1); }
 static void test_matvec_q8_pk_scaled(void) { check_matvec_pk(ML_Q8_0, 0); }
 static void test_matvec_q4_pk_exact(void)  { check_matvec_pk(ML_Q4_0, 1); }
@@ -315,6 +360,8 @@ int TT_ENTRY(int argc, char **argv) {
     TT_RUN(test_matvec_q8_pk_scaled);
     TT_RUN(test_matvec_q4_pk_exact);
     TT_RUN(test_matvec_q4_pk_scaled);
+    TT_RUN(test_matmul_q8_pk);
+    TT_RUN(test_matmul_q4_pk);
     TT_RUN(test_quantize_q8_bitexact);
     TT_RUN(test_rmsnorm);
     TT_RUN(test_softmax);

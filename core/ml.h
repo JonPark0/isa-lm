@@ -40,6 +40,13 @@ typedef struct {
     int n;
 } ml_qact;
 
+/* n Q8_0 activation vectors of length k: token t is q + t*k, d + t*(k/QK). */
+typedef struct {
+    int8_t *q;
+    float *d;
+    int n, k;
+} ml_qbatch;
+
 const char *ml_status_str(ml_status s);
 
 /* *r = a * b; returns 0 if that overflows size_t (32-bit targets!). */

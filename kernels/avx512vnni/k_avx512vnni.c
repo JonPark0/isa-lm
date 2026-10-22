@@ -171,6 +171,92 @@ void ml_k_matvec_q4_pk_avx512vnni(float *y, const ml_qtensor *W, const ml_qact *
     }
 }
 
+/* Batched packed kernels: each weight vector loaded once feeds up to 4
+ * tokens, which turns the memory-bound matvec into a compute-bound matmul.
+ * Per token the arithmetic is exactly the matvec's, so results match it
+ * bit for bit. */
+#define TILE 4
+
+static void block_sums_batch(int (*xsum)[PK_MAX_BLOCKS], const ml_qbatch *X, int t0, int T, int nb, int offset) {
+    for (int t = 0; t < T; t++) {
+        const ml_qact xt = { X->q + (size_t)(t0 + t) * X->k, X->d + (size_t)(t0 + t) * nb, X->k };
+        pk_block_sums(xsum[t], &xt, nb, offset);
+    }
+}
+
+static inline void store_rows(float *Y, int ldy, int t0, int T, const __m512 *acc, int row, int r1) {
+    for (int t = 0; t < T; t++) store_group(Y + (size_t)(t0 + t) * ldy, acc[t], row, r1);
+}
+
+void ml_k_matmul_q8_pk_avx512vnni(float *Y, int ldy, const ml_qtensor *W, const ml_qbatch *X, int r0, int r1) {
+    const int nb = W->cols / QK;
+    static _Thread_local int xsum[TILE][PK_MAX_BLOCKS];
+    for (int t0 = 0; t0 < X->n; t0 += TILE) {
+        const int T = X->n - t0 < TILE ? X->n - t0 : TILE;
+        block_sums_batch(xsum, X, t0, T, nb, 128);
+        for (int row = r0; row < r1; row += PK) {
+            const uint8_t *p = W->pq + (size_t)(row / PK) * nb * (8 * PK * 4);
+            const float *d = W->pd + (size_t)(row / PK) * nb * PK;
+            __m512 acc[TILE];
+            for (int t = 0; t < TILE; t++) acc[t] = _mm512_setzero_ps();
+            for (int b = 0; b < nb; b++, p += 8 * PK * 4) {
+                __m512i s[TILE];
+                for (int t = 0; t < TILE; t++) s[t] = _mm512_setzero_si512();
+                for (int k = 0; k < 8; k++) {
+                    const __m512i w = _mm512_loadu_si512((const void *)(p + k * PK * 4));
+                    for (int t = 0; t < T; t++) {
+                        const int32_t *xb = (const int32_t *)(X->q + (size_t)(t0 + t) * X->k + b * QK);
+                        s[t] = _mm512_dpbusd_epi32(s[t], w, _mm512_set1_epi32(xb[k]));
+                    }
+                }
+                const __m512 dv = _mm512_loadu_ps(d + b * PK);
+                for (int t = 0; t < T; t++) {
+                    s[t] = _mm512_sub_epi32(s[t], _mm512_set1_epi32(xsum[t][b]));
+                    acc[t] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(s[t]),
+                                             _mm512_mul_ps(dv, _mm512_set1_ps(X->d[(size_t)(t0 + t) * nb + b])), acc[t]);
+                }
+            }
+            store_rows(Y, ldy, t0, T, acc, row, r1);
+        }
+    }
+}
+
+void ml_k_matmul_q4_pk_avx512vnni(float *Y, int ldy, const ml_qtensor *W, const ml_qbatch *X, int r0, int r1) {
+    const int nb = W->cols / QK;
+    static _Thread_local int xsum[TILE][PK_MAX_BLOCKS];
+    const __m512i m4 = _mm512_set1_epi8(0x0F);
+    for (int t0 = 0; t0 < X->n; t0 += TILE) {
+        const int T = X->n - t0 < TILE ? X->n - t0 : TILE;
+        block_sums_batch(xsum, X, t0, T, nb, 8);
+        for (int row = r0; row < r1; row += PK) {
+            const uint8_t *p = W->pq + (size_t)(row / PK) * nb * (4 * PK * 4);
+            const float *d = W->pd + (size_t)(row / PK) * nb * PK;
+            __m512 acc[TILE];
+            for (int t = 0; t < TILE; t++) acc[t] = _mm512_setzero_ps();
+            for (int b = 0; b < nb; b++, p += 4 * PK * 4) {
+                __m512i s[TILE];
+                for (int t = 0; t < TILE; t++) s[t] = _mm512_setzero_si512();
+                for (int v = 0; v < 4; v++) {
+                    const __m512i w = _mm512_loadu_si512((const void *)(p + v * PK * 4));
+                    const __m512i lo = _mm512_and_si512(w, m4), hi = _mm512_and_si512(_mm512_srli_epi16(w, 4), m4);
+                    for (int t = 0; t < T; t++) {
+                        const int32_t *xb = (const int32_t *)(X->q + (size_t)(t0 + t) * X->k + b * QK);
+                        s[t] = _mm512_dpbusd_epi32(s[t], lo, _mm512_set1_epi32(xb[v]));
+                        s[t] = _mm512_dpbusd_epi32(s[t], hi, _mm512_set1_epi32(xb[v + 4]));
+                    }
+                }
+                const __m512 dv = _mm512_loadu_ps(d + b * PK);
+                for (int t = 0; t < T; t++) {
+                    s[t] = _mm512_sub_epi32(s[t], _mm512_set1_epi32(xsum[t][b]));
+                    acc[t] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(s[t]),
+                                             _mm512_mul_ps(dv, _mm512_set1_ps(X->d[(size_t)(t0 + t) * nb + b])), acc[t]);
+                }
+            }
+            store_rows(Y, ldy, t0, T, acc, row, r1);
+        }
+    }
+}
+
 void ml_k_quantize_q8_avx512vnni(ml_qact *out, const float *x, int k) {
     const __m512 half = _mm512_set1_ps(0.5f);
     const __m512i signbit = _mm512_set1_epi32((int)0x80000000u);
