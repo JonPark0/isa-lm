@@ -77,3 +77,73 @@ void ml_k_matvec_q4_pk_neon_dotprod(float *y, const ml_qtensor *W, const ml_qact
         pk_store(y, acc, row, r1);
     }
 }
+
+/* Batched packed kernels: each weight vector feeds up to 4 tokens; per token
+ * the arithmetic is the matvec's, so results match it exactly. */
+#define PK_TILE 4
+
+void ml_k_matmul_q8_pk_neon_dotprod(float *Y, int ldy, const ml_qtensor *W, const ml_qbatch *X, int r0, int r1) {
+    const int nb = W->cols / QK;
+    for (int t0 = 0; t0 < X->n; t0 += PK_TILE) {
+        const int T = X->n - t0 < PK_TILE ? X->n - t0 : PK_TILE;
+        for (int row = r0; row < r1; row += PK) {
+            const int8_t *p = (const int8_t *)W->pq + (size_t)(row / PK) * nb * (8 * PK * 4);
+            const float *d = W->pd + (size_t)(row / PK) * nb * PK;
+            float32x4_t acc[PK_TILE];
+            for (int t = 0; t < PK_TILE; t++) acc[t] = vdupq_n_f32(0.0f);
+            for (int b = 0; b < nb; b++, p += 8 * PK * 4) {
+                int32x4_t s[PK_TILE];
+                for (int t = 0; t < PK_TILE; t++) s[t] = vdupq_n_s32(0);
+                for (int k = 0; k < 8; k++) {
+                    const int8x16_t w = vld1q_s8(p + k * PK * 4);
+                    for (int t = 0; t < T; t++)
+                        s[t] = vdotq_s32(s[t], w, vreinterpretq_s8_s32(bcast4(X->q + (size_t)(t0 + t) * X->k + b * QK + 4 * k)));
+                }
+                const float32x4_t dv = vld1q_f32(d + b * PK);
+                for (int t = 0; t < T; t++)
+                    acc[t] = vfmaq_f32(acc[t], vcvtq_f32_s32(s[t]), vmulq_n_f32(dv, X->d[(size_t)(t0 + t) * nb + b]));
+            }
+            for (int t = 0; t < T; t++) pk_store(Y + (size_t)(t0 + t) * ldy, acc[t], row, r1);
+        }
+    }
+}
+
+void ml_k_matmul_q4_pk_neon_dotprod(float *Y, int ldy, const ml_qtensor *W, const ml_qbatch *X, int r0, int r1) {
+    const int nb = W->cols / QK;
+    static _Thread_local int xsum[PK_TILE][PK_MAX_BLOCKS];
+    const uint8x16_t m4 = vdupq_n_u8(0x0F);
+    for (int t0 = 0; t0 < X->n; t0 += PK_TILE) {
+        const int T = X->n - t0 < PK_TILE ? X->n - t0 : PK_TILE;
+        for (int t = 0; t < T; t++)
+            for (int b = 0; b < nb; b++) {
+                int sum = 0;
+                for (int j = 0; j < QK; j++) sum += X->q[(size_t)(t0 + t) * X->k + b * QK + j];
+                xsum[t][b] = 8 * sum;
+            }
+        for (int row = r0; row < r1; row += PK) {
+            const uint8_t *p = W->pq + (size_t)(row / PK) * nb * (4 * PK * 4);
+            const float *d = W->pd + (size_t)(row / PK) * nb * PK;
+            float32x4_t acc[PK_TILE];
+            for (int t = 0; t < PK_TILE; t++) acc[t] = vdupq_n_f32(0.0f);
+            for (int b = 0; b < nb; b++, p += 4 * PK * 4) {
+                int32x4_t s[PK_TILE];
+                for (int t = 0; t < PK_TILE; t++) s[t] = vdupq_n_s32(0);
+                for (int v = 0; v < 4; v++) {
+                    const uint8x16_t w = vld1q_u8(p + v * PK * 4);
+                    const int8x16_t lo = vreinterpretq_s8_u8(vandq_u8(w, m4)), hi = vreinterpretq_s8_u8(vshrq_n_u8(w, 4));
+                    for (int t = 0; t < T; t++) {
+                        const int8_t *xb = X->q + (size_t)(t0 + t) * X->k + b * QK;
+                        s[t] = vdotq_s32(s[t], lo, vreinterpretq_s8_s32(bcast4(xb + 4 * v)));
+                        s[t] = vdotq_s32(s[t], hi, vreinterpretq_s8_s32(bcast4(xb + 16 + 4 * v)));
+                    }
+                }
+                const float32x4_t dv = vld1q_f32(d + b * PK);
+                for (int t = 0; t < T; t++) {
+                    s[t] = vsubq_s32(s[t], vdupq_n_s32(xsum[t][b]));
+                    acc[t] = vfmaq_f32(acc[t], vcvtq_f32_s32(s[t]), vmulq_n_f32(dv, X->d[(size_t)(t0 + t) * nb + b]));
+                }
+            }
+            for (int t = 0; t < T; t++) pk_store(Y + (size_t)(t0 + t) * ldy, acc[t], row, r1);
+        }
+    }
+}

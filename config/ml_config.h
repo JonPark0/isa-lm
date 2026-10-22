@@ -278,6 +278,18 @@
 #if defined(ML_HAS_MATVEC_PK_AVX512VNNI) && defined(ML_HAS_MATMUL_PK_AVX512VNNI)
 #define ml_k_matmul_q8_pk ml_k_matmul_q8_pk_avx512vnni
 #define ml_k_matmul_q4_pk ml_k_matmul_q4_pk_avx512vnni
+#elif !defined(ML_HAS_MATVEC_PK_AVX512VNNI) && defined(ML_HAS_MATMUL_PK_AVXVNNI)
+#define ml_k_matmul_q8_pk ml_k_matmul_q8_pk_avxvnni
+#define ml_k_matmul_q4_pk ml_k_matmul_q4_pk_avxvnni
+#elif !defined(ML_HAS_MATVEC_PK_AVX512VNNI) && !defined(ML_HAS_MATVEC_PK_AVXVNNI) && defined(ML_HAS_MATMUL_PK_AVX2)
+#define ml_k_matmul_q8_pk ml_k_matmul_q8_pk_avx2
+#define ml_k_matmul_q4_pk ml_k_matmul_q4_pk_avx2
+#elif !defined(ML_HAS_MATVEC_PK_AVX2) && defined(ML_HAS_MATMUL_PK_SSE41)
+#define ml_k_matmul_q8_pk ml_k_matmul_q8_pk_sse41
+#define ml_k_matmul_q4_pk ml_k_matmul_q4_pk_sse41
+#elif defined(ML_HAS_MATMUL_PK_NEON_DOTPROD)
+#define ml_k_matmul_q8_pk ml_k_matmul_q8_pk_neon_dotprod
+#define ml_k_matmul_q4_pk ml_k_matmul_q4_pk_neon_dotprod
 #elif ML_PACK_G
 #define ml_k_matmul_q8_pk ml_k_matmul_q8_pk_loop
 #define ml_k_matmul_q4_pk ml_k_matmul_q4_pk_loop
