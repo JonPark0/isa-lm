@@ -169,11 +169,13 @@ void ml_k_silu_mul_sse2(float *g, const float *u, int n) {
     for (; i < n; i++) g[i] = g[i] / (1.0f + expf(-g[i])) * u[i];
 }
 
+#ifndef ML_ASM_ADD_SSE2   /* ASM=1: kernels/sse2/add.S */
 void ml_k_add_sse2(float *y, const float *x, int n) {
     int i = 0;
     for (; i + 4 <= n; i += 4) _mm_storeu_ps(y + i, _mm_add_ps(_mm_loadu_ps(y + i), _mm_loadu_ps(x + i)));
     for (; i < n; i++) y[i] += x[i];
 }
+#endif
 
 float ml_k_dot_f32_sse2(const float *a, const float *b, int n) {
     __m128 a0 = _mm_setzero_ps(), a1 = _mm_setzero_ps();

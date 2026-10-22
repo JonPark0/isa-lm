@@ -28,6 +28,9 @@ ifeq ($(THREADS),pthread)
 else ifneq ($(THREADS),1)
   $(error THREADS must be 1 or pthread)
 endif
+ifeq ($(filter $(ASM),0 1),)
+  $(error ASM must be 0 or 1)
+endif
 CFLAGS  := $(BASE_CFLAGS) $(ISAFLAGS)
 LDFLAGS := $(CROSS_LDFLAGS) $(EXTRA_LDFLAGS)
 LDLIBS  := -lm
@@ -37,7 +40,15 @@ LIB_SRC := $(wildcard core/*.c) \
            $(wildcard ops/*.c) $(wildcard model/*.c)
 # Compiled without ISA flags: these run before the ISA guard passes.
 NOISA_SRC := core/isa_check.c app/main_guard.c
-LIB_OBJ := $(LIB_SRC:%.c=$(BUILD)/obj/%.o)
+# ASM=1: kernels listed in kernels/<isa>/asm.mk come from <name>.S; the C
+# version is compiled out by -DML_ASM_<NAME>_<ISA>.
+ifeq ($(ASM),1)
+  -include $(foreach i,$(CHAIN),kernels/$(i)/asm.mk)
+  ASM_SRC := $(foreach i,$(CHAIN),$(foreach k,$(ASM_$(i)),kernels/$(i)/$(k).S))
+  BASE_CFLAGS += $(foreach i,$(CHAIN),$(foreach k,$(ASM_$(i)),-DML_ASM_$(call upper,$(k))_$(call upper,$(i))))
+  CFLAGS := $(BASE_CFLAGS) $(ISAFLAGS)
+endif
+LIB_OBJ := $(LIB_SRC:%.c=$(BUILD)/obj/%.o) $(ASM_SRC:%.S=$(BUILD)/obj/%.o)
 GUARD_OBJ := $(BUILD)/obj/app/main_guard.o
 
 TESTS := $(patsubst tests/%.c,%,$(wildcard tests/test_*.c))
@@ -50,6 +61,10 @@ all: $(addprefix $(BUILD)/,$(TESTS) $(APPS))
 $(BUILD)/obj/%.o: %.c
 	@mkdir -p $(dir $@)
 	@$(CC) $(if $(filter $<,$(NOISA_SRC)),$(BASE_CFLAGS),$(CFLAGS)) -c $< -o $@
+
+$(BUILD)/obj/%.o: %.S
+	@mkdir -p $(dir $@)
+	@$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD)/test_%: $(BUILD)/obj/tests/test_%.o $(GUARD_OBJ) $(LIB_OBJ)
 	@$(CC) $(LDFLAGS) $^ -o $@ $(LDLIBS)

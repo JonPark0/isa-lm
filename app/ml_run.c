@@ -3,6 +3,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 #include "config/ml_config.h"
 #include "model/sampler.h"
 #include "model/tokenizer.h"
@@ -26,9 +29,16 @@ static int usage(const char *msg) {
 }
 
 static double now_s(void) {
+#ifdef _WIN32
+    LARGE_INTEGER f, t;
+    QueryPerformanceFrequency(&f);
+    QueryPerformanceCounter(&t);
+    return (double)t.QuadPart / (double)f.QuadPart;
+#else
     struct timespec ts;
-    timespec_get(&ts, TIME_UTC);
+    clock_gettime(CLOCK_MONOTONIC, &ts);
     return (double)ts.tv_sec + ts.tv_nsec * 1e-9;
+#endif
 }
 
 /* Parses "1,2,3" into out; returns count, or -1 on a bad entry or overflow. */

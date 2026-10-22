@@ -12,7 +12,8 @@ static uint32_t rng = 777;
 static uint32_t urand(void) { rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5; return rng; }
 static float frand(float lo, float hi) { return lo + (hi - lo) * (float)(urand() & 0xFFFFFF) / (float)0xFFFFFF; }
 
-static void *xalloc(size_t n) { void *p = aligned_alloc(64, (n + 63) & ~(size_t)63); memset(p, 0, n); return p; }
+static void *xalloc(size_t n) { void *p = ml_aligned_alloc(n); memset(p, 0, n); return p; }
+#define free ml_aligned_free
 
 /* ---------- matvec ---------- */
 

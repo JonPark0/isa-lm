@@ -36,4 +36,8 @@ typedef struct {
 
 const char *ml_status_str(ml_status s);
 
+/* 64 B-aligned allocation (C11 aligned_alloc is missing on MSVC/MinGW). */
+void *ml_aligned_alloc(size_t n);
+void ml_aligned_free(void *p);
+
 #endif

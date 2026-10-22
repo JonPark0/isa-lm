@@ -10,16 +10,16 @@ ml_status ml_file_map(ml_file *f, const char *path) {
     if (!fp) return ML_E_IO;
     long n = (fseek(fp, 0, SEEK_END) == 0) ? ftell(fp) : -1;
     if (n < 0 || fseek(fp, 0, SEEK_SET) != 0) { fclose(fp); return ML_E_IO; }
-    uint8_t *buf = aligned_alloc(ML_ALIGN, ((size_t)n + ML_ALIGN) & ~(size_t)(ML_ALIGN - 1));
+    uint8_t *buf = ml_aligned_alloc((size_t)n);
     if (!buf) { fclose(fp); return ML_E_NOMEM; }
-    if (fread(buf, 1, (size_t)n, fp) != (size_t)n) { free(buf); fclose(fp); return ML_E_IO; }
+    if (fread(buf, 1, (size_t)n, fp) != (size_t)n) { ml_aligned_free(buf); fclose(fp); return ML_E_IO; }
     fclose(fp);
     f->data = buf; f->size = (size_t)n; f->handle = buf;
     return ML_OK;
 }
 
 void ml_file_unmap(ml_file *f) {
-    free(f->handle);
+    ml_aligned_free(f->handle);
     f->data = NULL; f->size = 0; f->handle = NULL;
 }
 
