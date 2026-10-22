@@ -16,6 +16,9 @@
 #ifdef ML_ENABLE_NEON_DOTPROD
 #include "kernels/neon_dotprod/k_neon_dotprod.h"
 #endif
+#ifdef ML_ENABLE_NEON_I8MM
+#include "kernels/neon_i8mm/k_neon_i8mm.h"
+#endif
 #ifdef ML_ENABLE_SVE
 #include "kernels/sve/k_sve.h"
 #endif
@@ -259,7 +262,13 @@
 #define ml_k_matvec_q4_pk ml_k_matvec_q4_pk_sse41
 #define ML_PACK_G 4
 #define ML_PACK_Q8_OFFSET 0
-#define ML_PACK_Q8 0   /* 4-row Q8 groups are no faster than row-major at 128 bits */
+#define ML_PACK_Q8 1
+#elif defined(ML_HAS_MATVEC_PK_SSE2)
+#define ml_k_matvec_q8_pk ml_k_matvec_q8_pk_sse2
+#define ml_k_matvec_q4_pk ml_k_matvec_q4_pk_sse2
+#define ML_PACK_G 4
+#define ML_PACK_Q8_OFFSET 128
+#define ML_PACK_Q8 1
 #elif defined(ML_HAS_MATVEC_PK_NEON_DOTPROD)
 #define ml_k_matvec_q8_pk ml_k_matvec_q8_pk_neon_dotprod
 #define ml_k_matvec_q4_pk ml_k_matvec_q4_pk_neon_dotprod
@@ -293,6 +302,12 @@
 #elif !defined(ML_HAS_MATVEC_PK_AVX2) && defined(ML_HAS_MATMUL_PK_SSE41)
 #define ml_k_matmul_q8_pk ml_k_matmul_q8_pk_sse41
 #define ml_k_matmul_q4_pk ml_k_matmul_q4_pk_sse41
+#elif !defined(ML_HAS_MATVEC_PK_SSE41) && defined(ML_HAS_MATMUL_PK_SSE2)
+#define ml_k_matmul_q8_pk ml_k_matmul_q8_pk_sse2
+#define ml_k_matmul_q4_pk ml_k_matmul_q4_pk_sse2
+#elif defined(ML_HAS_MATMUL_PK_NEON_I8MM)
+#define ml_k_matmul_q8_pk ml_k_matmul_q8_pk_neon_i8mm
+#define ml_k_matmul_q4_pk ml_k_matmul_q4_pk_neon_i8mm
 #elif defined(ML_HAS_MATMUL_PK_NEON_DOTPROD)
 #define ml_k_matmul_q8_pk ml_k_matmul_q8_pk_neon_dotprod
 #define ml_k_matmul_q4_pk ml_k_matmul_q4_pk_neon_dotprod
@@ -318,6 +333,8 @@
 #define ML_ISA_NAME "sse2"
 #elif defined(ML_ISA_SVE)
 #define ML_ISA_NAME "sve"
+#elif defined(ML_ISA_NEON_I8MM)
+#define ML_ISA_NAME "neon_i8mm"
 #elif defined(ML_ISA_NEON_DOTPROD)
 #define ML_ISA_NAME "neon_dotprod"
 #elif defined(ML_ISA_NEON)

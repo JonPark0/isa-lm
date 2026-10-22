@@ -97,8 +97,8 @@ static void check_matvec(int type, int unit) {
  * bound layout, run ml_k_matvec_*_pk, compare to the scalar row-major result. */
 static void check_matvec_pk(int type, int unit) {
 #if ML_PACK_G
-    static const int rows_l[] = { 1, 3, ML_PACK_G, ML_PACK_G + 1, 3 * ML_PACK_G + 5 }, cols_l[] = { 32, 96, 256 };
-    for (int ri = 0; ri < 5; ri++) for (int ci = 0; ci < 3; ci++) for (int r0 = 0; r0 <= ML_PACK_G; r0 += ML_PACK_G) {
+    static const int rows_l[] = { 1, 3, ML_PACK_G, ML_PACK_G + 1, 3 * ML_PACK_G + 5 }, cols_l[] = { 32, 96, 256, 8288 };
+    for (int ri = 0; ri < 5; ri++) for (int ci = 0; ci < 4; ci++) for (int r0 = 0; r0 <= ML_PACK_G; r0 += ML_PACK_G) {
         const int rows = rows_l[ri], cols = cols_l[ci];
         if (r0 >= rows) continue;
         wbuf w = make_w(rows, cols, type, unit);
@@ -126,11 +126,12 @@ static void check_matvec_pk(int type, int unit) {
 }
 
 /* Batched (prefill) kernels: every token's column must equal the packed
- * matvec result bit for bit, for token counts around the kernel's tile. */
-static void check_matmul_pk(int type, int unit) {
+ * matvec result bit for bit, for token counts around the kernel's tile.
+ * 8288 columns cross the 8192-column chunk of the sse2 kernels. */
+static void check_matmul_pk_cols(int type, int unit, int cols) {
 #if ML_PACK_G
     static const int ns[] = { 1, 3, 4, 5, 9 };
-    const int rows = 3 * ML_PACK_G + 5, cols = 96, r0 = ML_PACK_G;
+    const int rows = 3 * ML_PACK_G + 5, r0 = ML_PACK_G;
     wbuf w = make_w(rows, cols, type, unit);
     ml_qtensor P = w.W;
     uint8_t *pq = xalloc(ml_pack_quant_bytes(&w.W, ML_PACK_G));
@@ -163,8 +164,13 @@ static void check_matmul_pk(int type, int unit) {
     }
     free(w.q); free(w.d); free(pq); free(pd);
 #else
-    (void)type; (void)unit;
+    (void)type; (void)unit; (void)cols;
 #endif
+}
+
+static void check_matmul_pk(int type, int unit) {
+    check_matmul_pk_cols(type, unit, 96);
+    check_matmul_pk_cols(type, unit, 8288);
 }
 
 static void test_matmul_q8_pk(void) { check_matmul_pk(ML_Q8_0, 0); }
@@ -347,7 +353,7 @@ int TT_ENTRY(int argc, char **argv) {
     SHOW(matvec_q8); SHOW(matvec_q4); SHOW(quantize_q8); SHOW(rmsnorm); SHOW(softmax);
     SHOW(rope); SHOW(silu_mul); SHOW(add); SHOW(dot_f32); SHOW(axpy_f32);
 #if ML_PACK_G
-    SHOW(matvec_q8_pk); SHOW(matvec_q4_pk);
+    SHOW(matvec_q8_pk); SHOW(matvec_q4_pk); SHOW(matmul_q8_pk); SHOW(matmul_q4_pk);
     printf("pack: %d rows, q8 offset %d\n", ML_PACK_G, ML_PACK_Q8_OFFSET);
 #else
     printf("pack: none\n");

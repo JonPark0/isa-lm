@@ -13,6 +13,8 @@
 #define ML_HAS_ADD_SSE2
 #define ML_HAS_DOT_F32_SSE2
 #define ML_HAS_AXPY_F32_SSE2
+#define ML_HAS_MATVEC_PK_SSE2   /* packed layout: 4-row groups, Q8 offset 128 */
+#define ML_HAS_MATMUL_PK_SSE2
 
 void ml_k_matvec_q8_sse2(float *y, const ml_qtensor *W, const ml_qact *x, int r0, int r1);
 void ml_k_matvec_q4_sse2(float *y, const ml_qtensor *W, const ml_qact *x, int r0, int r1);
@@ -25,5 +27,9 @@ void ml_k_silu_mul_sse2(float *g, const float *u, int n);
 void ml_k_add_sse2(float *y, const float *x, int n);
 float ml_k_dot_f32_sse2(const float *a, const float *b, int n);
 void ml_k_axpy_f32_sse2(float *y, float a, const float *x, int n);
+void ml_k_matvec_q8_pk_sse2(float *y, const ml_qtensor *W, const ml_qact *x, int r0, int r1);
+void ml_k_matvec_q4_pk_sse2(float *y, const ml_qtensor *W, const ml_qact *x, int r0, int r1);
+void ml_k_matmul_q8_pk_sse2(float *Y, int ldy, const ml_qtensor *W, const ml_qbatch *X, int r0, int r1);
+void ml_k_matmul_q4_pk_sse2(float *Y, int ldy, const ml_qtensor *W, const ml_qbatch *X, int r0, int r1);
 
 #endif
