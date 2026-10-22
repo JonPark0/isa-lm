@@ -84,8 +84,14 @@ jobs:
             --kv-heads 4 --hidden 2816 --vocab 8192 --max-seq 256
           python3 tools/gen_random.py --out build/models/bench_q8.mlb --wtype q8 --dim 1024 --layers 4 --heads 16 \
             --kv-heads 4 --hidden 2816 --vocab 8192 --max-seq 256
+          # results also go out as annotations, readable through the checks API
           for isa in scalar neon neon_dotprod; do
             make -s ISA=$isa build/$isa/ml_bench
-            build/$isa/ml_bench | sed -n '3,10p'
-            for m in q8 q4; do for p in "" --no-pack; do build/$isa/ml_bench build/models/bench_$m.mlb -n 64 $p | tail -1; done; done
+            build/$isa/ml_bench | sed -n '3,12p' | tee /dev/stderr | grep matvec \
+              | awk -v i=$isa '{printf "::notice title=bench %s::%s %s %s GOPS\n", i, $1, $2, $5}'
+            for m in q8 q4; do for p in "" --no-pack; do
+              r=$(build/$isa/ml_bench build/models/bench_$m.mlb -n 64 $p | tail -1)
+              echo "$r"
+              echo "::notice title=bench $isa $m ${p:-packed}::${r#*: }"
+            done; done
           done
