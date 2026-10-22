@@ -18,12 +18,21 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+      - name: Cache apt packages
+        uses: actions/cache@v4
+        with:
+          path: ~/apt-cache
+          key: apt-${{ runner.os }}-${{ runner.arch }}-matrix-${{ hashFiles('.github/workflows/ci.yml', '.github/scripts/apt-install.sh') }}
+          restore-keys: apt-${{ runner.os }}-${{ runner.arch }}-matrix-
       - name: Install toolchains
         timeout-minutes: 15
+        env:
+          APT_CACHE_DIR: /home/runner/apt-cache
+        # cmake is preinstalled on the runner image
         run: |
           .github/scripts/apt-install.sh \
             qemu-user gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf libc6-dev-armhf-cross libc6-dev-arm64-cross \
-            gcc-mingw-w64-x86-64 cmake ninja-build python3-numpy python3-pytest
+            gcc-mingw-w64-x86-64 python3-numpy python3-pytest
       - name: Host CPU features
         run: grep -o -w -E 'sse4_1|avx2|avx_vnni|avx512_vnni' /proc/cpuinfo | sort -u
       - name: Full test matrix (includes stories15M download and generation)
@@ -42,8 +51,16 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      - name: Cache apt packages
+        uses: actions/cache@v4
+        with:
+          path: ~/apt-cache
+          key: apt-${{ runner.os }}-${{ runner.arch }}-arm64-${{ hashFiles('.github/workflows/ci.yml', '.github/scripts/apt-install.sh') }}
+          restore-keys: apt-${{ runner.os }}-${{ runner.arch }}-arm64-
       - name: Install Python deps
         timeout-minutes: 15
+        env:
+          APT_CACHE_DIR: /home/runner/apt-cache
         run: .github/scripts/apt-install.sh python3-numpy python3-pytest
       - name: Host CPU features
         run: grep -m1 -i features /proc/cpuinfo
