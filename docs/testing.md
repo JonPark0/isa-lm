@@ -188,7 +188,10 @@ decodes with the same kernels and prefills on `smmla`, 23–24% faster than
 
 ## Wiki
 
-The GitHub wiki is generated from `README.md` and `docs/`; edit those, then:
+The GitHub wiki is generated from `README.md` and `docs/`; edit those, never
+the wiki. `.github/workflows/wiki.yml` runs `tools/sync_wiki.py` on every push
+to `main` that touches them and pushes the result with `GITHUB_TOKEN`; it can
+also be started by hand from the Actions tab. To sync without Actions:
 
 ```sh
 git clone https://github.com/JonPark0/isa-lm.wiki.git wiki
