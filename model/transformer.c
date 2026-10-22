@@ -5,7 +5,19 @@
 #include "model/transformer.h"
 #include "ops/ops.h"
 
-#define RUP(n) (((size_t)(n) + ML_ALIGN - 1) & ~(size_t)(ML_ALIGN - 1))
+/* Inverse frequency of rotary pair i, with llama3 scaling: low frequencies
+ * (wavelength above orig/low) are divided by factor, high ones (below
+ * orig/high) kept, and the band between interpolated. Matches transformers. */
+static double rope_inv_freq(const ml_config *c, int i) {
+    const double inv = pow((double)c->rope_theta, -2.0 * i / c->head_dim);
+    if (c->rope_type != ML_ROPE_LLAMA3) return inv;
+    const double f = c->rope_factor, lo = c->rope_low_freq_factor, hi = c->rope_high_freq_factor;
+    const double orig = c->rope_orig_max_seq, wavelen = 2.0 * 3.14159265358979323846 / inv;
+    if (wavelen < orig / hi) return inv;
+    if (wavelen > orig / lo) return inv / f;
+    const double smooth = (orig / wavelen - lo) / (hi - lo);
+    return (1.0 - smooth) * inv / f + smooth * inv;
+}
 
 ml_status ml_state_init(ml_state *s, ml_model *m, int nthreads) {
     memset(s, 0, sizeof *s);
@@ -52,12 +64,14 @@ ml_status ml_state_init(ml_state *s, ml_model *m, int nthreads) {
     if (!s->qa_hidden.d) { ml_arena_free(a); return ML_E_NOMEM; }
 
     const int h2 = c->head_dim / 2;
-    for (int p = 0; p < c->max_seq; p++)
-        for (int i = 0; i < h2; i++) {
-            const double ang = p * pow((double)c->rope_theta, -2.0 * i / c->head_dim);
+    for (int i = 0; i < h2; i++) {
+        const double freq = rope_inv_freq(c, i);
+        for (int p = 0; p < c->max_seq; p++) {
+            const double ang = p * freq;
             s->rope_cos[(size_t)p * h2 + i] = (float)cos(ang);
             s->rope_sin[(size_t)p * h2 + i] = (float)sin(ang);
         }
+    }
     st = ml_pool_create(&s->pool, nthreads);
     if (st != ML_OK) ml_arena_free(a);
     return st;

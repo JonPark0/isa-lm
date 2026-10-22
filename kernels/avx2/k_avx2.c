@@ -1,4 +1,5 @@
 #include <math.h>
+#include <string.h>
 #include "kernels/avx2/k_avx2.h"
 #include "kernels/x86_avx.h"
 
@@ -28,7 +29,12 @@ void ml_k_quantize_q8_avx2(ml_qact *out, const float *x, int k) {
             m = _mm256_max_ps(m, _mm256_andnot_ps(sign, v[j]));
         }
         const float amax = hmax256_ps(m);
-        const float id = amax != 0.0f ? 127.0f / amax : 0.0f;
+        if (amax < ML_QUANT_TINY) {
+            out->d[b] = 0.0f;
+            memset(out->q + b * QK, 0, QK);
+            continue;
+        }
+        const float id = 127.0f / amax;
         out->d[b] = amax / 127.0f;
         const __m256 vid = _mm256_set1_ps(id);
         __m256i i32[4];
@@ -64,6 +70,10 @@ void ml_k_softmax_avx2(float *x, int n) {
     for (; i + 8 <= n; i += 8) vm = _mm256_max_ps(vm, _mm256_loadu_ps(x + i));
     float mx = hmax256_ps(vm);
     for (; i < n; i++) mx = fmaxf(mx, x[i]);
+    if (mx == -INFINITY) {   /* every entry masked: uniform */
+        for (i = 0; i < n; i++) x[i] = 1.0f / (float)n;
+        return;
+    }
     const __m256 vmx = _mm256_set1_ps(mx);
     __m256 vs = _mm256_setzero_ps();
     for (i = 0; i + 8 <= n; i += 8) {

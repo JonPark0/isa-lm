@@ -45,12 +45,18 @@ def main():
     ap.add_argument("--vocab", type=int, default=96)
     ap.add_argument("--max-seq", type=int, default=32)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--rope-scaling", default=None, metavar="F,LO,HI,ORIG",
+                    help="llama3 RoPE scaling: factor, low/high freq factors, original context")
     ap.add_argument("--dump-emb-row", type=int, default=None,
                     help="also write <out>.emb<N>.f32: dequantized embedding row N")
     a = ap.parse_args()
     cfg = dict(dim=a.dim, n_layers=a.layers, n_heads=a.heads, n_kv_heads=a.kv_heads,
                hidden_dim=a.hidden, vocab=a.vocab, max_seq=a.max_seq,
                rope_theta=10000.0, norm_eps=1e-5)
+    if a.rope_scaling:
+        f, lo, hi, orig = a.rope_scaling.split(",")
+        cfg["rope_scaling"] = {"type": "llama3", "factor": float(f), "low_freq_factor": float(lo),
+                               "high_freq_factor": float(hi), "original_max_position_embeddings": int(orig)}
     cfg, w = generate(cfg, a.seed)
     mlb.write_mlb(a.out, cfg, w, a.wtype)
     if a.dump_emb_row is not None:

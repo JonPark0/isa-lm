@@ -46,6 +46,14 @@ done
 err=$($RUN $B/ml_run $M/rand_q4.mlb --tokens 1,2 -n 8 -t 4 2>&1 >/dev/null)
 echo "$err" | grep -q "threads: $NT," && ok || bad "expected 'threads: $NT' in: $err"
 
+# stop tokens: no tokenizer -> ids 1/2 are ordinary tokens, run all -n positions;
+# --eos ID stops as soon as ID is generated
+err=$($RUN $B/ml_run $M/rand_q8.mlb --tokens 1,2 -n 20 -T 0 2>&1 >/dev/null)
+echo "$err" | grep -q "^positions: 20," && ok || bad "no-tokenizer run should use all 20 positions: $err"
+first=$($RUN $B/ml_run $M/rand_q8.mlb --tokens 1,2 -n 3 -T 0 2>/dev/null | awk '{print $2}')
+err=$($RUN $B/ml_run $M/rand_q8.mlb --tokens 1,2 -n 20 -T 0 --eos "$first" 2>&1 >/dev/null)
+echo "$err" | grep -q "^positions: 2," && ok || bad "--eos $first should stop right after the prompt (positions 2): $err"
+
 # usage
 err=$($RUN $B/ml_run 2>&1); rc=$?
 [ $rc -eq 2 ] && echo "$err" | grep -q "usage:" && ok || bad "usage rc=$rc"
@@ -56,5 +64,12 @@ for bad_opt in "-T nan" "-T inf" "-T -1" "-p nan" "-p 1.5" "-p -0.1"; do
     $RUN $B/ml_run $M/rand_q8.mlb --tokens 1 -n 4 $bad_opt >/dev/null 2>&1
     [ $? -eq 2 ] && ok || bad "ml_run $bad_opt should exit 2"
 done
+
+for bad_arg in "-n 5x" "-n 99999999999" "-t 2junk" "-s -1" "--tokens 4294967297" "--tokens 1,,2" "--tokens 1," "-n"; do
+    $RUN $B/ml_run $M/rand_q8.mlb --tokens 1 $bad_arg >/dev/null 2>&1
+    [ $? -eq 2 ] && ok || bad "ml_run $bad_arg should exit 2"
+done
+out=$($RUN $B/ml_run --help 2>&1); rc=$?
+[ $rc -eq 0 ] && echo "$out" | grep -q "usage:" && ok || bad "--help rc=$rc"
 
 if [ $fail -eq 0 ]; then echo "e2e $ISA: $pass passed"; else echo "e2e $ISA: $pass passed, $fail failed"; exit 1; fi

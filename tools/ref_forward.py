@@ -53,9 +53,7 @@ def softmax(x):
 
 
 def rope_tables(cfg):
-    hd = cfg["dim"] // cfg["n_heads"]
-    i = np.arange(hd // 2, dtype=np.float64)
-    freq = float(cfg["rope_theta"]) ** (-2.0 * i / hd)
+    freq = mlb.rope_inv_freq(cfg)
     ang = np.arange(cfg["max_seq"], dtype=np.float64)[:, None] * freq[None, :]
     return np.cos(ang).astype(np.float32), np.sin(ang).astype(np.float32)
 

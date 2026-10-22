@@ -29,6 +29,9 @@ static ml_qtensor take_mat(cursor *c, int rows, int cols, int type) {
     }
     t.q = take(c, type == ML_Q4_0 ? n / 2 : n);
     t.d = take(c, nd);
+    /* Q8 quants must be in [-127, 127]: kernels negate weights by the
+     * activation's sign, and -128 has no int8 negation. */
+    if (c->ok && type == ML_Q8_0 && memchr(t.q, 0x80, n)) c->ok = 0;
     return t;
 }
 
@@ -55,6 +58,19 @@ static ml_status parse_header(ml_config *cfg, int *shared, const uint8_t *h) {
     cfg->kv_dim = cfg->head_dim * cfg->n_kv_heads;
     if (cfg->head_dim % 2) return ML_E_SHAPE;
     if (!(cfg->rope_theta > 0.0f) || !(cfg->norm_eps >= 0.0f)) return ML_E_FORMAT;
+    cfg->rope_type = (int)rd32(h + 52);
+    cfg->rope_factor = rdf(h + 56);
+    cfg->rope_low_freq_factor = rdf(h + 60);
+    cfg->rope_high_freq_factor = rdf(h + 64);
+    cfg->rope_orig_max_seq = (int)rd32(h + 68);
+    if (cfg->rope_type == ML_ROPE_LLAMA3) {
+        if (!(cfg->rope_factor > 0.0f && cfg->rope_factor < 1e6f) || !(cfg->rope_low_freq_factor > 0.0f) ||
+            !(cfg->rope_high_freq_factor > cfg->rope_low_freq_factor && cfg->rope_high_freq_factor < 1e6f) ||
+            cfg->rope_orig_max_seq <= 0)
+            return ML_E_FORMAT;
+    } else if (cfg->rope_type != ML_ROPE_NONE) {
+        return ML_E_FORMAT;
+    }
     return ML_OK;
 }
 

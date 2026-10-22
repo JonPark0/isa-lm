@@ -1,4 +1,5 @@
 #include <math.h>
+#include <string.h>
 #include "kernels/arm_common.h"
 #include "kernels/neon/k_neon.h"
 
@@ -32,7 +33,12 @@ void ml_k_quantize_q8_neon(ml_qact *out, const float *x, int k) {
             m = vmaxq_f32(m, vabsq_f32(v[j]));
         }
         const float amax = hmax_f32x4(m);
-        const float id = amax != 0.0f ? 127.0f / amax : 0.0f;
+        if (amax < ML_QUANT_TINY) {
+            out->d[b] = 0.0f;
+            memset(out->q + b * QK, 0, QK);
+            continue;
+        }
+        const float id = 127.0f / amax;
         out->d[b] = amax / 127.0f;
         const float32x4_t vid = vdupq_n_f32(id);
         int16x8_t h[4];
@@ -73,6 +79,10 @@ void ml_k_softmax_neon(float *x, int n) {
     for (; i + 4 <= n; i += 4) vm = vmaxq_f32(vm, vld1q_f32(x + i));
     float mx = hmax_f32x4(vm);
     for (; i < n; i++) mx = fmaxf(mx, x[i]);
+    if (mx == -INFINITY) {   /* every entry masked: uniform */
+        for (i = 0; i < n; i++) x[i] = 1.0f / (float)n;
+        return;
+    }
     const float32x4_t vmx = vdupq_n_f32(mx);
     float32x4_t vs = vdupq_n_f32(0.0f);
     for (i = 0; i + 4 <= n; i += 4) {

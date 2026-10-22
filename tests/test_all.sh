@@ -13,11 +13,18 @@ row() {   # row <name> <command...>
 skip() { rows="$rows$(printf '%-34s SKIP (%s)' "$1" "$2")\n"; printf '%-34s SKIP (%s)\n' "$1" "$2"; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
+cpu_has() { grep -qw "$1" /proc/cpuinfo; }
+flag_of() { case $1 in sse41) echo sse4_1 ;; avxvnni) echo avx_vnni ;; avx512vnni) echo avx512_vnni ;; *) echo $1 ;; esac; }
 for isa in scalar sse2 sse41 avx2 avxvnni avx512vnni; do
-    row "$isa test+e2e" "make -s ISA=$isa test e2e"
+    if [ $isa = scalar ] || cpu_has "$(flag_of $isa)"; then
+        row "$isa test+e2e" "make -s ISA=$isa test e2e"
+    else
+        row "$isa build only" "make -s ISA=$isa"
+        skip "$isa test+e2e" "host CPU lacks $(flag_of $isa)"
+    fi
 done
 row "x86 isa guard (qemu cpus)"   "make -s guard-test"
-row "avx2 THREADS=pthread e2e"    "make -s ISA=avx2 THREADS=pthread e2e"
+row "avx2 THREADS=pthread e2e"    "make -s ISA=avx2 THREADS=pthread test e2e"
 row "sse2 ASM=1 test+e2e"         "make -s ISA=sse2 ASM=1 test e2e"
 row "scalar ML_NO_MMAP test"      "make -s ISA=scalar EXTRA_CFLAGS=-DML_NO_MMAP test"
 if have cmake; then
@@ -36,6 +43,7 @@ if have aarch64-linux-gnu-gcc && have qemu-aarch64; then
     row "aarch64 neon_dotprod test+e2e (qemu)" "make -s ISA=neon_dotprod CROSS=aarch64-linux-gnu- test e2e"
     row "aarch64 sve VL128+VL512 (qemu)"       "make -s ISA=sve CROSS=aarch64-linux-gnu- test-sve"
     row "aarch64 isa guard (qemu cpus)"        "make -s guard-test-arm"
+    row "aarch64 neon THREADS=pthread (qemu)"  "make -s ISA=neon CROSS=aarch64-linux-gnu- THREADS=pthread test e2e"
 else skip "aarch64 (qemu)" "no aarch64-linux-gnu-gcc/qemu-aarch64"; fi
 
 if python3 -c "import pytest" 2>/dev/null; then
@@ -51,7 +59,7 @@ if [ ! -f $M/stories15M.mlb ]; then
         && python3 tools/convert.py llama2c $M/stories15M.bin $M/stories15M.mlb --wtype q8 >/dev/null
 fi
 if [ -f $M/stories15M.mlb ] && [ -f $M/tokenizer.bin ]; then
-    row "stories15M generate (avx2)" "build/avx2/ml_run $M/stories15M.mlb -z $M/tokenizer.bin -i 'Once upon a time' -n 64 | grep -q ."
+    row "stories15M generate (avx2)" "build/avx2/ml_run $M/stories15M.mlb -z $M/tokenizer.bin -i 'Once upon a time' -n 64 -T 0 | tee $LOG/stories15M.txt | grep -q -E '[a-z]+ [a-z]+ [a-z]+'"
 else skip "stories15M generate" "download blocked"; rm -f $M/stories15M.bin; fi
 
 echo; echo "== summary =="; printf "$rows"

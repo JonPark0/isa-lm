@@ -59,6 +59,16 @@ static void test_quantize_ties(void) {
     TT_EQ_INT(qbuf[5], -3);
 }
 
+/* amax below ~3.7e-37 makes 127/amax overflow to inf. Such blocks are
+ * numerically zero; every ISA must quantize them to d = 0, q = 0. */
+static void test_quantize_tiny_block(void) {
+    for (int i = 0; i < 32; i++) xbuf[i] = (i % 3 == 0) ? 0.0f : (i % 3 == 1 ? 1e-37f : -2e-37f);
+    ml_qact a = { qbuf, dbuf, 32 };
+    ml_k_quantize_q8(&a, xbuf, 32);
+    TT_ASSERT(dbuf[0] == 0.0f);
+    for (int i = 0; i < 32; i++) TT_EQ_INT(qbuf[i], 0);
+}
+
 static void test_q4_roundtrip(void) {
     int k = 64;
     for (int i = 0; i < k; i++) xbuf[i] = frand(-2, 2);
@@ -82,6 +92,7 @@ int TT_ENTRY(int argc, char **argv) {
     TT_RUN(test_quantize_zero_block);
     TT_RUN(test_quantize_clamp);
     TT_RUN(test_quantize_ties);
+    TT_RUN(test_quantize_tiny_block);
     TT_RUN(test_q4_roundtrip);
     TT_MAIN_END("test_quant");
 }

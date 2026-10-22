@@ -130,6 +130,25 @@ static void test_load_rejects_overflowing_dims(void) {
     TT_ASSERT(s == ML_E_FORMAT || s == ML_E_SHAPE);
 }
 
+/* Q8 weights must be in [-127, 127]: -128 breaks the x86 sign trick. */
+static void test_load_rejects_q8_minus_128(void) {
+    size_t n;
+    unsigned char *b = slurp(q8_path, &n);
+    b[256 + 77] = 0x80;   /* inside tok_emb quants */
+    spit(tmp_path, b, n);
+    free(b);
+    ml_model m;
+    TT_EQ_INT(ml_model_load(&m, tmp_path), ML_E_FORMAT);
+    remove(tmp_path);
+}
+
+static void test_load_empty_file_is_format_error(void) {
+    spit(tmp_path, (const unsigned char *)"", 0);
+    ml_model m;
+    TT_EQ_INT(ml_model_load(&m, tmp_path), ML_E_FORMAT);
+    remove(tmp_path);
+}
+
 static void test_load_rejects_tiny_vocab(void) {
     TT_EQ_INT(load_patched(0, 28, 2), ML_E_SHAPE);   /* BOS/EOS ids need vocab >= 3 */
 }
@@ -152,6 +171,11 @@ static void test_state_huge_kv(void) {
     ml_model_free(&m);
 }
 
+static void test_load_rejects_bad_rope_scaling(void) {
+    TT_EQ_INT(load_patched(0, 52, 2), ML_E_FORMAT);   /* unknown rope type */
+    TT_EQ_INT(load_patched(0, 52, 1), ML_E_FORMAT);   /* llama3 with zero factor etc. */
+}
+
 static void test_load_missing_file(void) {
     ml_model m;
     TT_EQ_INT(ml_model_load(&m, "/nonexistent/model.mlb"), ML_E_IO);
@@ -168,8 +192,11 @@ int TT_ENTRY(int argc, char **argv) {
     TT_RUN(test_load_rejects_bad_magic);
     TT_RUN(test_load_rejects_bad_shape);
     TT_RUN(test_load_missing_file);
+    TT_RUN(test_load_rejects_bad_rope_scaling);
     TT_RUN(test_load_rejects_overflowing_dims);
     TT_RUN(test_load_rejects_tiny_vocab);
+    TT_RUN(test_load_rejects_q8_minus_128);
+    TT_RUN(test_load_empty_file_is_format_error);
     TT_RUN(test_state_huge_kv);
     TT_MAIN_END("test_load");
 }

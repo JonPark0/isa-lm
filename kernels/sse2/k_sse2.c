@@ -1,4 +1,5 @@
 #include <math.h>
+#include <string.h>
 #include "kernels/scalar/k_scalar.h"
 #include "kernels/sse2/k_sse2.h"
 #include "kernels/x86_common.h"
@@ -77,7 +78,12 @@ void ml_k_quantize_q8_sse2(ml_qact *out, const float *x, int k) {
             m = _mm_max_ps(m, abs_ps(v[j]));
         }
         const float amax = hmax_ps(m);
-        const float id = amax != 0.0f ? 127.0f / amax : 0.0f;
+        if (amax < ML_QUANT_TINY) {
+            out->d[b] = 0.0f;
+            memset(out->q + b * QK, 0, QK);
+            continue;
+        }
+        const float id = 127.0f / amax;
         out->d[b] = amax / 127.0f;
         const __m128 vid = _mm_set1_ps(id);
         __m128i i32[8];
@@ -116,6 +122,10 @@ void ml_k_softmax_sse2(float *x, int n) {
     for (; i + 4 <= n; i += 4) vm = _mm_max_ps(vm, _mm_loadu_ps(x + i));
     float mx = hmax_ps(vm);
     for (; i < n; i++) mx = fmaxf(mx, x[i]);
+    if (mx == -INFINITY) {   /* every entry masked: uniform */
+        for (i = 0; i < n; i++) x[i] = 1.0f / (float)n;
+        return;
+    }
     const __m128 vmx = _mm_set1_ps(mx);
     __m128 vs = _mm_setzero_ps();
     for (i = 0; i + 4 <= n; i += 4) {

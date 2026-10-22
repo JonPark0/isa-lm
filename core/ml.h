@@ -15,6 +15,9 @@ typedef enum {
 
 #define QK 32          /* quantization block size */
 #define ML_ALIGN 64    /* alignment of every tensor array */
+/* Blocks with max |x| below this quantize to zero: 127/amax would overflow to
+ * inf (amax < ~3.7e-37), and such values carry no signal. */
+#define ML_QUANT_TINY 1e-30f
 
 enum { ML_F32 = 0, ML_Q8_0 = 1, ML_Q4_0 = 2 };
 
