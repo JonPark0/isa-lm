@@ -158,6 +158,19 @@ avx2 and 129–139 GOPS on avx512vnni.
 
 With `-t 4`, avx512vnni prefills 665 tok/s for Q8 and 906 tok/s for Q4.
 
+**Arm, single thread** (GitHub `ubuntu-24.04-arm` runner, Neoverse-class
+cores). These numbers come from the CI benchmark step, which publishes them as
+annotations. The model is dim 1024, 4 layers, hidden 2816.
+
+| ISA | Q4 4096² GOPS (row-major → packed) | Q4 decode tok/s | Q4 prefill tok/s | Q8 prefill tok/s |
+|-----|-----------------------------------:|----------------:|-----------------:|-----------------:|
+| neon (no dot product) | 15.9 → 29.8 | 133 → 231 | 181 → 325 | 220 → 285 |
+| neon_dotprod | 28.0 → 64.9 | 210 → 412 | 316 → 793 | 418 → 895 |
+
+The neon_dotprod packed kernels use `vdotq_laneq_s32`, so each step reads its 4
+activation bytes from a vector lane instead of broadcasting them. That alone
+raised Q8 prefill from 426 to 895 tok/s.
+
 ## Wiki
 
 The GitHub wiki is generated from `README.md` and `docs/`; edit those, then:

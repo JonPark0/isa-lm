@@ -109,8 +109,8 @@ repacks every weight matrix, except the embedding table, into a
 **row-interleaved** layout ([`core/pack.h`](../core/pack.h)):
 
 - **Row groups:** rows are grouped by G, the SIMD lane count: 16 for AVX-512
-  VNNI, 8 for AVX2 and AVX-VNNI, 4 for SSE4.1 and NEON dotprod. One 32-bit lane
-  owns one row.
+  VNNI, 8 for AVX2 and AVX-VNNI, 4 for SSE4.1, NEON and NEON dotprod. One 32-bit
+  lane owns one row.
 - **Step layout:** each block is stored as 4-byte steps, with G rows per step.
   One vector load plus one dot instruction against a 4-byte activation
   broadcast (`vpdpbusd`, `pmaddubsw`+`pmaddwd`, `sdot`) advances all G rows.
@@ -125,8 +125,9 @@ repacks every weight matrix, except the embedding table, into a
 
 After packing, the original mapped pages are released with
 `madvise(MADV_DONTNEED)`, so resident memory stays about the size of the model.
-`ml_run --no-pack` keeps the row-major kernels. sse2, ARMv7 NEON and plain
-AArch64 NEON builds have no packed kernels and always use row-major. SSE4.1
+`ml_run --no-pack` keeps the row-major kernels. Only the scalar and sse2 builds have no packed kernels. NEON without a dot
+product (ARMv7, Cortex-A53/A72) uses 4-row groups built on
+`vmull_s8`/`vpadalq_s16`, and sve builds use the NEON dotprod packed kernels. SSE4.1
 packs only Q4, because its 4-row Q8 groups are no faster than row-major.
 
 ## Batched prompt prefill
