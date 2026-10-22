@@ -268,8 +268,80 @@ def test_large_vocab_loads_in_c(tmp_path):
 def test_hf_rope_scaling_refused(tmp_path):
     d, _, _ = _make_hf(tmp_path)
     c = json.loads((tmp_path / "hf" / "config.json").read_text())
-    c["rope_scaling"] = {"rope_type": "llama3", "factor": 32.0}
+    c["rope_scaling"] = {"rope_type": "yarn", "factor": 32.0}
     (tmp_path / "hf" / "config.json").write_text(json.dumps(c))
     import pytest
     with pytest.raises(ValueError, match="rope_scaling"):
         convert.load_hf(d)
+
+
+LLAMA3 = {"type": "llama3", "factor": 8.0, "low_freq_factor": 1.0, "high_freq_factor": 4.0,
+          "original_max_position_embeddings": 64}
+
+
+def _hf_llama3_inv_freq(theta, hd, rs):
+    """transformers' _compute_llama3_parameters, transcribed."""
+    import math
+    inv = 1.0 / theta ** (np.arange(0, hd, 2) / hd)
+    old, lo, hi, f = rs["original_max_position_embeddings"], rs["low_freq_factor"], rs["high_freq_factor"], rs["factor"]
+    wavelen = 2 * math.pi / inv
+    out = np.where(wavelen > old / lo, inv / f, inv)
+    smooth = (old / wavelen - lo) / (hi - lo)
+    smoothed = (1 - smooth) * out / f + smooth * out
+    medium = ~(wavelen < old / hi) & ~(wavelen > old / lo)
+    return np.where(medium, smoothed, out)
+
+
+def test_rope_llama3_inv_freq_matches_hf():
+    cfg = dict(SMALL, rope_scaling=LLAMA3)
+    hd = cfg["dim"] // cfg["n_heads"]
+    got = mlb.rope_inv_freq(cfg)
+    want = _hf_llama3_inv_freq(10000.0, hd, LLAMA3)
+    np.testing.assert_allclose(got, want, rtol=1e-12)
+    # all three regimes are exercised: unchanged, smoothed, divided by factor
+    plain = 1.0 / 10000.0 ** (np.arange(0, hd, 2) / hd)
+    assert got[0] == plain[0] and np.isclose(got[-1], plain[-1] / 8.0)
+    assert np.any((got < plain) & (got > plain / 8.0))
+
+
+def test_rope_scaling_header_roundtrip(tmp_path):
+    cfg, w = gen_random.generate(dict(SMALL, rope_scaling=LLAMA3), seed=2)
+    path = str(tmp_path / "rs.mlb")
+    mlb.write_mlb(path, cfg, w, "q8")
+    rcfg, _ = mlb.read_mlb(path)
+    for k, v in LLAMA3.items():
+        assert rcfg["rope_scaling"][k] == v, k
+    path2 = str(tmp_path / "plain.mlb")
+    mlb.write_mlb(path2, *gen_random.generate(dict(SMALL), seed=2), "q8")
+    assert mlb.read_mlb(path2)[0]["rope_scaling"] is None
+
+
+def test_hf_rope_scaling_llama3_converted(tmp_path):
+    d, _, _ = _make_hf(tmp_path)
+    c = json.loads((tmp_path / "hf" / "config.json").read_text())
+    c["rope_scaling"] = {"rope_type": "llama3", "factor": 8.0, "low_freq_factor": 1.0,
+                         "high_freq_factor": 4.0, "original_max_position_embeddings": 64}
+    (tmp_path / "hf" / "config.json").write_text(json.dumps(c))
+    cfg, _ = convert.load_hf(d)
+    assert cfg["rope_scaling"] == LLAMA3
+
+
+def test_rope_scaled_model_runs_in_c(tmp_path):
+    exe = os.path.join(ROOT, "build", "scalar", "ml_run")
+    if not os.path.exists(exe):
+        import pytest
+        pytest.skip("build/scalar/ml_run not built")
+    cfg, w = gen_random.generate(dict(SMALL, rope_scaling=LLAMA3), seed=4)
+    path = str(tmp_path / "rs.mlb")
+    mlb.write_mlb(path, cfg, w, "q8")
+    toks = list(range(1, 30, 2))
+    out = str(tmp_path / "l.f32")
+    subprocess.run([exe, path, "--tokens", ",".join(map(str, toks)), "--dump-logits", out], check=True)
+    got = np.fromfile(out, np.float32).reshape(len(toks), -1)
+    rcfg, t = mlb.read_mlb(path)
+    ref = ref_forward.forward(rcfg, t, toks)
+    err = np.abs(got - ref).max(axis=1) / np.abs(ref).max(axis=1)
+    assert err.max() <= 1e-3
+    # and scaling changes the result vs. plain RoPE
+    plain = ref_forward.forward(dict(rcfg, rope_scaling=None), t, toks)
+    assert np.abs(plain[-1] - ref[-1]).max() > 1e-3 * np.abs(ref[-1]).max()

@@ -13,10 +13,28 @@ TINY = np.float32(1e-30)   # blocks with max |x| below this quantize to zero (ML
 ALIGN = 64
 HEADER_SIZE = 256
 WTYPES = {"f32": 0, "q8": 1, "q4": 2}
-_HDR = struct.Struct("<4sIIIIIIIIffII")   # magic .. shared_classifier, 52 bytes
+_HDR = struct.Struct("<4sIIIIIIIIffIIIfffI")   # magic .. rope scaling, 72 bytes
+ROPE_TYPES = {None: 0, "llama3": 1}
 LAYER_KEYS = ("attn_norm", "wq", "wk", "wv", "wo", "ffn_norm", "w1", "w2", "w3")
 
 QT = namedtuple("QT", "type q d shape")   # quantized tensor as stored
+
+
+def rope_inv_freq(cfg):
+    """float64[head_dim/2] RoPE inverse frequencies, with llama3 scaling if
+    cfg["rope_scaling"] is set (same formula as transformers and the C loader)."""
+    hd = cfg["dim"] // cfg["n_heads"]
+    inv = 1.0 / float(cfg["rope_theta"]) ** (np.arange(0, hd, 2, dtype=np.float64) / hd)
+    rs = cfg.get("rope_scaling")
+    if not rs:
+        return inv
+    f, lo, hi = float(rs["factor"]), float(rs["low_freq_factor"]), float(rs["high_freq_factor"])
+    old = float(rs["original_max_position_embeddings"])
+    wavelen = 2 * np.pi / inv
+    out = np.where(wavelen > old / lo, inv / f, inv)
+    smooth = (old / wavelen - lo) / (hi - lo)
+    medium = (wavelen >= old / hi) & (wavelen <= old / lo)
+    return np.where(medium, (1 - smooth) * out / f + smooth * out, out)
 
 
 def _round_half_away(v):
@@ -83,9 +101,12 @@ def _check_cfg(cfg):
 def write_mlb(path, cfg, w, wtype):
     """Writes the model; returns [(array name, offset, nbytes)] for every array."""
     _check_cfg(cfg)
+    rs = cfg.get("rope_scaling") or {}
     hdr = _HDR.pack(b"MLB1", 1, cfg["dim"], cfg["n_layers"], cfg["n_heads"], cfg["n_kv_heads"],
                     cfg["hidden_dim"], cfg["vocab"], cfg["max_seq"], cfg["rope_theta"],
-                    cfg["norm_eps"], WTYPES[wtype], int(cfg.get("shared_classifier", 0)))
+                    cfg["norm_eps"], WTYPES[wtype], int(cfg.get("shared_classifier", 0)),
+                    ROPE_TYPES[rs.get("type")], rs.get("factor", 0.0), rs.get("low_freq_factor", 0.0),
+                    rs.get("high_freq_factor", 0.0), rs.get("original_max_position_embeddings", 0))
     layout = []
     with open(path, "wb") as f:
         f.write(hdr.ljust(HEADER_SIZE, b"\0"))
@@ -115,7 +136,11 @@ def read_mlb(path):
         raise ValueError("bad magic")
     keys = ("version", "dim", "n_layers", "n_heads", "n_kv_heads", "hidden_dim", "vocab",
             "max_seq", "rope_theta", "norm_eps", "wtype", "shared_classifier")
-    cfg = dict(zip(keys, f[1:]))
+    cfg = dict(zip(keys, f[1:13]))
+    rtype, rf, rlo, rhi, rorig = f[13:]
+    cfg["rope_scaling"] = None if rtype == 0 else {
+        "type": {v: k for k, v in ROPE_TYPES.items()}[rtype], "factor": rf, "low_freq_factor": rlo,
+        "high_freq_factor": rhi, "original_max_position_embeddings": rorig}
     cfg["rope_theta"], cfg["norm_eps"] = np.float32(cfg["rope_theta"]), np.float32(cfg["norm_eps"])
     dim, hid, voc = cfg["dim"], cfg["hidden_dim"], cfg["vocab"]
     kv = dim // cfg["n_heads"] * cfg["n_kv_heads"]

@@ -88,9 +88,17 @@ def load_hf(d, max_seq=None):
     """-> (cfg, float32 weights) from a HF Llama directory."""
     with open(os.path.join(d, "config.json")) as fh:
         c = json.load(fh)
-    if c.get("rope_scaling"):
-        raise ValueError(f"rope_scaling {c['rope_scaling']} is not supported: the runtime implements "
-                         "plain RoPE only, so the converted model would compute wrong outputs")
+    rope_scaling = None
+    rs = c.get("rope_scaling")
+    if rs:
+        kind = rs.get("rope_type", rs.get("type"))
+        if kind != "llama3":
+            raise ValueError(f"rope_scaling {rs} is not supported (only llama3): "
+                             "the converted model would compute wrong outputs")
+        rope_scaling = {"type": "llama3", "factor": float(rs["factor"]),
+                        "low_freq_factor": float(rs["low_freq_factor"]),
+                        "high_freq_factor": float(rs["high_freq_factor"]),
+                        "original_max_position_embeddings": int(rs["original_max_position_embeddings"])}
     t = {}
     files = sorted(glob.glob(os.path.join(d, "*.safetensors")))
     if not files:
@@ -104,7 +112,7 @@ def load_hf(d, max_seq=None):
                hidden_dim=c["intermediate_size"], vocab=c["vocab_size"],
                max_seq=min(c["max_position_embeddings"], max_seq or c["max_position_embeddings"]),
                rope_theta=float(c.get("rope_theta", 10000.0)), norm_eps=float(c.get("rms_norm_eps", 1e-5)),
-               shared_classifier=int(tied))
+               shared_classifier=int(tied), rope_scaling=rope_scaling)
     w = {"tok_emb": t["model.embed_tokens.weight"], "final_norm": t["model.norm.weight"], "layers": []}
     for i in range(cfg["n_layers"]):
         p = f"model.layers.{i}."
