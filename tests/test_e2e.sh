@@ -18,6 +18,11 @@ for wt in q8 q4; do
         && ok || bad "ref $wt"
 done
 
+# builds with packed kernels must actually pack (Q4 is packed by every one)
+G=$($RUN $B/ml_run --help 2>&1 | sed -n 's/^pack group: \([0-9]*\).*/\1/p')
+err=$($RUN $B/ml_run $M/rand_q4.mlb --tokens 1,2 -n 4 2>&1 >/dev/null)
+[ -n "$G" ] && echo "$err" | grep -q "packed: $G\$" && ok || bad "expected 'packed: $G' (help says pack group '$G'): $err"
+
 # --no-pack keeps the row-major kernels: must match the reference too
 for wt in q8 q4; do
     $RUN $B/ml_run $M/rand_$wt.mlb --tokens $TOKENS --dump-logits $T/$wt.np.f32 --no-pack \

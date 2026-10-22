@@ -86,7 +86,10 @@ int ml_main(int argc, char **argv) {
     unsigned long long seed = 1;
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
-        if (!strcmp(a, "-h") || !strcmp(a, "--help")) { printf("%sbuild ISA: %s\n", USAGE, ML_ISA_NAME); return 0; }
+        if (!strcmp(a, "-h") || !strcmp(a, "--help")) {
+            printf("%sbuild ISA: %s\npack group: %d rows\n", USAGE, ML_ISA_NAME, ml_pack_group());
+            return 0;
+        }
         if (!strcmp(a, "--profile")) { profile = 1; continue; }
         if (!strcmp(a, "--no-pack")) { no_pack = 1; continue; }
         if (a[0] != '-') { if (model_path) return usage("more than one model given"); model_path = a; continue; }

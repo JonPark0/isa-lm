@@ -28,6 +28,7 @@ ml_status ml_model_pack(ml_model *m, ml_pool *pool) {
     if (m->pack_mem) return ML_OK;
     pack_job job = { malloc(sizeof(ml_qtensor *) * ((size_t)m->cfg.n_layers * 7 + 1)), 0 };
     if (!job.mats) return ML_E_NOMEM;
+    if (m->cfg.wtype == ML_Q8_0 && !ML_PACK_Q8) { free(job.mats); return ML_OK; }
     for (int l = 0; l < m->cfg.n_layers; l++) {
         ml_layer *L = &m->layers[l];
         ml_qtensor *ws[7] = { &L->wq, &L->wk, &L->wv, &L->wo, &L->w1, &L->w2, &L->w3 };

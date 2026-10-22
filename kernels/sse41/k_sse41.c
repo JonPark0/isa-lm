@@ -1,6 +1,7 @@
 #include <smmintrin.h>
 #include "kernels/sse41/k_sse41.h"
 #include "kernels/x86_common.h"
+#include "kernels/x86_pack.h"
 
 /* sum(w * x) for 16 int8 pairs as 4 x int32: |x| (u8) times w carrying x's
  * sign (s8) through pmaddubsw. Quants are within [-127, 127], so the pairwise
@@ -56,4 +57,56 @@ void ml_k_matvec_q8_sse41(float *y, const ml_qtensor *W, const ml_qact *x, int r
 
 void ml_k_matvec_q4_sse41(float *y, const ml_qtensor *W, const ml_qact *x, int r0, int r1) {
     MATVEC_BODY(LOAD_Q4)
+}
+
+/* Packed kernels: 4 rows per group, same scheme as the AVX2 ones at 128 bits. */
+#define PK 4
+
+void ml_k_matvec_q8_pk_sse41(float *y, const ml_qtensor *W, const ml_qact *x, int r0, int r1) {
+    const int nb = W->cols / QK;
+    const __m128i ones = _mm_set1_epi16(1);
+    for (int row = r0; row < r1; row += PK) {
+        const uint8_t *p = W->pq + (size_t)(row / PK) * nb * (8 * PK * 4);
+        const float *d = W->pd + (size_t)(row / PK) * nb * PK;
+        __m128 acc = _mm_setzero_ps();
+        for (int b = 0; b < nb; b++, p += 8 * PK * 4) {
+            const int32_t *xb = (const int32_t *)(x->q + b * QK);
+            __m128i s = _mm_setzero_si128();
+            for (int k = 0; k < 8; k++) {
+                const __m128i xv = _mm_set1_epi32(xb[k]);
+                const __m128i w = _mm_loadu_si128((const __m128i *)(p + k * PK * 4));
+                s = _mm_add_epi32(s, _mm_madd_epi16(_mm_maddubs_epi16(_mm_sign_epi8(xv, xv), _mm_sign_epi8(w, xv)), ones));
+            }
+            acc = _mm_add_ps(acc, _mm_mul_ps(_mm_cvtepi32_ps(s), _mm_mul_ps(_mm_loadu_ps(d + b * PK), _mm_set1_ps(x->d[b]))));
+        }
+        float t[PK];
+        _mm_storeu_ps(t, acc);
+        pk_store(y, t, row, PK, r1);
+    }
+}
+
+void ml_k_matvec_q4_pk_sse41(float *y, const ml_qtensor *W, const ml_qact *x, int r0, int r1) {
+    const int nb = W->cols / QK;
+    int xsum[PK_MAX_BLOCKS];
+    pk_block_sums(xsum, x, nb, 8);
+    const __m128i m4 = _mm_set1_epi8(0x0F), ones = _mm_set1_epi16(1);
+    for (int row = r0; row < r1; row += PK) {
+        const uint8_t *p = W->pq + (size_t)(row / PK) * nb * (4 * PK * 4);
+        const float *d = W->pd + (size_t)(row / PK) * nb * PK;
+        __m128 acc = _mm_setzero_ps();
+        for (int b = 0; b < nb; b++, p += 4 * PK * 4) {
+            const int32_t *xb = (const int32_t *)(x->q + b * QK);
+            __m128i s16 = _mm_setzero_si128();
+            for (int v = 0; v < 4; v++) {
+                const __m128i w = _mm_loadu_si128((const __m128i *)(p + v * PK * 4));
+                s16 = _mm_add_epi16(s16, _mm_maddubs_epi16(_mm_and_si128(w, m4), _mm_set1_epi32(xb[v])));
+                s16 = _mm_add_epi16(s16, _mm_maddubs_epi16(_mm_and_si128(_mm_srli_epi16(w, 4), m4), _mm_set1_epi32(xb[v + 4])));
+            }
+            const __m128i s = _mm_sub_epi32(_mm_madd_epi16(s16, ones), _mm_set1_epi32(xsum[b]));
+            acc = _mm_add_ps(acc, _mm_mul_ps(_mm_cvtepi32_ps(s), _mm_mul_ps(_mm_loadu_ps(d + b * PK), _mm_set1_ps(x->d[b]))));
+        }
+        float t[PK];
+        _mm_storeu_ps(t, acc);
+        pk_store(y, t, row, PK, r1);
+    }
 }

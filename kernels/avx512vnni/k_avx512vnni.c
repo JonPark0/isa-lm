@@ -2,6 +2,7 @@
 #include <string.h>
 #include "kernels/avx512vnni/k_avx512vnni.h"
 #include "kernels/x86_avx.h"
+#include "kernels/x86_pack.h"
 
 static inline __m256i dot32_avx2(__m256i w, __m256i x) {
     const __m256i p = _mm256_maddubs_epi16(_mm256_sign_epi8(x, x), _mm256_sign_epi8(w, x));
@@ -57,11 +58,9 @@ void ml_k_matvec_q8_avx512vnni(float *y, const ml_qtensor *W, const ml_qact *x, 
  * halves and taking low nibbles in the first half and high nibbles in the
  * second gives 128-bit lanes [b0 e0-15 | b1 e0-15 | b0 e16-31 | b1 e16-31];
  * the activations are permuted to that lane order once per block pair. */
-#define Q4_MAX_BLOCKS 2048   /* cols <= 65536, enforced by the loader */
-
 void ml_k_matvec_q4_avx512vnni(float *y, const ml_qtensor *W, const ml_qact *x, int r0, int r1) {
     const int nb = W->cols / QK;
-    float xs[Q4_MAX_BLOCKS];
+    float xs[PK_MAX_BLOCKS];
     for (int b = 0; b < nb; b++) {
         int sum = 0;
         for (int j = 0; j < QK; j++) sum += x->q[b * QK + j];
@@ -121,14 +120,6 @@ void ml_k_matvec_q4_avx512vnni(float *y, const ml_qtensor *W, const ml_qact *x, 
  * offset * sum(x) is subtracted per block in int32, exactly. */
 #define PK 16
 
-static void block_sums(int *xsum, const ml_qact *x, int nb, int offset) {
-    for (int b = 0; b < nb; b++) {
-        int s = 0;
-        for (int j = 0; j < QK; j++) s += x->q[b * QK + j];
-        xsum[b] = offset * s;
-    }
-}
-
 static inline void store_group(float *y, __m512 acc, int row, int r1) {
     if (row + PK <= r1) { _mm512_storeu_ps(y + row, acc); return; }
     _mm512_mask_storeu_ps(y + row, (__mmask16)((1u << (r1 - row)) - 1), acc);
@@ -136,8 +127,8 @@ static inline void store_group(float *y, __m512 acc, int row, int r1) {
 
 void ml_k_matvec_q8_pk_avx512vnni(float *y, const ml_qtensor *W, const ml_qact *x, int r0, int r1) {
     const int nb = W->cols / QK;
-    int xsum[Q4_MAX_BLOCKS];
-    block_sums(xsum, x, nb, 128);
+    int xsum[PK_MAX_BLOCKS];
+    pk_block_sums(xsum, x, nb, 128);
     for (int row = r0; row < r1; row += PK) {
         const int g = row / PK;
         const uint8_t *p = W->pq + (size_t)g * nb * (8 * PK * 4);
@@ -157,8 +148,8 @@ void ml_k_matvec_q8_pk_avx512vnni(float *y, const ml_qtensor *W, const ml_qact *
 
 void ml_k_matvec_q4_pk_avx512vnni(float *y, const ml_qtensor *W, const ml_qact *x, int r0, int r1) {
     const int nb = W->cols / QK;
-    int xsum[Q4_MAX_BLOCKS];
-    block_sums(xsum, x, nb, 8);
+    int xsum[PK_MAX_BLOCKS];
+    pk_block_sums(xsum, x, nb, 8);
     const __m512i m4 = _mm512_set1_epi8(0x0F);
     for (int row = r0; row < r1; row += PK) {
         const int g = row / PK;
