@@ -100,16 +100,71 @@ Every matvec runs on integers:
 The RoPE cos/sin tables `[max_seq][head_dim/2]` are computed once at load, in
 double precision, with llama3 scaling folded in.
 
+## Weight packing
+
+The row-major matvec kernels spend most of their instructions on per-row
+bookkeeping: every 32-weight block costs one integer dot product but several
+float operations to apply its scale. At load, `ml_model_pack` therefore
+repacks every weight matrix, except the embedding table, into a
+**row-interleaved** layout ([`core/pack.h`](../core/pack.h)):
+
+- **Row groups:** rows are grouped by G, the SIMD lane count: 16 for AVX-512
+  VNNI, 8 for AVX2 and AVX-VNNI, 4 for SSE4.1 and NEON dotprod. One 32-bit lane
+  owns one row.
+- **Step layout:** each block is stored as 4-byte steps, with G rows per step.
+  One vector load plus one dot instruction against a 4-byte activation
+  broadcast (`vpdpbusd`, `pmaddubsw`+`pmaddwd`, `sdot`) advances all G rows.
+- **Scales:** the block's scales are stored contiguously for the group, so
+  scaling is one vector multiply-add for G rows.
+- **Signedness:** `vpdpbusd` and `pmaddubsw` need an unsigned operand. Q4
+  nibbles are used raw (0..15); on VNNI, Q8 weights are stored +128. The
+  matching `offset × Σx` is subtracted per block in int32, so the result is
+  exact. AVX2 and SSE4.1 keep Q8 signed and use `psignb`. On those two, a Q4
+  block's 8 `pmaddubsw` results are summed in int16 (at most 30480) before a
+  single `pmaddwd`.
+
+After packing, the original mapped pages are released with
+`madvise(MADV_DONTNEED)`, so resident memory stays about the size of the model.
+`ml_run --no-pack` keeps the row-major kernels. sse2, ARMv7 NEON and plain
+AArch64 NEON builds have no packed kernels and always use row-major. SSE4.1
+packs only Q4, because its 4-row Q8 groups are no faster than row-major.
+
+## Batched prompt prefill
+
+Decoding one token reads every weight once, so on large models it is bound by
+memory bandwidth. `ml_prefill` instead processes up to 32 prompt tokens per
+step, and each matrix product becomes a matmul (`ml_k_matmul_*_pk`). Each
+packed weight vector is loaded once and feeds a tile of 4 tokens, which makes
+the kernel compute-bound.
+
+- **Same arithmetic as decoding:** every per-token operation (norms,
+  quantization, RoPE, attention, SiLU) is the one `ml_forward` performs, in the
+  same order, and the matmul's per-token arithmetic is the matvec's. Batched and
+  token-by-token runs produce bit-identical logits; the tests enforce this.
+- **No classifier for prompt tokens:** prompt tokens other than the last skip
+  the vocabulary-sized classifier.
+- **Fallback:** builds without packed kernels, or with `--no-pack`, still batch
+  the prefill but use the matvec per token.
+
 ## Memory
 
 - **Weights:** memory-mapped read-only (`mmap` on POSIX, `CreateFileMapping` on
   Windows, or `fread` with `-DML_NO_MMAP`).
 - **Runtime buffers:** carved from **one** 64-byte-aligned arena, sized from the
-  header. These are the activations, the Q8 activation buffers, the KV cache
-  `[layer][max_seq][kv_dim]` in F32, the RoPE tables and the logits.
+  header. These are the activations (one token, plus 32-token prefill
+  batches), the Q8 activation buffers, the KV cache `[layer][max_seq][kv_dim]`
+  in F32, the RoPE tables and the logits.
+- **Packed weights:** one allocation the size of the matrices. The originals'
+  pages are released after packing.
 - **Size checks:** every size product is overflow-checked, so on a 32-bit target
   a too-large model fails with `ML_E_NOMEM`.
 - **After load:** no allocation happens during generation.
+
+## Profiling
+
+`ml_run --profile` times each stage of the forward pass (qkv, attention, wo,
+ffn, classifier, other) and prints the split. On every model measured, the
+matrix products take more than 95% of the time.
 
 ## Threads
 
@@ -121,8 +176,8 @@ double precision, with llama3 scaling folded in.
 - **Waiting:** a worker spins about 20 000 pause iterations, then sleeps on a
   condition variable. A sequentially consistent `sleepers` counter makes sure
   `ml_pool_run` never misses a sleeping worker.
-- **Work split:** matvec splits rows into chunks that are multiples of 4;
-  attention splits by head.
+- **Work split:** matvec and matmul split rows into chunks that are multiples
+  of 4, or of the pack group G; attention splits by head.
 - **Serial cut-off:** ops below 2^18 multiply-adds run on the caller alone,
   because waking threads would cost more than the work.
 - **Determinism:** each output element is computed by exactly one thread in a

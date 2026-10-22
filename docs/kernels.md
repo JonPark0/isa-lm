@@ -63,6 +63,39 @@ scale `d_w · d_x`, and reduce horizontally only once per row. With that
 deferred reduction, precision is bounded by the magnitude of the products, and
 `test_kernels` measures error against exactly that scale.
 
+## Packed kernels
+
+ISAs with packed kernels implement four more functions over the layout in
+[`core/pack.h`](../core/pack.h):
+
+```c
+void ml_k_matvec_q8_pk_<isa>(float *y, const ml_qtensor *W, const ml_qact *x, int r0, int r1);
+void ml_k_matvec_q4_pk_<isa>(float *y, const ml_qtensor *W, const ml_qact *x, int r0, int r1);
+void ml_k_matmul_q8_pk_<isa>(float *Y, int ldy, const ml_qtensor *W, const ml_qbatch *X, int r0, int r1);
+void ml_k_matmul_q4_pk_<isa>(float *Y, int ldy, const ml_qtensor *W, const ml_qbatch *X, int r0, int r1);
+```
+
+`W->pq` and `W->pd` hold the packed quants and scales. `r0` is a multiple of
+the group size, and rows at or above `r1` must not be written.
+
+To register them, define the following in the ISA header, then add a branch
+for the ISA to both packed `#if` chains in `config/ml_config.h`:
+
+- `ML_HAS_MATVEC_PK_<ISA>` and, if the matmul exists, `ML_HAS_MATMUL_PK_<ISA>`;
+- the group size `ML_PACK_G`, the Q8 offset `ML_PACK_Q8_OFFSET` (128 if the dot
+  instruction needs unsigned weights), and `ML_PACK_Q8`, set to 0 to leave Q8
+  row-major.
+
+An ISA with a packed matvec but no matmul falls back to `ml_k_matmul_*_pk_loop`.
+
+The tests hold packed kernels to these rules:
+
+- **Matvec:** must match the scalar row-major kernel. It is bit-exact with unit
+  scales, and within 1e-5 of the product magnitude otherwise.
+- **Matmul:** each token's column must equal that ISA's packed matvec **bit for
+  bit**. Keep the float operations in the same order: the same multiply, then
+  the same add or FMA.
+
 ## Replacing a kernel with assembly
 
 1. List the kernel's name in `kernels/<isa>/asm.mk`: `ASM_<isa> := add`.
