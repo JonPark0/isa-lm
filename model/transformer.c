@@ -11,12 +11,26 @@ ml_status ml_state_init(ml_state *s, ml_model *m, int nthreads) {
     memset(s, 0, sizeof *s);
     s->m = m;
     const ml_config *c = &m->cfg;
-    const size_t f = sizeof(float), kv = (size_t)c->n_layers * c->max_seq * c->kv_dim;
-    const size_t half = (size_t)c->max_seq * (c->head_dim / 2);
-    const size_t need = 3 * RUP(f * c->dim) + 2 * RUP(f * c->hidden_dim) + RUP(f * c->dim)
-                      + RUP(f * c->n_heads * c->max_seq) + RUP(f * c->vocab) + 2 * RUP(f * kv)
-                      + 2 * RUP(f * half) + RUP(c->dim) + RUP(f * c->dim / QK)
-                      + RUP(c->hidden_dim) + RUP(f * c->hidden_dim / QK);
+    const size_t f = sizeof(float);
+    size_t lkv, kv, half, need = 0;
+    /* Sizes are products of header fields: check them, a 32-bit size_t wraps. */
+    if (!ml_mul_size((size_t)c->n_layers, (size_t)c->kv_dim, &lkv) ||
+        !ml_mul_size(lkv, (size_t)c->max_seq, &kv) || kv > (size_t)-1 / f ||
+        !ml_mul_size((size_t)c->max_seq, (size_t)(c->head_dim / 2), &half) || half > (size_t)-1 / f)
+        return ML_E_NOMEM;
+    /* {count, bytes}: every runtime buffer; each entry is at most 4 arrays,
+     * each padded to ML_ALIGN by the arena. */
+    const size_t parts[][2] = {
+        { 4, f * c->dim }, { 2, f * c->hidden_dim }, { 1, f * c->vocab },
+        { (size_t)c->n_heads, f * c->max_seq }, { 2, f * kv }, { 2, f * half },
+        { 1, (size_t)c->dim }, { 1, f * c->dim / QK }, { 1, (size_t)c->hidden_dim }, { 1, f * c->hidden_dim / QK },
+    };
+    for (size_t i = 0; i < sizeof parts / sizeof parts[0]; i++) {
+        size_t bytes;
+        if (!ml_mul_size(parts[i][0], parts[i][1], &bytes) || bytes > (size_t)-1 - need - 4 * ML_ALIGN)
+            return ML_E_NOMEM;
+        need += bytes + 4 * ML_ALIGN;
+    }
     ml_status st = ml_arena_init(&s->arena, need);
     if (st != ML_OK) return st;
     ml_arena *a = &s->arena;

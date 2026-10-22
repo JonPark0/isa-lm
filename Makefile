@@ -74,7 +74,12 @@ build/models/rand_%.mlb: tools/gen_random.py tools/mlb.py
 	@mkdir -p $(dir $@)
 	@$(PYTHON) tools/gen_random.py --out $@ --wtype $* --dump-emb-row 5
 
-TESTARGS_test_load := $(MODELS)
+# 512 layers x 65536 positions x 32 kv floats: KV cache > 4 GB (32-bit overflow case).
+build/models/wrap32.mlb: tools/gen_random.py tools/mlb.py
+	@mkdir -p $(dir $@)
+	@$(PYTHON) tools/gen_random.py --out $@ --dim 32 --layers 512 --heads 1 --kv-heads 1 --hidden 32 --max-seq 65536
+
+TESTARGS_test_load := $(MODELS) build/models/wrap32.mlb
 TOKENIZER := build/models/tok96.bin
 $(TOKENIZER): tools/gen_tokenizer.py
 	@mkdir -p $(dir $@)
@@ -90,7 +95,7 @@ scalar-ref:
 e2e: $(BUILD)/ml_run $(MODELS) $(TOKENIZER) scalar-ref
 	@sh tests/test_e2e.sh $(ISA) $(BUILD) "$(RUN)"
 
-test: $(addprefix $(BUILD)/,$(TESTS)) $(MODELS)
+test: $(addprefix $(BUILD)/,$(TESTS)) $(MODELS) build/models/wrap32.mlb
 	@set -e; $(foreach t,$(TESTS),$(RUN) $(BUILD)/$(t) $(TESTARGS_$(t));)
 
 clean:

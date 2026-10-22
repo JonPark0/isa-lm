@@ -1,12 +1,14 @@
 /* Loader tests. argv[1] = random Q8 model, argv[2] = random Q4 model, each with
  * a sidecar <model>.emb5.f32 holding dequantized embedding row 5. */
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 #include "core/quant_ref.h"
 #include "model/mlb.h"
+#include "model/transformer.h"
 #include "tests/tt.h"
 
-static const char *q8_path, *q4_path;
+static const char *q8_path, *q4_path, *wrap_path;
 static char tmp_path[1024];
 
 static unsigned char *slurp(const char *path, size_t *n) {
@@ -110,6 +112,46 @@ static void test_load_rejects_bad_shape(void) {
     TT_EQ_INT(load_patched(0, 28, 0x40000000u), ML_E_SHAPE);   /* absurd vocab */
 }
 
+/* Header claims 65536^2 matrices: sizes overflow 32-bit size_t. Must be
+ * rejected (the file is far too short), never accepted with wrapped sizes. */
+static void test_load_rejects_overflowing_dims(void) {
+    size_t n;
+    unsigned char *b = slurp(q8_path, &n);
+    const uint32_t big = 65536;
+    memcpy(b + 8, &big, 4);    /* dim */
+    memcpy(b + 24, &big, 4);   /* hidden_dim */
+    memcpy(b + 28, &big, 4);   /* vocab */
+    spit(tmp_path, b, n);
+    free(b);
+    ml_model m;
+    ml_status s = ml_model_load(&m, tmp_path);
+    if (s == ML_OK) ml_model_free(&m);
+    remove(tmp_path);
+    TT_ASSERT(s == ML_E_FORMAT || s == ML_E_SHAPE);
+}
+
+static void test_load_rejects_tiny_vocab(void) {
+    TT_EQ_INT(load_patched(0, 28, 2), ML_E_SHAPE);   /* BOS/EOS ids need vocab >= 3 */
+}
+
+/* KV cache of n_layers * max_seq * kv_dim floats exceeds 4 GB: state init must
+ * fail cleanly on 32-bit, or give a working state on 64-bit. */
+static void test_state_huge_kv(void) {
+    if (!wrap_path) return;
+    ml_model m;
+    TT_EQ_INT(ml_model_load(&m, wrap_path), ML_OK);
+    ml_state s;
+    ml_status st = ml_state_init(&s, &m, 1);
+    TT_ASSERT(st == ML_OK || st == ML_E_NOMEM);
+    if (st == ML_OK) {
+        const float *l0 = ml_forward(&s, 1, 0);
+        const float *l1 = ml_forward(&s, 2, m.cfg.max_seq - 1);
+        TT_ASSERT(l0 && l1 && isfinite(l1[0]));
+        ml_state_free(&s);
+    }
+    ml_model_free(&m);
+}
+
 static void test_load_missing_file(void) {
     ml_model m;
     TT_EQ_INT(ml_model_load(&m, "/nonexistent/model.mlb"), ML_E_IO);
@@ -119,11 +161,15 @@ int TT_ENTRY(int argc, char **argv) {
     if (argc < 3) { fprintf(stderr, "usage: test_load Q8.mlb Q4.mlb\n"); return 2; }
     q8_path = argv[1];
     q4_path = argv[2];
+    wrap_path = argc > 3 ? argv[3] : NULL;
     snprintf(tmp_path, sizeof tmp_path, "%s.tmp", q8_path);
     TT_RUN(test_load_ok);
     TT_RUN(test_load_rejects_truncated);
     TT_RUN(test_load_rejects_bad_magic);
     TT_RUN(test_load_rejects_bad_shape);
     TT_RUN(test_load_missing_file);
+    TT_RUN(test_load_rejects_overflowing_dims);
+    TT_RUN(test_load_rejects_tiny_vocab);
+    TT_RUN(test_state_huge_kv);
     TT_MAIN_END("test_load");
 }

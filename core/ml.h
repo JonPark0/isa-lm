@@ -36,6 +36,13 @@ typedef struct {
 
 const char *ml_status_str(ml_status s);
 
+/* *r = a * b; returns 0 if that overflows size_t (32-bit targets!). */
+static inline int ml_mul_size(size_t a, size_t b, size_t *r) {
+    if (b && a > (size_t)-1 / b) return 0;
+    *r = a * b;
+    return 1;
+}
+
 /* 64 B-aligned allocation (C11 aligned_alloc is missing on MSVC/MinGW). */
 void *ml_aligned_alloc(size_t n);
 void ml_aligned_free(void *p);

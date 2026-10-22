@@ -2,7 +2,8 @@
 #include <string.h>
 #include "model/mlb.h"
 
-#define MAX_DIM (1 << 16)   /* bound on every header dimension: keeps sizes far from overflow */
+#define MAX_DIM (1 << 16)    /* dim, hidden_dim, n_layers, heads (SVE kernels size per-row scratch by it) */
+#define MAX_TOKENS (1 << 24) /* vocab, max_seq */
 
 typedef struct {
     const uint8_t *base;
@@ -21,9 +22,13 @@ static const void *take(cursor *c, size_t nbytes) {
 
 static ml_qtensor take_mat(cursor *c, int rows, int cols, int type) {
     ml_qtensor t = { NULL, NULL, rows, cols, (uint8_t)type };
-    size_t n = (size_t)rows * cols;
+    size_t n, nd;
+    if (!ml_mul_size((size_t)rows, (size_t)cols, &n) || !ml_mul_size(n / QK, sizeof(float), &nd)) {
+        c->ok = 0;   /* cannot fit in this address space, let alone this file */
+        return t;
+    }
     t.q = take(c, type == ML_Q4_0 ? n / 2 : n);
-    t.d = take(c, n / QK * sizeof(float));
+    t.d = take(c, nd);
     return t;
 }
 
@@ -34,7 +39,8 @@ static ml_status parse_header(ml_config *cfg, int *shared, const uint8_t *h) {
     if (memcmp(h, "MLB1", 4) != 0 || rd32(h + 4) != 1) return ML_E_FORMAT;
     uint32_t v[7];
     for (int i = 0; i < 7; i++) v[i] = rd32(h + 8 + 4 * i);
-    for (int i = 0; i < 7; i++) if (v[i] == 0 || v[i] > MAX_DIM) return ML_E_SHAPE;
+    for (int i = 0; i < 7; i++) if (v[i] == 0 || v[i] > (i == 5 || i == 6 ? MAX_TOKENS : MAX_DIM)) return ML_E_SHAPE;
+    if (v[5] < 3) return ML_E_SHAPE;   /* ids 1 and 2 are BOS / EOS */
     cfg->dim = (int)v[0]; cfg->n_layers = (int)v[1]; cfg->n_heads = (int)v[2];
     cfg->n_kv_heads = (int)v[3]; cfg->hidden_dim = (int)v[4]; cfg->vocab = (int)v[5];
     cfg->max_seq = (int)v[6];

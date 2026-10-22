@@ -1,6 +1,9 @@
 #include "core/arena.h"
 
 ml_status ml_arena_init(ml_arena *a, size_t cap) {
+    a->base = NULL;
+    a->cap = a->off = 0;
+    if (cap > (size_t)-1 - ML_ALIGN) return ML_E_NOMEM;
     cap = (cap + ML_ALIGN - 1) & ~(size_t)(ML_ALIGN - 1);
     a->base = ml_aligned_alloc(cap);
     a->cap = cap;

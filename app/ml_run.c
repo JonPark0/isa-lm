@@ -80,7 +80,9 @@ int ml_main(int argc, char **argv) {
     if (prompt && !tok_path) return usage("-i needs -z tokenizer");
     if (prompt && tokens_arg) return usage("give -i or --tokens, not both");
     if (dump && !tokens_arg) return usage("--dump-logits needs --tokens");
-    if (steps < 1 || nthreads < 1 || temp < 0.0f) return usage("bad numeric option");
+    if (steps < 1 || nthreads < 1) return usage("bad numeric option");
+    if (!(temp >= 0.0f && temp <= 1e30f)) return usage("-T must be a finite number >= 0");
+    if (!(topp >= 0.0f && topp <= 1.0f)) return usage("-p must be in [0, 1]");
 
     ml_model m;
     ml_status st = ml_model_load(&m, model_path);
@@ -118,6 +120,7 @@ int ml_main(int argc, char **argv) {
         FILE *f = fopen(dump, "wb");
         if (!f) { fprintf(stderr, "error: cannot write %s\n", dump); rc = 1; goto out_state; }
         for (int p = 0; p < np; p++) fwrite(ml_forward(&s, ptoks[p], p), sizeof(float), (size_t)c->vocab, f);
+        /* ptoks were range-checked against vocab and max_seq above */
         fclose(f);
         goto out_state;
     }
@@ -129,6 +132,7 @@ int ml_main(int argc, char **argv) {
     int token = ptoks[0], pos = 0;
     while (pos < steps) {
         float *logits = ml_forward(&s, token, pos);
+        if (!logits) { fprintf(stderr, "error: token %d at position %d out of range\n", token, pos); rc = 1; break; }
         const int next = pos + 1 < np ? ptoks[pos + 1] : ml_sample(&smp, logits, c->vocab);
         pos++;
         if (pos >= np && (next == ML_TOK_BOS || next == ML_TOK_EOS)) break;

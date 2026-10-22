@@ -52,4 +52,9 @@ err=$($RUN $B/ml_run 2>&1); rc=$?
 $RUN $B/ml_run $M/rand_q8.mlb --tokens 1,500 -n 4 >/dev/null 2>&1
 [ $? -eq 2 ] && ok || bad "out-of-range token id should exit 2"
 
+for bad_opt in "-T nan" "-T inf" "-T -1" "-p nan" "-p 1.5" "-p -0.1"; do
+    $RUN $B/ml_run $M/rand_q8.mlb --tokens 1 -n 4 $bad_opt >/dev/null 2>&1
+    [ $? -eq 2 ] && ok || bad "ml_run $bad_opt should exit 2"
+done
+
 if [ $fail -eq 0 ]; then echo "e2e $ISA: $pass passed"; else echo "e2e $ISA: $pass passed, $fail failed"; exit 1; fi

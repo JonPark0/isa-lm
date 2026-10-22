@@ -99,6 +99,7 @@ int ml_main(int argc, char **argv) {
     const double t0 = now_s();
     for (int p = 0; p < tokens; p++) {
         const float *lg = ml_forward(&s, tok, p);
+        if (!lg) break;
         int best = 0;
         for (int i = 1; i < m.cfg.vocab; i++) if (lg[i] > lg[best]) best = i;
         tok = best;

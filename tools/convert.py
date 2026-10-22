@@ -88,6 +88,9 @@ def load_hf(d, max_seq=None):
     """-> (cfg, float32 weights) from a HF Llama directory."""
     with open(os.path.join(d, "config.json")) as fh:
         c = json.load(fh)
+    if c.get("rope_scaling"):
+        raise ValueError(f"rope_scaling {c['rope_scaling']} is not supported: the runtime implements "
+                         "plain RoPE only, so the converted model would compute wrong outputs")
     t = {}
     files = sorted(glob.glob(os.path.join(d, "*.safetensors")))
     if not files:

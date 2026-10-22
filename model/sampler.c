@@ -55,6 +55,7 @@ static int sample_topp(const float *p, int n, float topp, ml_prob_index *cand, f
     int m = 0;
     for (int i = 0; i < n; i++)
         if (p[i] >= cutoff) cand[m++] = (ml_prob_index){ p[i], i };
+    if (m == 0) return argmax(p, n);   /* nucleus smaller than any token */
     qsort(cand, (size_t)m, sizeof *cand, cmp_desc);
     float cum = 0.0f;
     int last = m - 1;

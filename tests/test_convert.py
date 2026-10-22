@@ -245,3 +245,31 @@ def test_hf_tied_model_runs_in_c(tmp_path):
     got = np.fromfile(tmp_path / "c.f32", np.float32).reshape(3, -1)
     ref = ref_forward.forward(rcfg, t, [1, 7, 3])
     assert np.abs(got - ref).max() <= 1e-3 * np.abs(ref).max()
+
+
+def test_large_vocab_loads_in_c(tmp_path):
+    """Llama-3-sized vocabularies (> 65536) must load and run."""
+    exe = os.path.join(ROOT, "build", "scalar", "ml_run")
+    if not os.path.exists(exe):
+        import pytest
+        pytest.skip("build/scalar/ml_run not built")
+    cfg, w = gen_random.generate(dict(SMALL, dim=32, n_layers=1, n_heads=2, n_kv_heads=1,
+                                      hidden_dim=32, vocab=128256), seed=1)
+    path = str(tmp_path / "bigvocab.mlb")
+    mlb.write_mlb(path, cfg, w, "q4")
+    out = str(tmp_path / "l.f32")
+    subprocess.run([exe, path, "--tokens", "1,128255", "--dump-logits", out], check=True)
+    got = np.fromfile(out, np.float32).reshape(2, -1)
+    rcfg, t = mlb.read_mlb(path)
+    ref = ref_forward.forward(rcfg, t, [1, 128255])
+    assert np.abs(got - ref).max() <= 1e-3 * np.abs(ref).max()
+
+
+def test_hf_rope_scaling_refused(tmp_path):
+    d, _, _ = _make_hf(tmp_path)
+    c = json.loads((tmp_path / "hf" / "config.json").read_text())
+    c["rope_scaling"] = {"rope_type": "llama3", "factor": 32.0}
+    (tmp_path / "hf" / "config.json").write_text(json.dumps(c))
+    import pytest
+    with pytest.raises(ValueError, match="rope_scaling"):
+        convert.load_hf(d)

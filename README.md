@@ -71,6 +71,12 @@ build/avx2/ml_bench stories15M.mlb
   built with `-ffp-contract=off`. As a result every ISA produces bit-identical
   quantized activations.
 
+Limits checked at load time: `dim`, `hidden_dim` and `n_layers` up to 65536;
+`vocab` and `max_seq` up to 2^24 (enough for Llama-3 vocabularies). All size
+arithmetic is overflow-checked, so on 32-bit ARMv7 an oversized model fails with
+`out of memory` instead of crashing. Plain RoPE only: the converter refuses HF
+configs that set `rope_scaling`.
+
 ## Adding or replacing a kernel
 
 1. Add `ml_k_<op>_<isa>` to `kernels/<isa>/k_<isa>.c`.
