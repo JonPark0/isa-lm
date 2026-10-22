@@ -26,13 +26,14 @@ LIB_SRC := $(wildcard core/*.c) \
            $(foreach i,$(CHAIN),$(wildcard kernels/$(i)/*.c)) \
            $(wildcard ops/*.c) $(wildcard model/*.c)
 # Compiled without ISA flags: these run before the ISA guard passes.
-NOISA_SRC := $(filter core/isa_check.c,$(LIB_SRC))
+NOISA_SRC := core/isa_check.c app/main_guard.c
 LIB_OBJ := $(LIB_SRC:%.c=$(BUILD)/obj/%.o)
+GUARD_OBJ := $(BUILD)/obj/app/main_guard.o
 
 TESTS := $(patsubst tests/%.c,%,$(wildcard tests/test_*.c))
 APPS  :=
 
-.PHONY: all test clean
+.PHONY: all test clean guard-test
 .SECONDARY:
 all: $(addprefix $(BUILD)/,$(TESTS) $(APPS))
 
@@ -40,7 +41,7 @@ $(BUILD)/obj/%.o: %.c
 	@mkdir -p $(dir $@)
 	@$(CC) $(if $(filter $<,$(NOISA_SRC)),$(BASE_CFLAGS),$(CFLAGS)) -c $< -o $@
 
-$(BUILD)/test_%: $(BUILD)/obj/tests/test_%.o $(LIB_OBJ)
+$(BUILD)/test_%: $(BUILD)/obj/tests/test_%.o $(GUARD_OBJ) $(LIB_OBJ)
 	@$(CC) $(LDFLAGS) $^ -o $@ $(LDLIBS)
 
 test: $(addprefix $(BUILD)/,$(TESTS))
@@ -50,3 +51,8 @@ clean:
 	rm -rf build
 
 -include $(shell find build -name '*.d' 2>/dev/null)
+
+GUARD_ISAS := scalar sse2 sse41 avx2 avxvnni avx512vnni
+guard-test:
+	@for i in $(GUARD_ISAS); do $(MAKE) -s ISA=$$i build/$$i/test_quant || exit 1; done
+	@sh tests/test_isa_guard.sh

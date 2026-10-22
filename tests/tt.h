@@ -39,9 +39,9 @@ static inline int tt_near(double a, double b, double rtol) {
     else printf("%s: %d passed\n", name, tt_pass); \
     return tt_fail ? 1 : 0; } while (0)
 
-/* Executables enter through main_guard.c once the ISA guard exists. */
+/* Executables enter through app/main_guard.c, which runs the ISA guard. */
 #ifndef TT_ENTRY
-#define TT_ENTRY main
+#define TT_ENTRY ml_main
 #endif
 
 #endif
