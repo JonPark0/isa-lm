@@ -11,9 +11,13 @@
 #define ML_HAS_ADD_AVX512VNNI
 #define ML_HAS_DOT_F32_AVX512VNNI
 #define ML_HAS_AXPY_F32_AVX512VNNI
+#define ML_HAS_MATVEC_PK_AVX512VNNI   /* packed layout: 16-row groups, Q8 offset 128 */
 
 void ml_k_matvec_q8_avx512vnni(float *y, const ml_qtensor *W, const ml_qact *x, int r0, int r1);
 void ml_k_matvec_q4_avx512vnni(float *y, const ml_qtensor *W, const ml_qact *x, int r0, int r1);
+/* Packed kernels (core/pack.h): r0 must be a multiple of 16. */
+void ml_k_matvec_q8_pk_avx512vnni(float *y, const ml_qtensor *W, const ml_qact *x, int r0, int r1);
+void ml_k_matvec_q4_pk_avx512vnni(float *y, const ml_qtensor *W, const ml_qact *x, int r0, int r1);
 void ml_k_quantize_q8_avx512vnni(ml_qact *out, const float *x, int k);
 void ml_k_rmsnorm_avx512vnni(float *o, const float *x, const float *w, int n, float eps);
 void ml_k_add_avx512vnni(float *y, const float *x, int n);

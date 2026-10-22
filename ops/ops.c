@@ -12,11 +12,20 @@ typedef struct {
 static void matvec_task(void *p, int tid, int nt) {
     const matvec_ctx *c = p;
     const int rows = c->W->rows;
+    /* chunks start on a packed group (or 4-row) boundary */
+    const int align = c->W->pq ? ML_PACK_G : 4;
     int chunk = (rows + nt - 1) / nt;
-    chunk = (chunk + 3) & ~3;
+    chunk = (chunk + align - 1) / align * align;
     const int r0 = tid * chunk;
     const int r1 = r0 + chunk < rows ? r0 + chunk : rows;
     if (r0 >= r1) return;
+#if ML_PACK_G
+    if (c->W->pq) {
+        if (c->W->type == ML_Q8_0) ml_k_matvec_q8_pk(c->y, c->W, c->x, r0, r1);
+        else ml_k_matvec_q4_pk(c->y, c->W, c->x, r0, r1);
+        return;
+    }
+#endif
     if (c->W->type == ML_Q8_0) ml_k_matvec_q8(c->y, c->W, c->x, r0, r1);
     else ml_k_matvec_q4(c->y, c->W, c->x, r0, r1);
 }

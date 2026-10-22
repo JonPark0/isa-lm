@@ -12,5 +12,8 @@ typedef struct {
 
 ml_status ml_file_map(ml_file *f, const char *path);
 void ml_file_unmap(ml_file *f);
+/* Hints that [p, p+n) inside the mapping will not be read again (frees the
+ * page cache pages it occupies in this process). No-op without mmap. */
+void ml_file_release(ml_file *f, const void *p, size_t n);
 
 #endif

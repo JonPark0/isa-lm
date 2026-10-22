@@ -28,6 +28,9 @@ typedef struct {
     const float *d;
     int rows, cols;
     uint8_t type;
+    /* Row-interleaved copy for the packed kernels (core/pack.h), or NULL. */
+    const uint8_t *pq;
+    const float *pd;
 } ml_qtensor;
 
 /* Q8_0 quantized activation vector of length n. */

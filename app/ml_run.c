@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "config/ml_config.h"
+#include "model/pack_model.h"
 #include "model/sampler.h"
 #include "model/tokenizer.h"
 #include "core/clock.h"
@@ -22,6 +23,7 @@ static const char USAGE[] =
     "  --eos ID         stop when ID is generated (default: BOS/EOS ids 1 and 2 with -z,\n"
     "                   otherwise run all -n positions)\n"
     "  --dump-logits F  write float32 logits for every --tokens position, then exit\n"
+    "  --no-pack        keep weights row-major (no repacking at load: less memory, slower)\n"
     "  --profile        print time spent per stage (qkv, attention, wo, ffn, classifier, other)\n"
     "  -h, --help       show this help\n";
 
@@ -78,7 +80,7 @@ static int parse_tokens(const char *s, int *out, int max, int vocab) {
 
 int ml_main(int argc, char **argv) {
     const char *model_path = NULL, *tok_path = NULL, *prompt = NULL, *tokens_arg = NULL, *dump = NULL;
-    int profile = 0;
+    int profile = 0, no_pack = 0;
     int steps = 64, nthreads = 1, eos = -1;
     float temp = 0.0f, topp = 0.9f;
     unsigned long long seed = 1;
@@ -86,6 +88,7 @@ int ml_main(int argc, char **argv) {
         const char *a = argv[i];
         if (!strcmp(a, "-h") || !strcmp(a, "--help")) { printf("%sbuild ISA: %s\n", USAGE, ML_ISA_NAME); return 0; }
         if (!strcmp(a, "--profile")) { profile = 1; continue; }
+        if (!strcmp(a, "--no-pack")) { no_pack = 1; continue; }
         if (a[0] != '-') { if (model_path) return usage("more than one model given"); model_path = a; continue; }
         if (i + 1 >= argc) return usage("option needs a value");
         const char *v = argv[++i];
@@ -141,6 +144,12 @@ int ml_main(int argc, char **argv) {
         goto out_tok;
     }
 
+    if (!no_pack && (st = ml_model_pack(&m, s.pool)) != ML_OK) {
+        fprintf(stderr, "error: packing weights: %s\n", ml_status_str(st));
+        rc = 1;
+        goto out_state;
+    }
+
     if (dump) {
         FILE *f = fopen(dump, "wb");
         if (!f) { fprintf(stderr, "error: cannot write %s\n", dump); rc = 1; goto out_state; }
@@ -172,8 +181,8 @@ int ml_main(int argc, char **argv) {
     }
     putchar('\n');
     const double dt = ml_now() - t0;
-    fprintf(stderr, "positions: %d, tok/s: %.2f, threads: %d, isa: %s\n", pos, dt > 0 ? pos / dt : 0.0,
-            ml_pool_size(s.pool), ML_ISA_NAME);
+    fprintf(stderr, "positions: %d, tok/s: %.2f, threads: %d, isa: %s, packed: %d\n", pos, dt > 0 ? pos / dt : 0.0,
+            ml_pool_size(s.pool), ML_ISA_NAME, m.pack_mem ? ml_pack_group() : 0);
     if (profile) {
         double total = 0.0;
         for (int i = 0; i < ML_PROF_COUNT; i++) total += s.prof[i];

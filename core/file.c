@@ -23,6 +23,8 @@ void ml_file_unmap(ml_file *f) {
     f->data = NULL; f->size = 0; f->handle = NULL;
 }
 
+void ml_file_release(ml_file *f, const void *p, size_t n) { (void)f; (void)p; (void)n; }
+
 #elif defined(_WIN32)
 
 #include <windows.h>
@@ -50,6 +52,8 @@ void ml_file_unmap(ml_file *f) {
     f->data = NULL; f->size = 0; f->handle = NULL;
 }
 
+void ml_file_release(ml_file *f, const void *p, size_t n) { (void)f; (void)p; (void)n; }
+
 #else
 
 #include <fcntl.h>
@@ -74,6 +78,15 @@ ml_status ml_file_map(ml_file *f, const char *path) {
 void ml_file_unmap(ml_file *f) {
     if (f->data) munmap((void *)f->data, f->size);
     f->data = NULL; f->size = 0;
+}
+
+void ml_file_release(ml_file *f, const void *p, size_t n) {
+    const uintptr_t page = (uintptr_t)sysconf(_SC_PAGESIZE);
+    uintptr_t a = ((uintptr_t)p + page - 1) & ~(page - 1), e = ((uintptr_t)p + n) & ~(page - 1);
+    const uintptr_t lo = (uintptr_t)f->data, hi = lo + f->size;
+    if (a < lo) a = lo;
+    if (e > hi) e = hi;
+    if (e > a) madvise((void *)a, e - a, MADV_DONTNEED);
 }
 
 #endif

@@ -4,6 +4,8 @@
 #include <string.h>
 #include "config/ml_config.h"
 #include "core/clock.h"
+#include "core/pack.h"
+#include "model/pack_model.h"
 #include "model/transformer.h"
 
 static uint32_t rng = 1;
@@ -27,7 +29,7 @@ static void bench_matvec(int type, int rows, int cols, int iters) {
     const size_t nq = type == ML_Q8_0 ? (size_t)rows * cols : (size_t)rows * cols / 2;
     float *d = xalloc(sizeof(float) * rows * cols / QK);
     for (int i = 0; i < rows * cols / QK; i++) d[i] = 0.01f;
-    ml_qtensor W = { xalloc(nq), d, rows, cols, (uint8_t)type };
+    ml_qtensor W = { xalloc(nq), d, rows, cols, (uint8_t)type, NULL, NULL };
     ml_qact x = { xalloc(cols), xalloc(sizeof(float) * cols / QK), cols };
     for (int i = 0; i < cols / QK; i++) x.d[i] = 0.01f;
     float *y = xalloc(sizeof(float) * rows);
@@ -37,6 +39,20 @@ static void bench_matvec(int type, int rows, int cols, int iters) {
     const double bytes = (double)nq + sizeof(float) * (double)rows * cols / QK;
     printf("%-12s %5dx%-5d %12.0f %8.2f %8.2f\n", type == ML_Q8_0 ? "matvec_q8" : "matvec_q4",
            rows, cols, per * 1e9, bytes / per / 1e9, 2.0 * rows * cols / per / 1e9);
+#if ML_PACK_G
+    ml_qtensor P = W;
+    uint8_t *pq = ml_aligned_alloc(ml_pack_quant_bytes(&W, ML_PACK_G));
+    float *pd = ml_aligned_alloc(ml_pack_scale_bytes(&W, ML_PACK_G));
+    ml_pack(&W, pq, pd, ML_PACK_G, ML_PACK_Q8_OFFSET);
+    P.pq = pq;
+    P.pd = pd;
+    if (type == ML_Q8_0) TIME_IT(iters, ml_k_matvec_q8_pk(y, &P, &x, 0, rows));
+    else TIME_IT(iters, ml_k_matvec_q4_pk(y, &P, &x, 0, rows));
+    printf("%-12s %5dx%-5d %12.0f %8.2f %8.2f\n", type == ML_Q8_0 ? "matvec_q8_pk" : "matvec_q4_pk",
+           rows, cols, per * 1e9, bytes / per / 1e9, 2.0 * rows * cols / per / 1e9);
+    ml_aligned_free(pq);
+    ml_aligned_free(pd);
+#endif
     ml_aligned_free((void *)W.q); ml_aligned_free(d); ml_aligned_free(x.q); ml_aligned_free(x.d); ml_aligned_free(y);
 }
 

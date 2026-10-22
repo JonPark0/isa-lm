@@ -113,6 +113,73 @@ void ml_k_matvec_q4_avx512vnni(float *y, const ml_qtensor *W, const ml_qact *x, 
     }
 }
 
+/* Packed kernels: one 32-bit lane per row of a 16-row group. Each step is one
+ * 64-byte load (4 bytes x 16 rows) and one vpdpbusd against a 4-byte
+ * activation broadcast, so a block costs 8 (Q8) or 4 x 2 (Q4) dot
+ * instructions for 16 rows, and its scales are applied as one vector op.
+ * Weights are unsigned (Q8 stored + 128, Q4 raw nibbles); the matching
+ * offset * sum(x) is subtracted per block in int32, exactly. */
+#define PK 16
+
+static void block_sums(int *xsum, const ml_qact *x, int nb, int offset) {
+    for (int b = 0; b < nb; b++) {
+        int s = 0;
+        for (int j = 0; j < QK; j++) s += x->q[b * QK + j];
+        xsum[b] = offset * s;
+    }
+}
+
+static inline void store_group(float *y, __m512 acc, int row, int r1) {
+    if (row + PK <= r1) { _mm512_storeu_ps(y + row, acc); return; }
+    _mm512_mask_storeu_ps(y + row, (__mmask16)((1u << (r1 - row)) - 1), acc);
+}
+
+void ml_k_matvec_q8_pk_avx512vnni(float *y, const ml_qtensor *W, const ml_qact *x, int r0, int r1) {
+    const int nb = W->cols / QK;
+    int xsum[Q4_MAX_BLOCKS];
+    block_sums(xsum, x, nb, 128);
+    for (int row = r0; row < r1; row += PK) {
+        const int g = row / PK;
+        const uint8_t *p = W->pq + (size_t)g * nb * (8 * PK * 4);
+        const float *d = W->pd + (size_t)g * nb * PK;
+        __m512 acc = _mm512_setzero_ps();
+        for (int b = 0; b < nb; b++, p += 8 * PK * 4) {
+            const int32_t *xb = (const int32_t *)(x->q + b * QK);
+            __m512i s = _mm512_setzero_si512();
+            for (int k = 0; k < 8; k++)
+                s = _mm512_dpbusd_epi32(s, _mm512_loadu_si512((const void *)(p + k * PK * 4)), _mm512_set1_epi32(xb[k]));
+            s = _mm512_sub_epi32(s, _mm512_set1_epi32(xsum[b]));
+            acc = _mm512_fmadd_ps(_mm512_cvtepi32_ps(s), _mm512_mul_ps(_mm512_loadu_ps(d + b * PK), _mm512_set1_ps(x->d[b])), acc);
+        }
+        store_group(y, acc, row, r1);
+    }
+}
+
+void ml_k_matvec_q4_pk_avx512vnni(float *y, const ml_qtensor *W, const ml_qact *x, int r0, int r1) {
+    const int nb = W->cols / QK;
+    int xsum[Q4_MAX_BLOCKS];
+    block_sums(xsum, x, nb, 8);
+    const __m512i m4 = _mm512_set1_epi8(0x0F);
+    for (int row = r0; row < r1; row += PK) {
+        const int g = row / PK;
+        const uint8_t *p = W->pq + (size_t)g * nb * (4 * PK * 4);
+        const float *d = W->pd + (size_t)g * nb * PK;
+        __m512 acc = _mm512_setzero_ps();
+        for (int b = 0; b < nb; b++, p += 4 * PK * 4) {
+            const int32_t *xb = (const int32_t *)(x->q + b * QK);
+            __m512i s = _mm512_setzero_si512();
+            for (int v = 0; v < 4; v++) {
+                const __m512i w = _mm512_loadu_si512((const void *)(p + v * PK * 4));
+                s = _mm512_dpbusd_epi32(s, _mm512_and_si512(w, m4), _mm512_set1_epi32(xb[v]));
+                s = _mm512_dpbusd_epi32(s, _mm512_and_si512(_mm512_srli_epi16(w, 4), m4), _mm512_set1_epi32(xb[v + 4]));
+            }
+            s = _mm512_sub_epi32(s, _mm512_set1_epi32(xsum[b]));
+            acc = _mm512_fmadd_ps(_mm512_cvtepi32_ps(s), _mm512_mul_ps(_mm512_loadu_ps(d + b * PK), _mm512_set1_ps(x->d[b])), acc);
+        }
+        store_group(y, acc, row, r1);
+    }
+}
+
 void ml_k_quantize_q8_avx512vnni(ml_qact *out, const float *x, int k) {
     const __m512 half = _mm512_set1_ps(0.5f);
     const __m512i signbit = _mm512_set1_epi32((int)0x80000000u);

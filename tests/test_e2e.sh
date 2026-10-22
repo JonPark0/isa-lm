@@ -18,6 +18,13 @@ for wt in q8 q4; do
         && ok || bad "ref $wt"
 done
 
+# --no-pack keeps the row-major kernels: must match the reference too
+for wt in q8 q4; do
+    $RUN $B/ml_run $M/rand_$wt.mlb --tokens $TOKENS --dump-logits $T/$wt.np.f32 --no-pack \
+        && python3 tests/compare_logits.py $T/$wt.np.f32 $T/$wt.ref.f32 96 1e-3 >/dev/null \
+        && ok || bad "--no-pack ref $wt"
+done
+
 # greedy: same text as the host scalar build
 $RUN $B/ml_run $M/rand_q8.mlb -z $TOK -i "ab" -n 16 -T 0 > $T/greedy.txt 2>/dev/null \
     && $SCALAR $M/rand_q8.mlb -z $TOK -i "ab" -n 16 -T 0 > $T/greedy.ref.txt 2>/dev/null \
