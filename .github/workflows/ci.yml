@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  matrix:
+    name: x86 native + ARM under qemu
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchains
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            qemu-user gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf libc6-dev-armhf-cross libc6-dev-arm64-cross \
+            gcc-mingw-w64-x86-64 cmake ninja-build python3-numpy python3-pytest
+      - name: Host CPU features
+        run: grep -o -w -E 'sse4_1|avx2|avx_vnni|avx512_vnni' /proc/cpuinfo | sort -u
+      - name: Full test matrix (includes stories15M download and generation)
+        run: make test-all
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-all-logs
+          path: build/test-all/
+
+  arm64:
+    name: AArch64 native
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Python deps
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends python3-numpy python3-pytest
+      - name: Host CPU features
+        run: grep -m1 -i features /proc/cpuinfo
+      - name: scalar
+        run: make -s ISA=scalar test e2e
+      - name: neon
+        run: make -s ISA=neon test e2e
+      - name: neon THREADS=pthread
+        run: make -s ISA=neon THREADS=pthread test e2e
+      - name: neon_dotprod
+        run: |
+          if grep -qw asimddp /proc/cpuinfo; then make -s ISA=neon_dotprod test e2e
+          else echo "skip: no asimddp"; fi
+      - name: sve
+        run: |
+          if grep -qw sve /proc/cpuinfo; then make -s ISA=sve test e2e
+          else echo "skip: no sve"; fi
+      - name: Benchmark
+        run: |
+          python3 tools/gen_random.py --out build/models/bench_q8.mlb --dim 512 --layers 6 --heads 8 \
+            --kv-heads 4 --hidden 1376 --vocab 4096 --max-seq 128
+          for isa in scalar neon; do make -s ISA=$isa build/$isa/ml_bench; build/$isa/ml_bench build/models/bench_q8.mlb -n 128; done
