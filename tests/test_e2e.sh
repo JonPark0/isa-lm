@@ -36,6 +36,16 @@ seq 1 40 | paste -sd, > $T/long.txt
 $RUN $B/ml_run $M/rand_q8.mlb --tokens $(cat $T/long.txt) --dump-logits $T/long.f32 2>/dev/null
 [ $? -eq 2 ] && ok || bad "dump-logits with 40 tokens > max_seq should exit 2"
 
+# threads: pthread builds (dir suffix -pt) split work but match -t 1 bit for bit
+case $B in *-pt*) NT=4 ;; *) NT=1 ;; esac
+for t in 3 4 7; do
+    $RUN $B/ml_run $M/rand_q8.mlb --tokens $TOKENS --dump-logits $T/t1.f32 -t 1 \
+        && $RUN $B/ml_run $M/rand_q8.mlb --tokens $TOKENS --dump-logits $T/tn.f32 -t $t \
+        && cmp -s $T/t1.f32 $T/tn.f32 && ok || bad "logits with -t $t differ from -t 1"
+done
+err=$($RUN $B/ml_run $M/rand_q4.mlb --tokens 1,2 -n 8 -t 4 2>&1 >/dev/null)
+echo "$err" | grep -q "threads: $NT," && ok || bad "expected 'threads: $NT' in: $err"
+
 # usage
 err=$($RUN $B/ml_run 2>&1); rc=$?
 [ $rc -eq 2 ] && echo "$err" | grep -q "usage:" && ok || bad "usage rc=$rc"

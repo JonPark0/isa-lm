@@ -22,6 +22,12 @@ else
   BASE_CFLAGS += -O2
 endif
 BASE_CFLAGS += $(ISADEFS) $(EXTRA_CFLAGS)
+ifeq ($(THREADS),pthread)
+  BASE_CFLAGS += -DML_THREADS_PTHREAD -pthread
+  CROSS_LDFLAGS += -pthread
+else ifneq ($(THREADS),1)
+  $(error THREADS must be 1 or pthread)
+endif
 CFLAGS  := $(BASE_CFLAGS) $(ISAFLAGS)
 LDFLAGS := $(CROSS_LDFLAGS) $(EXTRA_LDFLAGS)
 LDLIBS  := -lm

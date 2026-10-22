@@ -129,7 +129,8 @@ int ml_main(int argc, char **argv) {
     }
     putchar('\n');
     const double dt = now_s() - t0;
-    fprintf(stderr, "positions: %d, tok/s: %.2f, isa: %s\n", pos, dt > 0 ? pos / dt : 0.0, ML_ISA_NAME);
+    fprintf(stderr, "positions: %d, tok/s: %.2f, threads: %d, isa: %s\n", pos, dt > 0 ? pos / dt : 0.0,
+            ml_pool_size(s.pool), ML_ISA_NAME);
     ml_sampler_free(&smp);
 out_state:
     ml_state_free(&s);
