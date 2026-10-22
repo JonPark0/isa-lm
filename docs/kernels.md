@@ -52,6 +52,7 @@ it.
 | `avx512vnni` | `vpdpbusd` on two blocks at once. There is no 512-bit `psignb`, so negate `w` with `mask_sub` where `x < 0`. |
 | `neon` | `vmull_s8` + `vpadalq_s16` (works on ARMv7 and AArch64). |
 | `neon_dotprod` | `vdotq_s32`. |
+| `neon_i8mm` | `vmmlaq_s32` (`smmla`), batched prefill only: 2 rows × 2 tokens per instruction. |
 | `sve` | `svdot_s32` over `svcntb()` bytes. Per-block scales come from a gather, so any vector length works. |
 
 Q4 kernels unpack nibbles first (`& 0x0F`, `>> 4`, subtract 8) and then reuse
@@ -87,6 +88,9 @@ for the ISA to both packed `#if` chains in `config/ml_config.h`:
   row-major.
 
 An ISA with a packed matvec but no matmul falls back to `ml_k_matmul_*_pk_loop`.
+An ISA may also add only a matmul on another ISA's layout, as `neon_i8mm` does
+on the NEON dotprod one: define `ML_HAS_MATMUL_PK_<ISA>` and put it in the
+matmul chain only.
 
 The tests hold packed kernels to these rules:
 

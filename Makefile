@@ -116,6 +116,7 @@ test-sve:
 # AArch64 guard: run on emulated cores that lack dotprod / SVE.
 guard-test-arm:
 	@$(MAKE) -s ISA=neon_dotprod CROSS=aarch64-linux-gnu- build/neon_dotprod-aarch64/test_quant
+	@$(MAKE) -s ISA=neon_i8mm CROSS=aarch64-linux-gnu- build/neon_i8mm-aarch64/test_quant
 	@$(MAKE) -s ISA=sve CROSS=aarch64-linux-gnu- build/sve-aarch64/test_quant
 	@sh tests/test_isa_guard_arm.sh
 

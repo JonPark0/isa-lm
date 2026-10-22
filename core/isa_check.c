@@ -74,11 +74,14 @@ ml_status ml_isa_check(const char **missing) {
     (void)hw;
     *missing = NULL;
 #if defined(__aarch64__)
-#if defined(ML_ISA_NEON) || defined(ML_ISA_NEON_DOTPROD) || defined(ML_ISA_SVE)
+#if defined(ML_ISA_NEON) || defined(ML_ISA_NEON_DOTPROD) || defined(ML_ISA_NEON_I8MM) || defined(ML_ISA_SVE)
     REQUIRE(hw & (1ul << 1), "neon");
 #endif
-#if defined(ML_ISA_NEON_DOTPROD) || defined(ML_ISA_SVE)
+#if defined(ML_ISA_NEON_DOTPROD) || defined(ML_ISA_NEON_I8MM) || defined(ML_ISA_SVE)
     REQUIRE(hw & (1ul << 20), "asimddp");
+#endif
+#if defined(ML_ISA_NEON_I8MM)
+    REQUIRE(getauxval(AT_HWCAP2) & (1ul << 13), "i8mm");
 #endif
 #if defined(ML_ISA_SVE)
     REQUIRE(hw & (1ul << 22), "sve");

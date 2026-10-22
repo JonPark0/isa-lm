@@ -34,10 +34,11 @@ directory, so object files built with different flags never mix.
 | `avx512vnni`   | Intel Cascade Lake, Ice Lake, Sapphire Rapids; AMD Zen 4 and later |
 | `neon`         | ARMv7 with NEON (Cortex-A7/A9/A15…), any AArch64 |
 | `neon_dotprod` | ARMv8.2 dotprod (Cortex-A55/A76 and later, Apple M1 and later, Graviton 2 and later) |
+| `neon_i8mm`    | dotprod + int8 matrix multiply (Cortex-A510/A710/X2 and later, Neoverse N2/V1, Apple M2 and later, Graviton 3 and later) |
 | `sve`          | SVE CPUs (Neoverse V1/V2/N2, A64FX, Graviton 3 and later) |
 
 To find what a Linux machine supports, run
-`grep -o -w -E 'sse4_1|avx2|avx_vnni|avx512_vnni|asimddp|sve' /proc/cpuinfo | sort -u`.
+`grep -o -w -E 'sse4_1|avx2|avx_vnni|avx512_vnni|asimddp|i8mm|sve' /proc/cpuinfo | sort -u`.
 
 If you start a binary on a CPU that lacks its ISA, it exits with code 3 and
 names the missing feature. It does not crash:
