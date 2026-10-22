@@ -63,9 +63,10 @@ build/avx2/ml_run llama.mlb --tokens 128000,9906,1917 -n 32 --eos 128001
 |------|--------|
 | x86 builds | all six ISAs tested natively on an AVX-512 VNNI machine: kernel tests against scalar and double-precision references, end-to-end logits against a numpy reference. CI tests scalar through avx2 natively, and builds avxvnni/avx512vnni (SKIP when the runner CPU lacks them) |
 | ARM builds | tested under qemu (ARMv7 NEON, AArch64 NEON, dotprod, SVE at 128-bit and 512-bit vector length) and on real Arm hardware in CI (GitHub `ubuntu-24.04-arm`: scalar, neon, neon with threads, dotprod, sve) |
-| Real model | CI downloads llama2.c `stories15M`, converts it to Q8 and generates text with the avx2 build (smoke test: checks that words come out, not output quality) |
+| Real model | CI downloads llama2.c `stories15M`, converts it to Q8, generates text, and checks scalar and avx2 logits (packed and row-major) against the numpy reference: same argmax, top-5 agreement, KL ≤ 1e-2 |
 | ISA guard | rejects unsupported CPUs with exit code 3, checked under qemu on core2duo/Nehalem/SandyBridge/Haswell and cortex-a53/a76 |
-| Thread pool | bit-identical results for any thread count; ThreadSanitizer clean; `-t 4` about 1.8–3.2× faster than `-t 1` on 4 vCPUs |
+| Performance | weights repacked into row-interleaved layouts for VNNI, AVX2, SSE4.1 and NEON dotprod (Q4 decoding up to 2.2× faster); prompts prefilled in batches of 32 (2–6× faster); numbers in [Testing](docs/testing.md#benchmarking) |
+| Thread pool | bit-identical results for any thread count; ThreadSanitizer clean; dim-2048 Q4 decodes at 53 tok/s with `-t 1` and 181 tok/s with `-t 4` (avx512vnni, 4 vCPUs) |
 | Windows | cross-compiles with MinGW in CI (not executed); MSVC is supported in CMake but not verified |
 | Not implemented | tokenizers other than llama2.c `tokenizer.bin`, RoPE scaling types other than llama3, non-Llama architectures |
 

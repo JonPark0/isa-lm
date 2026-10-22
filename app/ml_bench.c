@@ -2,25 +2,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
-#ifdef _WIN32
-#include <windows.h>
-#endif
 #include "config/ml_config.h"
+#include "core/clock.h"
+#include "core/pack.h"
+#include "model/pack_model.h"
 #include "model/transformer.h"
-
-static double now_s(void) {
-#ifdef _WIN32
-    LARGE_INTEGER f, t;
-    QueryPerformanceFrequency(&f);
-    QueryPerformanceCounter(&t);
-    return (double)t.QuadPart / (double)f.QuadPart;
-#else
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (double)ts.tv_sec + ts.tv_nsec * 1e-9;
-#endif
-}
 
 static uint32_t rng = 1;
 static uint32_t urand(void) { rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5; return rng; }
@@ -34,16 +20,16 @@ static void *xalloc(size_t n) {
 
 /* Runs fn until at least 0.2 s have passed; returns seconds per call. */
 #define TIME_IT(iters, call) do {                                                 \
-        double t0 = now_s(), dt; long n = 0;                                      \
+        double t0 = ml_now(), dt; long n = 0;                                      \
         do { for (int it_ = 0; it_ < (iters); it_++) { call; } n += (iters);      \
-             dt = now_s() - t0; } while (dt < 0.2);                               \
+             dt = ml_now() - t0; } while (dt < 0.2);                               \
         per = dt / (double)n; } while (0)
 
 static void bench_matvec(int type, int rows, int cols, int iters) {
     const size_t nq = type == ML_Q8_0 ? (size_t)rows * cols : (size_t)rows * cols / 2;
     float *d = xalloc(sizeof(float) * rows * cols / QK);
     for (int i = 0; i < rows * cols / QK; i++) d[i] = 0.01f;
-    ml_qtensor W = { xalloc(nq), d, rows, cols, (uint8_t)type };
+    ml_qtensor W = { xalloc(nq), d, rows, cols, (uint8_t)type, NULL, NULL };
     ml_qact x = { xalloc(cols), xalloc(sizeof(float) * cols / QK), cols };
     for (int i = 0; i < cols / QK; i++) x.d[i] = 0.01f;
     float *y = xalloc(sizeof(float) * rows);
@@ -53,6 +39,20 @@ static void bench_matvec(int type, int rows, int cols, int iters) {
     const double bytes = (double)nq + sizeof(float) * (double)rows * cols / QK;
     printf("%-12s %5dx%-5d %12.0f %8.2f %8.2f\n", type == ML_Q8_0 ? "matvec_q8" : "matvec_q4",
            rows, cols, per * 1e9, bytes / per / 1e9, 2.0 * rows * cols / per / 1e9);
+#if ML_PACK_G
+    ml_qtensor P = W;
+    uint8_t *pq = ml_aligned_alloc(ml_pack_quant_bytes(&W, ML_PACK_G));
+    float *pd = ml_aligned_alloc(ml_pack_scale_bytes(&W, ML_PACK_G));
+    ml_pack(&W, pq, pd, ML_PACK_G, ML_PACK_Q8_OFFSET);
+    P.pq = pq;
+    P.pd = pd;
+    if (type == ML_Q8_0) TIME_IT(iters, ml_k_matvec_q8_pk(y, &P, &x, 0, rows));
+    else TIME_IT(iters, ml_k_matvec_q4_pk(y, &P, &x, 0, rows));
+    printf("%-12s %5dx%-5d %12.0f %8.2f %8.2f\n", type == ML_Q8_0 ? "matvec_q8_pk" : "matvec_q4_pk",
+           rows, cols, per * 1e9, bytes / per / 1e9, 2.0 * rows * cols / per / 1e9);
+    ml_aligned_free(pq);
+    ml_aligned_free(pd);
+#endif
     ml_aligned_free((void *)W.q); ml_aligned_free(d); ml_aligned_free(x.q); ml_aligned_free(x.d); ml_aligned_free(y);
 }
 
@@ -68,12 +68,13 @@ static void bench_quantize(int k, int iters) {
 
 int ml_main(int argc, char **argv) {
     const char *model = NULL;
-    int nthreads = 1, tokens = 64;
+    int nthreads = 1, tokens = 64, no_pack = 0;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "-t") && i + 1 < argc) nthreads = atoi(argv[++i]);
         else if (!strcmp(argv[i], "-n") && i + 1 < argc) tokens = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--no-pack")) no_pack = 1;
         else if (argv[i][0] != '-') model = argv[i];
-        else { fprintf(stderr, "usage: ml_bench [MODEL.mlb] [-t threads] [-n tokens]\n"); return 2; }
+        else { fprintf(stderr, "usage: ml_bench [MODEL.mlb] [-t threads] [-n tokens] [--no-pack]\n"); return 2; }
     }
     printf("ISA: %s  (matvec_q8 -> %s, matvec_q4 -> %s, quantize_q8 -> %s)\n", ML_ISA_NAME,
            ML_STR(ml_k_matvec_q8), ML_STR(ml_k_matvec_q4), ML_STR(ml_k_quantize_q8));
@@ -89,23 +90,31 @@ int ml_main(int argc, char **argv) {
     ml_status st = ml_model_load(&m, model);
     if (st != ML_OK) { fprintf(stderr, "error: %s: %s\n", model, ml_status_str(st)); return 1; }
     ml_state s;
-    if ((st = ml_state_init(&s, &m, nthreads)) != ML_OK) {
+    if ((st = ml_state_init(&s, &m, nthreads)) != ML_OK || (!no_pack && (st = ml_model_pack(&m, s.pool)) != ML_OK)) {
         fprintf(stderr, "error: %s\n", ml_status_str(st));
         ml_model_free(&m);
         return 1;
     }
-    if (tokens > m.cfg.max_seq) tokens = m.cfg.max_seq;
-    int tok = 1;
-    const double t0 = now_s();
-    for (int p = 0; p < tokens; p++) {
+    if (tokens > m.cfg.max_seq / 2) tokens = m.cfg.max_seq / 2;
+    /* prefill `tokens` prompt tokens, then decode `tokens` more greedily */
+    int *prompt = malloc(sizeof(int) * (size_t)tokens);
+    for (int i = 0; i < tokens; i++) prompt[i] = 1 + i % (m.cfg.vocab - 1);
+    double t0 = ml_now();
+    ml_prefill(&s, prompt, tokens, 0, NULL);
+    const double tp = ml_now() - t0;
+    int tok = prompt[tokens - 1];
+    t0 = ml_now();
+    for (int p = tokens; p < 2 * tokens; p++) {
         const float *lg = ml_forward(&s, tok, p);
         if (!lg) break;
         int best = 0;
         for (int i = 1; i < m.cfg.vocab; i++) if (lg[i] > lg[best]) best = i;
         tok = best;
     }
-    const double dt = now_s() - t0;
-    printf("model %s: %d tokens, %.2f tok/s, threads %d\n", model, tokens, tokens / dt, ml_pool_size(s.pool));
+    const double td = ml_now() - t0;
+    printf("model %s: prefill %.1f tok/s, decode %.2f tok/s (%d tokens each, threads %d, packed %d)\n", model,
+           tokens / tp, tokens / td, tokens, ml_pool_size(s.pool), m.pack_mem ? ml_pack_group() : 0);
+    free(prompt);
     ml_state_free(&s);
     ml_model_free(&m);
     return 0;

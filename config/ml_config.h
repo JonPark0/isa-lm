@@ -235,6 +235,75 @@
 #define ml_k_axpy_f32 ml_k_axpy_f32_scalar
 #endif
 
+/* Packed (row-interleaved) matvec kernels and the layout they expect. */
+#if defined(ML_HAS_MATVEC_PK_AVX512VNNI)
+#define ml_k_matvec_q8_pk ml_k_matvec_q8_pk_avx512vnni
+#define ml_k_matvec_q4_pk ml_k_matvec_q4_pk_avx512vnni
+#define ML_PACK_G 16
+#define ML_PACK_Q8_OFFSET 128
+#define ML_PACK_Q8 1
+#elif defined(ML_HAS_MATVEC_PK_AVXVNNI)
+#define ml_k_matvec_q8_pk ml_k_matvec_q8_pk_avxvnni
+#define ml_k_matvec_q4_pk ml_k_matvec_q4_pk_avxvnni
+#define ML_PACK_G 8
+#define ML_PACK_Q8_OFFSET 128
+#define ML_PACK_Q8 1
+#elif defined(ML_HAS_MATVEC_PK_AVX2)
+#define ml_k_matvec_q8_pk ml_k_matvec_q8_pk_avx2
+#define ml_k_matvec_q4_pk ml_k_matvec_q4_pk_avx2
+#define ML_PACK_G 8
+#define ML_PACK_Q8_OFFSET 0
+#define ML_PACK_Q8 1
+#elif defined(ML_HAS_MATVEC_PK_SSE41)
+#define ml_k_matvec_q8_pk ml_k_matvec_q8_pk_sse41
+#define ml_k_matvec_q4_pk ml_k_matvec_q4_pk_sse41
+#define ML_PACK_G 4
+#define ML_PACK_Q8_OFFSET 0
+#define ML_PACK_Q8 0   /* 4-row Q8 groups are no faster than row-major at 128 bits */
+#elif defined(ML_HAS_MATVEC_PK_NEON_DOTPROD)
+#define ml_k_matvec_q8_pk ml_k_matvec_q8_pk_neon_dotprod
+#define ml_k_matvec_q4_pk ml_k_matvec_q4_pk_neon_dotprod
+#define ML_PACK_G 4
+#define ML_PACK_Q8_OFFSET 0
+#define ML_PACK_Q8 1
+#elif defined(ML_HAS_MATVEC_PK_NEON)
+#define ml_k_matvec_q8_pk ml_k_matvec_q8_pk_neon
+#define ml_k_matvec_q4_pk ml_k_matvec_q4_pk_neon
+#define ML_PACK_G 4
+#define ML_PACK_Q8_OFFSET 0
+#define ML_PACK_Q8 1
+#else
+#define ML_PACK_G 0
+#define ML_PACK_Q8_OFFSET 0
+#define ML_PACK_Q8 0
+#endif
+
+/* Batched packed kernels: native where the packed ISA has one, else a loop
+ * over the packed matvec. */
+#include "kernels/pk_loop.h"
+#if defined(ML_HAS_MATVEC_PK_AVX512VNNI) && defined(ML_HAS_MATMUL_PK_AVX512VNNI)
+#define ml_k_matmul_q8_pk ml_k_matmul_q8_pk_avx512vnni
+#define ml_k_matmul_q4_pk ml_k_matmul_q4_pk_avx512vnni
+#elif !defined(ML_HAS_MATVEC_PK_AVX512VNNI) && defined(ML_HAS_MATMUL_PK_AVXVNNI)
+#define ml_k_matmul_q8_pk ml_k_matmul_q8_pk_avxvnni
+#define ml_k_matmul_q4_pk ml_k_matmul_q4_pk_avxvnni
+#elif !defined(ML_HAS_MATVEC_PK_AVX512VNNI) && !defined(ML_HAS_MATVEC_PK_AVXVNNI) && defined(ML_HAS_MATMUL_PK_AVX2)
+#define ml_k_matmul_q8_pk ml_k_matmul_q8_pk_avx2
+#define ml_k_matmul_q4_pk ml_k_matmul_q4_pk_avx2
+#elif !defined(ML_HAS_MATVEC_PK_AVX2) && defined(ML_HAS_MATMUL_PK_SSE41)
+#define ml_k_matmul_q8_pk ml_k_matmul_q8_pk_sse41
+#define ml_k_matmul_q4_pk ml_k_matmul_q4_pk_sse41
+#elif defined(ML_HAS_MATMUL_PK_NEON_DOTPROD)
+#define ml_k_matmul_q8_pk ml_k_matmul_q8_pk_neon_dotprod
+#define ml_k_matmul_q4_pk ml_k_matmul_q4_pk_neon_dotprod
+#elif defined(ML_HAS_MATMUL_PK_NEON)
+#define ml_k_matmul_q8_pk ml_k_matmul_q8_pk_neon
+#define ml_k_matmul_q4_pk ml_k_matmul_q4_pk_neon
+#elif ML_PACK_G
+#define ml_k_matmul_q8_pk ml_k_matmul_q8_pk_loop
+#define ml_k_matmul_q4_pk ml_k_matmul_q4_pk_loop
+#endif
+
 #if defined(ML_ISA_SCALAR)
 #define ML_ISA_NAME "scalar"
 #elif defined(ML_ISA_AVX512VNNI)

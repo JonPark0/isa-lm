@@ -18,6 +18,29 @@ for wt in q8 q4; do
         && ok || bad "ref $wt"
 done
 
+# builds with packed kernels must actually pack (Q4 is packed by every one)
+G=$($RUN $B/ml_run --help 2>&1 | sed -n 's/^pack group: \([0-9]*\).*/\1/p')
+err=$($RUN $B/ml_run $M/rand_q4.mlb --tokens 1,2 -n 4 2>&1 >/dev/null)
+[ -n "$G" ] && echo "$err" | grep -q "packed: $G\$" && ok || bad "expected 'packed: $G' (help says pack group '$G'): $err"
+
+# --no-pack keeps the row-major kernels: must match the reference too
+for wt in q8 q4; do
+    $RUN $B/ml_run $M/rand_$wt.mlb --tokens $TOKENS --dump-logits $T/$wt.np.f32 --no-pack \
+        && python3 tests/compare_logits.py $T/$wt.np.f32 $T/$wt.ref.f32 96 1e-3 >/dev/null \
+        && ok || bad "--no-pack ref $wt"
+done
+
+# batched prefill gives the same logits as token-by-token, byte for byte
+for wt in q8 q4; do
+    $RUN $B/ml_run $M/rand_$wt.mlb --tokens $TOKENS --dump-logits $T/$wt.b1.f32 --batch 1 \
+        && $RUN $B/ml_run $M/rand_$wt.mlb --tokens $TOKENS --dump-logits $T/$wt.b5.f32 --batch 5 \
+        && cmp -s $T/$wt.f32 $T/$wt.b1.f32 && cmp -s $T/$wt.f32 $T/$wt.b5.f32 \
+        && ok || bad "batched prefill logits differ ($wt)"
+done
+$RUN $B/ml_run $M/rand_q8.mlb -z $TOK -i "abcdefghij" -n 24 -T 0 --batch 1 > $T/gb1.txt 2>/dev/null \
+    && $RUN $B/ml_run $M/rand_q8.mlb -z $TOK -i "abcdefghij" -n 24 -T 0 > $T/gb.txt 2>/dev/null \
+    && cmp -s $T/gb1.txt $T/gb.txt && ok || bad "generation with batched prefill differs from --batch 1"
+
 # greedy: same text as the host scalar build
 $RUN $B/ml_run $M/rand_q8.mlb -z $TOK -i "ab" -n 16 -T 0 > $T/greedy.txt 2>/dev/null \
     && $SCALAR $M/rand_q8.mlb -z $TOK -i "ab" -n 16 -T 0 > $T/greedy.ref.txt 2>/dev/null \
@@ -53,6 +76,13 @@ echo "$err" | grep -q "^positions: 20," && ok || bad "no-tokenizer run should us
 first=$($RUN $B/ml_run $M/rand_q8.mlb --tokens 1,2 -n 3 -T 0 2>/dev/null | awk '{print $2}')
 err=$($RUN $B/ml_run $M/rand_q8.mlb --tokens 1,2 -n 20 -T 0 --eos "$first" 2>&1 >/dev/null)
 echo "$err" | grep -q "^positions: 2," && ok || bad "--eos $first should stop right after the prompt (positions 2): $err"
+
+# --profile: per-stage time breakdown on stderr, output unchanged
+$RUN $B/ml_run $M/rand_q8.mlb --tokens 1,2,3 -n 12 -T 0 > $T/noprof.txt 2>/dev/null
+err=$($RUN $B/ml_run $M/rand_q8.mlb --tokens 1,2,3 -n 12 -T 0 --profile 2>&1 > $T/prof.txt)
+if cmp -s $T/noprof.txt $T/prof.txt && echo "$err" | grep -q "^profile:" \
+    && for k in qkv attention wo ffn classifier other; do echo "$err" | grep -q " $k "; done; then ok
+else bad "--profile output: $err"; fi
 
 # usage
 err=$($RUN $B/ml_run 2>&1); rc=$?

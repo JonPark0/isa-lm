@@ -13,9 +13,16 @@
 #define ML_HAS_ADD_NEON
 #define ML_HAS_DOT_F32_NEON
 #define ML_HAS_AXPY_F32_NEON
+#define ML_HAS_MATVEC_PK_NEON   /* packed layout: 4-row groups, Q8 offset 0 */
+#define ML_HAS_MATMUL_PK_NEON
 
 void ml_k_matvec_q8_neon(float *y, const ml_qtensor *W, const ml_qact *x, int r0, int r1);
 void ml_k_matvec_q4_neon(float *y, const ml_qtensor *W, const ml_qact *x, int r0, int r1);
+/* Packed kernels (core/pack.h): r0 must be a multiple of 4. */
+void ml_k_matvec_q8_pk_neon(float *y, const ml_qtensor *W, const ml_qact *x, int r0, int r1);
+void ml_k_matvec_q4_pk_neon(float *y, const ml_qtensor *W, const ml_qact *x, int r0, int r1);
+void ml_k_matmul_q8_pk_neon(float *Y, int ldy, const ml_qtensor *W, const ml_qbatch *X, int r0, int r1);
+void ml_k_matmul_q4_pk_neon(float *Y, int ldy, const ml_qtensor *W, const ml_qbatch *X, int r0, int r1);
 void ml_k_quantize_q8_neon(ml_qact *out, const float *x, int k);
 void ml_k_rmsnorm_neon(float *o, const float *x, const float *w, int n, float eps);
 void ml_k_softmax_neon(float *x, int n);

@@ -35,7 +35,7 @@ CFLAGS  := $(BASE_CFLAGS) $(ISAFLAGS)
 LDFLAGS := $(CROSS_LDFLAGS) $(EXTRA_LDFLAGS)
 LDLIBS  := -lm
 
-LIB_SRC := $(wildcard core/*.c) \
+LIB_SRC := $(wildcard core/*.c) $(wildcard kernels/common/*.c) \
            $(foreach i,$(CHAIN),$(wildcard kernels/$(i)/*.c)) \
            $(wildcard ops/*.c) $(wildcard model/*.c)
 # Compiled without ISA flags: these run before the ISA guard passes.

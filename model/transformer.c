@@ -1,6 +1,7 @@
 #include <math.h>
 #include <string.h>
 #include "config/ml_config.h"
+#include "core/clock.h"
 #include "core/quant_ref.h"
 #include "model/transformer.h"
 #include "ops/ops.h"
@@ -19,6 +20,13 @@ static double rope_inv_freq(const ml_config *c, int i) {
     return (1.0 - smooth) * inv / f + smooth * inv;
 }
 
+const char *const ml_prof_names[ML_PROF_COUNT] = { "qkv", "attention", "wo", "ffn", "classifier", "other" };
+
+/* Runs stmt, adding its wall time to prof[cat] when profiling is on. */
+#define PROF(cat, stmt) do {                                                  \
+        if (s->profile) { const double t0_ = ml_now(); stmt; s->prof[cat] += ml_now() - t0_; } \
+        else { stmt; } } while (0)
+
 ml_status ml_state_init(ml_state *s, ml_model *m, int nthreads) {
     memset(s, 0, sizeof *s);
     s->m = m;
@@ -36,6 +44,9 @@ ml_status ml_state_init(ml_state *s, ml_model *m, int nthreads) {
         { 4, f * c->dim }, { 2, f * c->hidden_dim }, { 1, f * c->vocab },
         { (size_t)c->n_heads, f * c->max_seq }, { 2, f * kv }, { 2, f * half },
         { 1, (size_t)c->dim }, { 1, f * c->dim / QK }, { 1, (size_t)c->hidden_dim }, { 1, f * c->hidden_dim / QK },
+        { 4, f * ML_BATCH_MAX * c->dim }, { 2, f * ML_BATCH_MAX * c->hidden_dim },
+        { 1, (size_t)ML_BATCH_MAX * c->dim }, { 1, f * ML_BATCH_MAX * (c->dim / QK) },
+        { 1, (size_t)ML_BATCH_MAX * c->hidden_dim }, { 1, f * ML_BATCH_MAX * (c->hidden_dim / QK) },
     };
     for (size_t i = 0; i < sizeof parts / sizeof parts[0]; i++) {
         size_t bytes;
@@ -61,7 +72,18 @@ ml_status ml_state_init(ml_state *s, ml_model *m, int nthreads) {
     s->qa_dim = (ml_qact){ ml_arena_alloc(a, c->dim), ml_arena_alloc(a, f * c->dim / QK), c->dim };
     s->qa_hidden = (ml_qact){ ml_arena_alloc(a, c->hidden_dim),
                               ml_arena_alloc(a, f * c->hidden_dim / QK), c->hidden_dim };
-    if (!s->qa_hidden.d) { ml_arena_free(a); return ML_E_NOMEM; }
+    const size_t B = ML_BATCH_MAX;
+    s->bx = ml_arena_alloc(a, f * B * c->dim);
+    s->bxb = ml_arena_alloc(a, f * B * c->dim);
+    s->bxb2 = ml_arena_alloc(a, f * B * c->dim);
+    s->bq = ml_arena_alloc(a, f * B * c->dim);
+    s->bhb = ml_arena_alloc(a, f * B * c->hidden_dim);
+    s->bhb2 = ml_arena_alloc(a, f * B * c->hidden_dim);
+    s->qb_dim = (ml_qbatch){ ml_arena_alloc(a, B * c->dim), ml_arena_alloc(a, f * B * (c->dim / QK)), 0, c->dim };
+    s->qb_hidden = (ml_qbatch){ ml_arena_alloc(a, B * c->hidden_dim),
+                                ml_arena_alloc(a, f * B * (c->hidden_dim / QK)), 0, c->hidden_dim };
+    s->batch = ML_BATCH_MAX;
+    if (!s->qa_hidden.d || !s->qb_hidden.d) { ml_arena_free(a); return ML_E_NOMEM; }
 
     const int h2 = c->head_dim / 2;
     for (int i = 0; i < h2; i++) {
@@ -84,38 +106,105 @@ float *ml_forward(ml_state *s, int token, int pos) {
     const int h2 = c->head_dim / 2;
     const float *cs = s->rope_cos + (size_t)pos * h2, *sn = s->rope_sin + (size_t)pos * h2;
 
-    ml_dequant_row(s->x, &m->tok_emb, token);
+    PROF(ML_PROF_OTHER, ml_dequant_row(s->x, &m->tok_emb, token));
     for (int l = 0; l < c->n_layers; l++) {
         const ml_layer *L = &m->layers[l];
         float *kc = s->kcache + (size_t)l * c->max_seq * c->kv_dim;
         float *vc = s->vcache + (size_t)l * c->max_seq * c->kv_dim;
         float *k = kc + (size_t)pos * c->kv_dim, *v = vc + (size_t)pos * c->kv_dim;
 
-        ml_k_rmsnorm(s->xb, s->x, L->attn_norm, c->dim, c->norm_eps);
-        ml_k_quantize_q8(&s->qa_dim, s->xb, c->dim);
-        ml_matvec(s->pool, s->q, &L->wq, &s->qa_dim);
-        ml_matvec(s->pool, k, &L->wk, &s->qa_dim);
-        ml_matvec(s->pool, v, &L->wv, &s->qa_dim);
-        ml_k_rope(s->q, k, cs, sn, c->head_dim, c->n_heads, c->n_kv_heads);
+        PROF(ML_PROF_OTHER, ml_k_rmsnorm(s->xb, s->x, L->attn_norm, c->dim, c->norm_eps);
+                            ml_k_quantize_q8(&s->qa_dim, s->xb, c->dim));
+        PROF(ML_PROF_QKV, ml_matvec(s->pool, s->q, &L->wq, &s->qa_dim);
+                          ml_matvec(s->pool, k, &L->wk, &s->qa_dim);
+                          ml_matvec(s->pool, v, &L->wv, &s->qa_dim));
+        PROF(ML_PROF_OTHER, ml_k_rope(s->q, k, cs, sn, c->head_dim, c->n_heads, c->n_kv_heads));
 
-        ml_attention(s->pool, s->xb, s->q, kc, vc, s->att, c, pos);
-        ml_k_quantize_q8(&s->qa_dim, s->xb, c->dim);
-        ml_matvec(s->pool, s->xb2, &L->wo, &s->qa_dim);
-        ml_k_add(s->x, s->xb2, c->dim);
-
-        ml_k_rmsnorm(s->xb, s->x, L->ffn_norm, c->dim, c->norm_eps);
-        ml_k_quantize_q8(&s->qa_dim, s->xb, c->dim);
-        ml_matvec(s->pool, s->hb, &L->w1, &s->qa_dim);
-        ml_matvec(s->pool, s->hb2, &L->w3, &s->qa_dim);
-        ml_k_silu_mul(s->hb, s->hb2, c->hidden_dim);
-        ml_k_quantize_q8(&s->qa_hidden, s->hb, c->hidden_dim);
-        ml_matvec(s->pool, s->xb2, &L->w2, &s->qa_hidden);
-        ml_k_add(s->x, s->xb2, c->dim);
+        PROF(ML_PROF_ATTN, ml_attention(s->pool, s->xb, s->q, kc, vc, s->att, c, pos));
+        PROF(ML_PROF_OTHER, ml_k_quantize_q8(&s->qa_dim, s->xb, c->dim));
+        PROF(ML_PROF_WO, ml_matvec(s->pool, s->xb2, &L->wo, &s->qa_dim));
+        PROF(ML_PROF_OTHER, ml_k_add(s->x, s->xb2, c->dim);
+                            ml_k_rmsnorm(s->xb, s->x, L->ffn_norm, c->dim, c->norm_eps);
+                            ml_k_quantize_q8(&s->qa_dim, s->xb, c->dim));
+        PROF(ML_PROF_FFN, ml_matvec(s->pool, s->hb, &L->w1, &s->qa_dim);
+                          ml_matvec(s->pool, s->hb2, &L->w3, &s->qa_dim));
+        PROF(ML_PROF_OTHER, ml_k_silu_mul(s->hb, s->hb2, c->hidden_dim);
+                            ml_k_quantize_q8(&s->qa_hidden, s->hb, c->hidden_dim));
+        PROF(ML_PROF_FFN, ml_matvec(s->pool, s->xb2, &L->w2, &s->qa_hidden));
+        PROF(ML_PROF_OTHER, ml_k_add(s->x, s->xb2, c->dim));
     }
-    ml_k_rmsnorm(s->xb, s->x, m->final_norm, c->dim, c->norm_eps);
-    ml_k_quantize_q8(&s->qa_dim, s->xb, c->dim);
-    ml_matvec(s->pool, s->logits, &m->wcls, &s->qa_dim);
+    PROF(ML_PROF_OTHER, ml_k_rmsnorm(s->xb, s->x, m->final_norm, c->dim, c->norm_eps);
+                        ml_k_quantize_q8(&s->qa_dim, s->xb, c->dim));
+    PROF(ML_PROF_CLS, ml_matvec(s->pool, s->logits, &m->wcls, &s->qa_dim));
     return s->logits;
+}
+
+/* Quantizes rows [0, n) of src (each k floats) into the batch q. */
+static void quantize_rows(ml_qbatch *q, const float *src, int n) {
+    q->n = n;
+    for (int t = 0; t < n; t++) {
+        ml_qact qt = { q->q + (size_t)t * q->k, q->d + (size_t)t * (q->k / QK), q->k };
+        ml_k_quantize_q8(&qt, src + (size_t)t * q->k, q->k);
+    }
+}
+
+/* One batched step. Every per-token operation is the one ml_forward does,
+ * in the same order, so logits match token-by-token decoding bit for bit;
+ * only the matrix products are shared across the n tokens. */
+static void prefill_step(ml_state *s, const int *tok, int n, int pos0, float *logits) {
+    const ml_model *m = s->m;
+    const ml_config *c = &m->cfg;
+    const int D = c->dim, H = c->hidden_dim, KV = c->kv_dim, h2 = c->head_dim / 2;
+    PROF(ML_PROF_OTHER, for (int t = 0; t < n; t++) ml_dequant_row(s->bx + (size_t)t * D, &m->tok_emb, tok[t]));
+    for (int l = 0; l < c->n_layers; l++) {
+        const ml_layer *L = &m->layers[l];
+        float *kc = s->kcache + (size_t)l * c->max_seq * KV;
+        float *vc = s->vcache + (size_t)l * c->max_seq * KV;
+        PROF(ML_PROF_OTHER, for (int t = 0; t < n; t++)
+                                ml_k_rmsnorm(s->bxb + (size_t)t * D, s->bx + (size_t)t * D, L->attn_norm, D, c->norm_eps);
+                            quantize_rows(&s->qb_dim, s->bxb, n));
+        PROF(ML_PROF_QKV, ml_matmul(s->pool, s->bq, D, &L->wq, &s->qb_dim);
+                          ml_matmul(s->pool, kc + (size_t)pos0 * KV, KV, &L->wk, &s->qb_dim);
+                          ml_matmul(s->pool, vc + (size_t)pos0 * KV, KV, &L->wv, &s->qb_dim));
+        PROF(ML_PROF_OTHER, for (int t = 0; t < n; t++)
+                                ml_k_rope(s->bq + (size_t)t * D, kc + (size_t)(pos0 + t) * KV,
+                                          s->rope_cos + (size_t)(pos0 + t) * h2, s->rope_sin + (size_t)(pos0 + t) * h2,
+                                          c->head_dim, c->n_heads, c->n_kv_heads));
+        PROF(ML_PROF_ATTN, for (int t = 0; t < n; t++)
+                               ml_attention(s->pool, s->bxb + (size_t)t * D, s->bq + (size_t)t * D, kc, vc, s->att, c, pos0 + t));
+        PROF(ML_PROF_OTHER, quantize_rows(&s->qb_dim, s->bxb, n));
+        PROF(ML_PROF_WO, ml_matmul(s->pool, s->bxb2, D, &L->wo, &s->qb_dim));
+        PROF(ML_PROF_OTHER, for (int t = 0; t < n; t++) {
+                                ml_k_add(s->bx + (size_t)t * D, s->bxb2 + (size_t)t * D, D);
+                                ml_k_rmsnorm(s->bxb + (size_t)t * D, s->bx + (size_t)t * D, L->ffn_norm, D, c->norm_eps);
+                            }
+                            quantize_rows(&s->qb_dim, s->bxb, n));
+        PROF(ML_PROF_FFN, ml_matmul(s->pool, s->bhb, H, &L->w1, &s->qb_dim);
+                          ml_matmul(s->pool, s->bhb2, H, &L->w3, &s->qb_dim));
+        PROF(ML_PROF_OTHER, for (int t = 0; t < n; t++)
+                                ml_k_silu_mul(s->bhb + (size_t)t * H, s->bhb2 + (size_t)t * H, H);
+                            quantize_rows(&s->qb_hidden, s->bhb, n));
+        PROF(ML_PROF_FFN, ml_matmul(s->pool, s->bxb2, D, &L->w2, &s->qb_hidden));
+        PROF(ML_PROF_OTHER, for (int t = 0; t < n; t++) ml_k_add(s->bx + (size_t)t * D, s->bxb2 + (size_t)t * D, D));
+    }
+    if (!logits) return;
+    PROF(ML_PROF_OTHER, for (int t = 0; t < n; t++)
+                            ml_k_rmsnorm(s->bxb + (size_t)t * D, s->bx + (size_t)t * D, m->final_norm, D, c->norm_eps);
+                        quantize_rows(&s->qb_dim, s->bxb, n));
+    PROF(ML_PROF_CLS, ml_matmul(s->pool, logits, c->vocab, &m->wcls, &s->qb_dim));
+}
+
+ml_status ml_prefill(ml_state *s, const int *tokens, int n, int pos0, float *logits) {
+    const ml_config *c = &s->m->cfg;
+    if (n < 0 || pos0 < 0 || pos0 + n > c->max_seq) return ML_E_SHAPE;
+    for (int i = 0; i < n; i++)
+        if (tokens[i] < 0 || tokens[i] >= c->vocab) return ML_E_SHAPE;
+    const int B = s->batch < 1 ? 1 : (s->batch > ML_BATCH_MAX ? ML_BATCH_MAX : s->batch);
+    for (int i = 0; i < n; i += B) {
+        const int k = n - i < B ? n - i : B;
+        prefill_step(s, tokens + i, k, pos0 + i, logits ? logits + (size_t)i * c->vocab : NULL);
+    }
+    return ML_OK;
 }
 
 void ml_state_free(ml_state *s) {

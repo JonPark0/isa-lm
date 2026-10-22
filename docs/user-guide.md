@@ -137,10 +137,17 @@ build/avx2/ml_run model.mlb --tokens 1,450,3681 --dump-logits l.f32
 | `-s N` | Seed for the xorshift64* RNG. Default 1. |
 | `-t N` | Threads, 1 to 64. Only builds made with `THREADS=pthread` use more than one. |
 | `--dump-logits F` | Write float32 logits `[n_tokens][vocab]` for every `--tokens` position, then exit. |
+| `--batch N` | Prompt tokens per batched prefill step, 1 to 32. Default 32; `1` processes the prompt token by token. The output is identical either way. |
+| `--no-pack` | Keep weights row-major instead of repacking them for the packed kernels. Uses less memory during load, but runs slower. |
+| `--profile` | Print the share of forward-pass time per stage (qkv, attention, wo, ffn, classifier, other). |
 | `--eos ID` | Stop as soon as `ID` is generated. Without it, a run with `-z` stops at llama2.c's BOS/EOS (ids 1 and 2), and a run without `-z` uses every `-n` position. Llama 3, for example, has no stop token at ids 1 and 2, so pass `--eos 128001`. |
 
-When it finishes, `ml_run` prints `positions: N, tok/s: X, threads: T, isa: I`
-to stderr.
+When it finishes, `ml_run` prints two lines to stderr:
+
+- `prefill: P tokens in M ms (R tok/s)`, when the prompt has more than one
+  token;
+- `positions: N, tok/s: X, threads: T, isa: I, packed: G`, where `G` is the
+  pack group the weights were repacked to, or 0.
 
 Exit codes:
 
@@ -158,9 +165,20 @@ briefly, then sleeps, so consecutive operations within a token cost no system
 calls. Matrix-vector products smaller than 2^18 weights, and small attention
 steps, run on the calling thread only.
 
-On a 4-vCPU VM, `-t 4` is about 1.8× faster than `-t 1` for a dim-512 model and
-about 3.2× faster for a dim-2048 model. Threading never changes the output:
+On a 4-vCPU VM with the avx512vnni build, `-t 4` decodes a dim-2048 Q4 model at
+181 tok/s, against 53 tok/s for `-t 1`. Threading never changes the output:
 `-t N` produces logits bit-identical to `-t 1`.
+
+### Performance notes
+
+- **Q4 or Q8:** prefer Q4 on large models. Decoding is limited by memory
+  bandwidth, and Q4 moves 45% fewer bytes. With packed kernels, Q4 is the
+  faster format on every ISA that has them.
+- **Prompts:** long prompts are processed in batches of 32 tokens. That is 2–6×
+  faster than token by token, depending on the ISA and the model size.
+- **Memory:** packing makes one copy of the weights at load and then releases
+  the originals' pages. If a device cannot hold two copies of the model even
+  briefly, use `--no-pack`.
 
 ## Limits
 

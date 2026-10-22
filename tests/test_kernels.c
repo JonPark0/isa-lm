@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "config/ml_config.h"
+#include "core/pack.h"
 #include "core/quant_ref.h"
 #include "tests/tt.h"
 
@@ -27,7 +28,7 @@ static wbuf make_w(int rows, int cols, int type, int unit_scale) {
     for (size_t i = 0; i < nq; i++)
         b.q[i] = type == ML_Q4_0 ? (int8_t)(urand() & 0xFF) : (int8_t)((int)(urand() % 255) - 127);
     for (int i = 0; i < rows * cols / QK; i++) b.d[i] = unit_scale ? 1.0f : frand(0.001f, 0.05f);
-    b.W = (ml_qtensor){ b.q, b.d, rows, cols, (uint8_t)type };
+    b.W = (ml_qtensor){ b.q, b.d, rows, cols, (uint8_t)type, NULL, NULL };
     return b;
 }
 
@@ -91,6 +92,88 @@ static void check_matvec(int type, int unit) {
         free(w.q); free(w.d); free(x.q); free(x.d); free(y1); free(y2);
     }
 }
+
+/* Packed (row-interleaved) kernels, when the build has them: pack W with the
+ * bound layout, run ml_k_matvec_*_pk, compare to the scalar row-major result. */
+static void check_matvec_pk(int type, int unit) {
+#if ML_PACK_G
+    static const int rows_l[] = { 1, 3, ML_PACK_G, ML_PACK_G + 1, 3 * ML_PACK_G + 5 }, cols_l[] = { 32, 96, 256 };
+    for (int ri = 0; ri < 5; ri++) for (int ci = 0; ci < 3; ci++) for (int r0 = 0; r0 <= ML_PACK_G; r0 += ML_PACK_G) {
+        const int rows = rows_l[ri], cols = cols_l[ci];
+        if (r0 >= rows) continue;
+        wbuf w = make_w(rows, cols, type, unit);
+        ml_qtensor P = w.W;
+        uint8_t *pq = xalloc(ml_pack_quant_bytes(&w.W, ML_PACK_G));
+        float *pd = xalloc(ml_pack_scale_bytes(&w.W, ML_PACK_G));
+        ml_pack(&w.W, pq, pd, ML_PACK_G, ML_PACK_Q8_OFFSET);
+        P.pq = pq; P.pd = pd;
+        ml_qact x = make_x(cols, unit);
+        float *y1 = xalloc(sizeof(float) * rows), *y2 = xalloc(sizeof(float) * rows);
+        for (int i = 0; i < rows; i++) y1[i] = 12345.0f;
+        if (type == ML_Q8_0) { ml_k_matvec_q8_pk(y1, &P, &x, r0, rows); ml_k_matvec_q8_scalar(y2, &w.W, &x, 0, rows); }
+        else { ml_k_matvec_q4_pk(y1, &P, &x, r0, rows); ml_k_matvec_q4_scalar(y2, &w.W, &x, 0, rows); }
+        for (int r = 0; r < rows; r++) {
+            if (r < r0) { TT_ASSERT(y1[r] == 12345.0f); continue; }
+            ref_matvec_row(&w.W, &x, r);
+            if (unit) TT_ASSERT(y1[r] == y2[r]);
+            else TT_CLOSE(y1[r], y2[r], 1e-5, ref_scale);
+        }
+        free(w.q); free(w.d); free(pq); free(pd); free(x.q); free(x.d); free(y1); free(y2);
+    }
+#else
+    (void)type; (void)unit;
+#endif
+}
+
+/* Batched (prefill) kernels: every token's column must equal the packed
+ * matvec result bit for bit, for token counts around the kernel's tile. */
+static void check_matmul_pk(int type, int unit) {
+#if ML_PACK_G
+    static const int ns[] = { 1, 3, 4, 5, 9 };
+    const int rows = 3 * ML_PACK_G + 5, cols = 96, r0 = ML_PACK_G;
+    wbuf w = make_w(rows, cols, type, unit);
+    ml_qtensor P = w.W;
+    uint8_t *pq = xalloc(ml_pack_quant_bytes(&w.W, ML_PACK_G));
+    float *pd = xalloc(ml_pack_scale_bytes(&w.W, ML_PACK_G));
+    ml_pack(&w.W, pq, pd, ML_PACK_G, ML_PACK_Q8_OFFSET);
+    P.pq = pq; P.pd = pd;
+    for (int ni = 0; ni < 5; ni++) {
+        const int n = ns[ni], ldy = rows + 3;
+        ml_qbatch X = { xalloc(n * cols), xalloc(sizeof(float) * n * cols / QK), n, cols };
+        for (int t = 0; t < n; t++) {
+            ml_qact xt = make_x(cols, unit);
+            memcpy(X.q + t * cols, xt.q, cols);
+            memcpy(X.d + t * (cols / QK), xt.d, sizeof(float) * cols / QK);
+            free(xt.q); free(xt.d);
+        }
+        float *Y = xalloc(sizeof(float) * n * ldy), *yv = xalloc(sizeof(float) * rows);
+        for (int i = 0; i < n * ldy; i++) Y[i] = 12345.0f;
+        if (type == ML_Q8_0) ml_k_matmul_q8_pk(Y, ldy, &P, &X, r0, rows);
+        else ml_k_matmul_q4_pk(Y, ldy, &P, &X, r0, rows);
+        for (int t = 0; t < n; t++) {
+            ml_qact xt = { X.q + t * cols, X.d + t * (cols / QK), cols };
+            if (type == ML_Q8_0) ml_k_matvec_q8_pk(yv, &P, &xt, r0, rows);
+            else ml_k_matvec_q4_pk(yv, &P, &xt, r0, rows);
+            for (int r = 0; r < ldy; r++) {
+                if (r < r0 || r >= rows) TT_ASSERT(Y[t * ldy + r] == 12345.0f);
+                else TT_ASSERT(Y[t * ldy + r] == yv[r]);
+            }
+        }
+        free(X.q); free(X.d); free(Y); free(yv);
+    }
+    free(w.q); free(w.d); free(pq); free(pd);
+#else
+    (void)type; (void)unit;
+#endif
+}
+
+static void test_matmul_q8_pk(void) { check_matmul_pk(ML_Q8_0, 0); }
+static void test_matmul_q4_pk(void) { check_matmul_pk(ML_Q4_0, 0); }
+
+static void test_matvec_q8_pk_exact(void)  { check_matvec_pk(ML_Q8_0, 1); }
+static void test_matvec_q8_pk_scaled(void) { check_matvec_pk(ML_Q8_0, 0); }
+static void test_matvec_q4_pk_exact(void)  { check_matvec_pk(ML_Q4_0, 1); }
+static void test_matvec_q4_pk_scaled(void) { check_matvec_pk(ML_Q4_0, 0); }
 
 static void test_matvec_q8_exact(void)  { check_matvec(ML_Q8_0, 1); }
 static void test_matvec_q8_scaled(void) { check_matvec(ML_Q8_0, 0); }
@@ -263,10 +346,22 @@ int TT_ENTRY(int argc, char **argv) {
     printf("ISA: %s\n", ML_ISA_NAME);
     SHOW(matvec_q8); SHOW(matvec_q4); SHOW(quantize_q8); SHOW(rmsnorm); SHOW(softmax);
     SHOW(rope); SHOW(silu_mul); SHOW(add); SHOW(dot_f32); SHOW(axpy_f32);
+#if ML_PACK_G
+    SHOW(matvec_q8_pk); SHOW(matvec_q4_pk);
+    printf("pack: %d rows, q8 offset %d\n", ML_PACK_G, ML_PACK_Q8_OFFSET);
+#else
+    printf("pack: none\n");
+#endif
     TT_RUN(test_matvec_q8_exact);
     TT_RUN(test_matvec_q8_scaled);
     TT_RUN(test_matvec_q4_exact);
     TT_RUN(test_matvec_q4_scaled);
+    TT_RUN(test_matvec_q8_pk_exact);
+    TT_RUN(test_matvec_q8_pk_scaled);
+    TT_RUN(test_matvec_q4_pk_exact);
+    TT_RUN(test_matvec_q4_pk_scaled);
+    TT_RUN(test_matmul_q8_pk);
+    TT_RUN(test_matmul_q4_pk);
     TT_RUN(test_quantize_q8_bitexact);
     TT_RUN(test_rmsnorm);
     TT_RUN(test_softmax);

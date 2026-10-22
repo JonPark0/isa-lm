@@ -73,7 +73,7 @@ static void test_q4_roundtrip(void) {
     int k = 64;
     for (int i = 0; i < k; i++) xbuf[i] = frand(-2, 2);
     ml_quantize_row_q4(qbuf, dbuf, xbuf, k);
-    ml_qtensor W = { qbuf, dbuf, 1, k, ML_Q4_0 };
+    ml_qtensor W = { qbuf, dbuf, 1, k, ML_Q4_0, NULL, NULL };
     float out[64];
     ml_dequant_row(out, &W, 0);
     for (int i = 0; i < k; i++) {

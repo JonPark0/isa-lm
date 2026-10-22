@@ -28,6 +28,7 @@ typedef struct {
     ml_qtensor tok_emb, wcls;
     const float *final_norm;
     ml_layer *layers;
+    void *pack_mem;   /* row-interleaved weight copies (ml_model_pack), or NULL */
 } ml_model;
 
 ml_status ml_model_load(ml_model *m, const char *path);

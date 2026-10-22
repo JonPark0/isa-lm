@@ -28,6 +28,9 @@ typedef struct {
     const float *d;
     int rows, cols;
     uint8_t type;
+    /* Row-interleaved copy for the packed kernels (core/pack.h), or NULL. */
+    const uint8_t *pq;
+    const float *pd;
 } ml_qtensor;
 
 /* Q8_0 quantized activation vector of length n. */
@@ -36,6 +39,13 @@ typedef struct {
     float *d;
     int n;
 } ml_qact;
+
+/* n Q8_0 activation vectors of length k: token t is q + t*k, d + t*(k/QK). */
+typedef struct {
+    int8_t *q;
+    float *d;
+    int n, k;
+} ml_qbatch;
 
 const char *ml_status_str(ml_status s);
 

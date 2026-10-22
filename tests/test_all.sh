@@ -60,6 +60,12 @@ if [ ! -f $M/stories15M.mlb ]; then
 fi
 if [ -f $M/stories15M.mlb ] && [ -f $M/tokenizer.bin ]; then
     row "stories15M generate (avx2)" "build/avx2/ml_run $M/stories15M.mlb -z $M/tokenizer.bin -i 'Once upon a time' -n 64 -T 0 | tee $LOG/stories15M.txt | grep -q -E '[a-z]+ [a-z]+ [a-z]+'"
+    # logits vs the numpy reference: argmax, top-5 and KL (see compare_logits.py --kl)
+    S=1,9038,2501,263,931,727,471,263,2217,7826
+    python3 tools/ref_forward.py $M/stories15M.mlb --tokens $S --out $LOG/s_ref.f32
+    for b in scalar avx2; do for p in "" --no-pack; do
+        row "stories15M logits $b ${p:-packed}" "build/$b/ml_run $M/stories15M.mlb --tokens $S --dump-logits $LOG/s.f32 $p && python3 tests/compare_logits.py $LOG/s.f32 $LOG/s_ref.f32 32000 --kl 1e-2"
+    done; done
 else skip "stories15M generate" "download blocked"; rm -f $M/stories15M.bin; fi
 
 echo; echo "== summary =="; printf "$rows"

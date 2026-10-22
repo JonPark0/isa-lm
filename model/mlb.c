@@ -21,7 +21,7 @@ static const void *take(cursor *c, size_t nbytes) {
 }
 
 static ml_qtensor take_mat(cursor *c, int rows, int cols, int type) {
-    ml_qtensor t = { NULL, NULL, rows, cols, (uint8_t)type };
+    ml_qtensor t = { NULL, NULL, rows, cols, (uint8_t)type, NULL, NULL };
     size_t n, nd;
     if (!ml_mul_size((size_t)rows, (size_t)cols, &n) || !ml_mul_size(n / QK, sizeof(float), &nd)) {
         c->ok = 0;   /* cannot fit in this address space, let alone this file */
@@ -110,6 +110,8 @@ ml_status ml_model_load(ml_model *m, const char *path) {
 }
 
 void ml_model_free(ml_model *m) {
+    ml_aligned_free(m->pack_mem);
+    m->pack_mem = NULL;
     free(m->layers);
     m->layers = NULL;
     ml_file_unmap(&m->file);

@@ -3,6 +3,10 @@
 #include "config/ml_config.h"
 #include "ops/ops.h"
 
+/* Below this many weights a matvec finishes faster than threads can be woken
+ * and joined, so it runs on the caller alone. */
+#define PARALLEL_MIN_WEIGHTS (1 << 18)
+
 typedef struct {
     float *y;
     const ml_qtensor *W;
@@ -12,23 +16,66 @@ typedef struct {
 static void matvec_task(void *p, int tid, int nt) {
     const matvec_ctx *c = p;
     const int rows = c->W->rows;
+    /* chunks start on a packed group (or 4-row) boundary */
+    const int align = c->W->pq ? ML_PACK_G : 4;
     int chunk = (rows + nt - 1) / nt;
-    chunk = (chunk + 3) & ~3;
+    chunk = (chunk + align - 1) / align * align;
     const int r0 = tid * chunk;
     const int r1 = r0 + chunk < rows ? r0 + chunk : rows;
     if (r0 >= r1) return;
+#if ML_PACK_G
+    if (c->W->pq) {
+        if (c->W->type == ML_Q8_0) ml_k_matvec_q8_pk(c->y, c->W, c->x, r0, r1);
+        else ml_k_matvec_q4_pk(c->y, c->W, c->x, r0, r1);
+        return;
+    }
+#endif
     if (c->W->type == ML_Q8_0) ml_k_matvec_q8(c->y, c->W, c->x, r0, r1);
     else ml_k_matvec_q4(c->y, c->W, c->x, r0, r1);
 }
 
-/* Below this many weights a matvec finishes faster than threads can be woken
- * and joined, so it runs on the caller alone. */
-#define PARALLEL_MIN_WEIGHTS (1 << 18)
 
 void ml_matvec(ml_pool *pool, float *y, const ml_qtensor *W, const ml_qact *x) {
     matvec_ctx c = { y, W, x };
     if ((size_t)W->rows * W->cols < PARALLEL_MIN_WEIGHTS) matvec_task(&c, 0, 1);
     else ml_pool_run(pool, matvec_task, &c);
+}
+
+typedef struct {
+    float *Y;
+    int ldy;
+    const ml_qtensor *W;
+    const ml_qbatch *X;
+} matmul_ctx;
+
+static void matmul_task(void *p, int tid, int nt) {
+    const matmul_ctx *c = p;
+    const int rows = c->W->rows;
+    const int align = c->W->pq ? ML_PACK_G : 4;
+    int chunk = (rows + nt - 1) / nt;
+    chunk = (chunk + align - 1) / align * align;
+    const int r0 = tid * chunk;
+    const int r1 = r0 + chunk < rows ? r0 + chunk : rows;
+    if (r0 >= r1) return;
+#if ML_PACK_G
+    if (c->W->pq) {
+        if (c->W->type == ML_Q8_0) ml_k_matmul_q8_pk(c->Y, c->ldy, c->W, c->X, r0, r1);
+        else ml_k_matmul_q4_pk(c->Y, c->ldy, c->W, c->X, r0, r1);
+        return;
+    }
+#endif
+    for (int t = 0; t < c->X->n; t++) {
+        const ml_qact xt = { c->X->q + (size_t)t * c->X->k, c->X->d + (size_t)t * (c->X->k / QK), c->X->k };
+        float *y = c->Y + (size_t)t * c->ldy;
+        if (c->W->type == ML_Q8_0) ml_k_matvec_q8(y, c->W, &xt, r0, r1);
+        else ml_k_matvec_q4(y, c->W, &xt, r0, r1);
+    }
+}
+
+void ml_matmul(ml_pool *pool, float *Y, int ldy, const ml_qtensor *W, const ml_qbatch *X) {
+    matmul_ctx c = { Y, ldy, W, X };
+    if ((size_t)W->rows * W->cols * X->n < PARALLEL_MIN_WEIGHTS) matmul_task(&c, 0, 1);
+    else ml_pool_run(pool, matmul_task, &c);
 }
 
 typedef struct {
