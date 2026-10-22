@@ -6,7 +6,7 @@
  * sdot per instruction. The operands come from the NEON dotprod layout
  * (4-row groups, 4-byte steps): zipping the 32-bit lanes of steps 2j and
  * 2j + 1 gives rows 0-1 and rows 2-3 as 8 consecutive bytes each. Activations
- * are paired by token the same way. The block sums are the same integers the
+ * are paired by token once per tile (make_pairs). The block sums are the same integers the
  * dotprod matvec computes, and are scaled with the same float operations, so
  * every token's result equals the matvec's bit for bit. */
 #define PK 4
@@ -34,32 +34,18 @@ static inline void zip_steps(int8x16_t *w01, int8x16_t *w23, int8x16_t a, int8x1
     *w23 = vreinterpretq_s8_s32(vzip2q_s32(vreinterpretq_s32_s8(a), vreinterpretq_s32_s8(b)));
 }
 
-/* Block sums of the group's 4 rows for tokens a and b (one block each). */
-static inline void mm_block(int32x4_t *sa, int32x4_t *sb, const int8x16_t w01[4], const int8x16_t w23[4],
-                            const int8_t *xa, const int8_t *xb) {
-    const int64x2_t a0 = vreinterpretq_s64_s8(vld1q_s8(xa)), a1 = vreinterpretq_s64_s8(vld1q_s8(xa + 16));
-    const int64x2_t b0 = vreinterpretq_s64_s8(vld1q_s8(xb)), b1 = vreinterpretq_s64_s8(vld1q_s8(xb + 16));
-    const int8x16_t xx[4] = {
-        vreinterpretq_s8_s64(vzip1q_s64(a0, b0)), vreinterpretq_s8_s64(vzip2q_s64(a0, b0)),
-        vreinterpretq_s8_s64(vzip1q_s64(a1, b1)), vreinterpretq_s8_s64(vzip2q_s64(a1, b1)),
-    };
-    int32x4_t m01 = vdupq_n_s32(0), m23 = vdupq_n_s32(0);
-    for (int j = 0; j < 4; j++) {
-        m01 = vmmlaq_s32(m01, w01[j], xx[j]);   /* [r0a, r0b, r1a, r1b] */
-        m23 = vmmlaq_s32(m23, w23[j], xx[j]);   /* [r2a, r2b, r3a, r3b] */
-    }
-    *sa = vuzp1q_s32(m01, m23);
-    *sb = vuzp2q_s32(m01, m23);
-}
-
 static inline void q8_operands(int8x16_t w01[4], int8x16_t w23[4], const int8_t *p) {
-    for (int j = 0; j < 4; j++) zip_steps(&w01[j], &w23[j], vld1q_s8(p + 32 * j), vld1q_s8(p + 32 * j + 16));
+    zip_steps(&w01[0], &w23[0], vld1q_s8(p), vld1q_s8(p + 16));
+    zip_steps(&w01[1], &w23[1], vld1q_s8(p + 32), vld1q_s8(p + 48));
+    zip_steps(&w01[2], &w23[2], vld1q_s8(p + 64), vld1q_s8(p + 80));
+    zip_steps(&w01[3], &w23[3], vld1q_s8(p + 96), vld1q_s8(p + 112));
 }
 
 /* Q4: vector v holds step v in its low nibbles and step v + 4 in its high ones;
  * nibbles (0..15) are valid signed bytes, and 8 * sum(x) is subtracted later. */
 static inline void q4_operands(int8x16_t w01[4], int8x16_t w23[4], const uint8_t *p) {
     const uint8x16_t m4 = vdupq_n_u8(0x0F);
+    _Pragma("GCC unroll 2")
     for (int j = 0; j < 2; j++) {
         const uint8x16_t a = vld1q_u8(p + 32 * j), b = vld1q_u8(p + 32 * j + 16);
         zip_steps(&w01[j], &w23[j], vreinterpretq_s8_u8(vandq_u8(a, m4)), vreinterpretq_s8_u8(vandq_u8(b, m4)));
@@ -67,34 +53,74 @@ static inline void q4_operands(int8x16_t w01[4], int8x16_t w23[4], const uint8_t
     }
 }
 
+/* The tile's activations as smmla operands, built once per tile: pair q holds
+ * tokens 2q and 2q + 1 (an odd last token is paired with itself), and entry
+ * 4b + j holds bytes 8j..8j+7 of block b of both. */
+static _Thread_local int8x16_t xpair[PK_TILE / 2][PK_MAX_BLOCKS * 4];
+
+static void make_pairs(const ml_qbatch *X, int t0, int T, int nb) {
+    for (int q = 0; 2 * q < T; q++) {
+        const int8_t *xa = X->q + (size_t)(t0 + 2 * q) * X->k;
+        const int8_t *xb = X->q + (size_t)(t0 + (2 * q + 1 < T ? 2 * q + 1 : 2 * q)) * X->k;
+        for (int b = 0; b < nb; b++) {
+            const int64x2_t a0 = vreinterpretq_s64_s8(vld1q_s8(xa + b * QK)), a1 = vreinterpretq_s64_s8(vld1q_s8(xa + b * QK + 16));
+            const int64x2_t b0 = vreinterpretq_s64_s8(vld1q_s8(xb + b * QK)), b1 = vreinterpretq_s64_s8(vld1q_s8(xb + b * QK + 16));
+            int8x16_t *o = xpair[q] + 4 * b;
+            o[0] = vreinterpretq_s8_s64(vzip1q_s64(a0, b0));
+            o[1] = vreinterpretq_s8_s64(vzip2q_s64(a0, b0));
+            o[2] = vreinterpretq_s8_s64(vzip1q_s64(a1, b1));
+            o[3] = vreinterpretq_s8_s64(vzip2q_s64(a1, b1));
+        }
+    }
+}
+
+/* One row group against NP token pairs. Called with a constant NP, so the
+ * accumulators stay in registers. */
+#define GROUP_TILE(OPERANDS, PTYPE, STEPS, Q4, NP)                                \
+    do {                                                                          \
+        float32x4_t acc[2 * (NP)];                                                \
+        _Pragma("GCC unroll 8")                                                   \
+        for (int i = 0; i < 2 * (NP); i++) acc[i] = vdupq_n_f32(0.0f);            \
+        const PTYPE *pp = p;                                                      \
+        for (int b = 0; b < nb; b++, pp += STEPS * PK * 4) {                      \
+            const float32x4_t dv = vld1q_f32(d + b * PK);                         \
+            int8x16_t w01[4], w23[4];                                             \
+            OPERANDS(w01, w23, pp);                                               \
+            _Pragma("GCC unroll 4")                                               \
+            for (int q = 0; q < (NP); q++) {                                      \
+                const int8x16_t *xx = xpair[q] + 4 * b;                           \
+                int32x4_t m01 = vmmlaq_s32(vdupq_n_s32(0), w01[0], xx[0]);        \
+                int32x4_t m23 = vmmlaq_s32(vdupq_n_s32(0), w23[0], xx[0]);        \
+                m01 = vmmlaq_s32(m01, w01[1], xx[1]); m23 = vmmlaq_s32(m23, w23[1], xx[1]); \
+                m01 = vmmlaq_s32(m01, w01[2], xx[2]); m23 = vmmlaq_s32(m23, w23[2], xx[2]); \
+                m01 = vmmlaq_s32(m01, w01[3], xx[3]); m23 = vmmlaq_s32(m23, w23[3], xx[3]); \
+                int32x4_t s0 = vuzp1q_s32(m01, m23), s1 = vuzp2q_s32(m01, m23);   \
+                const int u0 = 2 * q, u1 = 2 * q + 1 < T ? 2 * q + 1 : 2 * q;     \
+                if (Q4) { s0 = vsubq_s32(s0, vdupq_n_s32(xsum[u0][b])); s1 = vsubq_s32(s1, vdupq_n_s32(xsum[u1][b])); } \
+                acc[2 * q] = vfmaq_f32(acc[2 * q], vcvtq_f32_s32(s0), vmulq_n_f32(dv, X->d[(size_t)(t0 + u0) * nb + b])); \
+                acc[2 * q + 1] = vfmaq_f32(acc[2 * q + 1], vcvtq_f32_s32(s1), vmulq_n_f32(dv, X->d[(size_t)(t0 + u1) * nb + b])); \
+            }                                                                     \
+        }                                                                         \
+        _Pragma("GCC unroll 8")                                                   \
+        for (int t = 0; t < 2 * (NP); t++) if (t < T) pk_store(Y + (size_t)(t0 + t) * ldy, acc[t], row, r1); \
+    } while (0)
+
 #define PK_MATMUL(OPERANDS, PTYPE, STEPS, Q4)                                     \
     const int nb = W->cols / QK;                                                  \
     static _Thread_local int xsum[PK_TILE][PK_MAX_BLOCKS];                        \
     for (int t0 = 0; t0 < X->n; t0 += PK_TILE) {                                  \
         const int T = X->n - t0 < PK_TILE ? X->n - t0 : PK_TILE;                  \
         if (Q4) for (int t = 0; t < T; t++) xsums(xsum[t], X->q + (size_t)(t0 + t) * X->k, nb); \
+        make_pairs(X, t0, T, nb);                                                 \
         for (int row = r0; row < r1; row += PK) {                                 \
             const PTYPE *p = (const PTYPE *)W->pq + (size_t)(row / PK) * nb * (STEPS * PK * 4); \
             const float *d = W->pd + (size_t)(row / PK) * nb * PK;                \
-            float32x4_t acc[PK_TILE];                                             \
-            for (int t = 0; t < PK_TILE; t++) acc[t] = vdupq_n_f32(0.0f);         \
-            for (int b = 0; b < nb; b++, p += STEPS * PK * 4) {                   \
-                const float32x4_t dv = vld1q_f32(d + b * PK);                     \
-                int8x16_t w01[4], w23[4];                                         \
-                OPERANDS(w01, w23, p);                                            \
-                for (int t = 0; t < T; t += 2) {                                  \
-                    const int u = t + 1 < T ? t + 1 : t;   /* odd tail: pair with itself */ \
-                    int32x4_t s[2];                                               \
-                    mm_block(&s[0], &s[1], w01, w23, X->q + (size_t)(t0 + t) * X->k + b * QK, \
-                             X->q + (size_t)(t0 + u) * X->k + b * QK);            \
-                    for (int i = 0; i < 2 && t + i < T; i++) {                    \
-                        const int32x4_t si = Q4 ? vsubq_s32(s[i], vdupq_n_s32(xsum[t + i][b])) : s[i]; \
-                        acc[t + i] = vfmaq_f32(acc[t + i], vcvtq_f32_s32(si),     \
-                                               vmulq_n_f32(dv, X->d[(size_t)(t0 + t + i) * nb + b])); \
-                    }                                                             \
-                }                                                                 \
+            switch ((T + 1) / 2) {                                                \
+            case 4: GROUP_TILE(OPERANDS, PTYPE, STEPS, Q4, 4); break;             \
+            case 3: GROUP_TILE(OPERANDS, PTYPE, STEPS, Q4, 3); break;             \
+            case 2: GROUP_TILE(OPERANDS, PTYPE, STEPS, Q4, 2); break;             \
+            default: GROUP_TILE(OPERANDS, PTYPE, STEPS, Q4, 1); break;            \
             }                                                                     \
-            for (int t = 0; t < T; t++) pk_store(Y + (size_t)(t0 + t) * ldy, acc[t], row, r1); \
         }                                                                         \
     }
 

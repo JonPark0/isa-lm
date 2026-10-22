@@ -96,45 +96,51 @@ void ml_k_matvec_q4_pk_neon_dotprod(float *y, const ml_qtensor *W, const ml_qact
 }
 
 /* Batched: the weight block stays in L1 across the tile's tokens; per token
- * the arithmetic is the matvec's. */
-void ml_k_matmul_q8_pk_neon_dotprod(float *Y, int ldy, const ml_qtensor *W, const ml_qbatch *X, int r0, int r1) {
-    const int nb = W->cols / QK;
-    for (int t0 = 0; t0 < X->n; t0 += PK_TILE) {
-        const int T = X->n - t0 < PK_TILE ? X->n - t0 : PK_TILE;
-        for (int row = r0; row < r1; row += PK) {
-            const int8_t *p = (const int8_t *)W->pq + (size_t)(row / PK) * nb * (8 * PK * 4);
-            const float *d = W->pd + (size_t)(row / PK) * nb * PK;
-            float32x4_t acc[PK_TILE];
-            for (int t = 0; t < PK_TILE; t++) acc[t] = vdupq_n_f32(0.0f);
-            for (int b = 0; b < nb; b++, p += 8 * PK * 4) {
-                const float32x4_t dv = vld1q_f32(d + b * PK);
-                for (int t = 0; t < T; t++)
-                    acc[t] = vfmaq_f32(acc[t], vcvtq_f32_s32(q8_block(p, X->q + (size_t)(t0 + t) * X->k + b * QK)),
-                                       vmulq_n_f32(dv, X->d[(size_t)(t0 + t) * nb + b]));
-            }
-            for (int t = 0; t < T; t++) pk_store(Y + (size_t)(t0 + t) * ldy, acc[t], row, r1);
-        }
+ * the arithmetic is the matvec's. GROUP_TILE runs one row group against NT
+ * tokens; it is used with a constant NT, so the accumulators stay in
+ * registers. */
+#define GROUP_TILE(BLOCK, PTYPE, STEPS, NT)                                       \
+    do {                                                                          \
+        float32x4_t acc[NT];                                                      \
+        _Pragma("GCC unroll 4")                                                   \
+        for (int t = 0; t < (NT); t++) acc[t] = vdupq_n_f32(0.0f);                \
+        const PTYPE *pp = p;                                                      \
+        for (int b = 0; b < nb; b++, pp += STEPS * PK * 4) {                      \
+            const float32x4_t dv = vld1q_f32(d + b * PK);                         \
+            _Pragma("GCC unroll 4")                                               \
+            for (int t = 0; t < (NT); t++)                                        \
+                acc[t] = vfmaq_f32(acc[t], vcvtq_f32_s32(BLOCK(t)),               \
+                                   vmulq_n_f32(dv, X->d[(size_t)(t0 + t) * nb + b])); \
+        }                                                                         \
+        _Pragma("GCC unroll 4")                                                   \
+        for (int t = 0; t < (NT); t++) pk_store(Y + (size_t)(t0 + t) * ldy, acc[t], row, r1); \
+    } while (0)
+
+#define PK_MATMUL(BLOCK, PTYPE, STEPS, Q4)                                        \
+    const int nb = W->cols / QK;                                                  \
+    static _Thread_local int xsum[PK_TILE][PK_MAX_BLOCKS];                        \
+    for (int t0 = 0; t0 < X->n; t0 += PK_TILE) {                                  \
+        const int T = X->n - t0 < PK_TILE ? X->n - t0 : PK_TILE;                  \
+        if (Q4) for (int t = 0; t < T; t++) xsums(xsum[t], X->q + (size_t)(t0 + t) * X->k, nb); \
+        for (int row = r0; row < r1; row += PK) {                                 \
+            const PTYPE *p = (const PTYPE *)W->pq + (size_t)(row / PK) * nb * (STEPS * PK * 4); \
+            const float *d = W->pd + (size_t)(row / PK) * nb * PK;                \
+            switch (T) {                                                          \
+            case 4: GROUP_TILE(BLOCK, PTYPE, STEPS, 4); break;                    \
+            case 3: GROUP_TILE(BLOCK, PTYPE, STEPS, 3); break;                    \
+            case 2: GROUP_TILE(BLOCK, PTYPE, STEPS, 2); break;                    \
+            default: GROUP_TILE(BLOCK, PTYPE, STEPS, 1); break;                   \
+            }                                                                     \
+        }                                                                         \
     }
+
+#define Q8_TOKEN(t) q8_block(pp, X->q + (size_t)(t0 + (t)) * X->k + b * QK)
+#define Q4_TOKEN(t) q4_block(pp, X->q + (size_t)(t0 + (t)) * X->k + b * QK, xsum[t][b])
+
+void ml_k_matmul_q8_pk_neon_dotprod(float *Y, int ldy, const ml_qtensor *W, const ml_qbatch *X, int r0, int r1) {
+    PK_MATMUL(Q8_TOKEN, int8_t, 8, 0)
 }
 
 void ml_k_matmul_q4_pk_neon_dotprod(float *Y, int ldy, const ml_qtensor *W, const ml_qbatch *X, int r0, int r1) {
-    const int nb = W->cols / QK;
-    static _Thread_local int xsum[PK_TILE][PK_MAX_BLOCKS];
-    for (int t0 = 0; t0 < X->n; t0 += PK_TILE) {
-        const int T = X->n - t0 < PK_TILE ? X->n - t0 : PK_TILE;
-        for (int t = 0; t < T; t++) xsums(xsum[t], X->q + (size_t)(t0 + t) * X->k, nb);
-        for (int row = r0; row < r1; row += PK) {
-            const uint8_t *p = W->pq + (size_t)(row / PK) * nb * (4 * PK * 4);
-            const float *d = W->pd + (size_t)(row / PK) * nb * PK;
-            float32x4_t acc[PK_TILE];
-            for (int t = 0; t < PK_TILE; t++) acc[t] = vdupq_n_f32(0.0f);
-            for (int b = 0; b < nb; b++, p += 4 * PK * 4) {
-                const float32x4_t dv = vld1q_f32(d + b * PK);
-                for (int t = 0; t < T; t++)
-                    acc[t] = vfmaq_f32(acc[t], vcvtq_f32_s32(q4_block(p, X->q + (size_t)(t0 + t) * X->k + b * QK, xsum[t][b])),
-                                       vmulq_n_f32(dv, X->d[(size_t)(t0 + t) * nb + b]));
-            }
-            for (int t = 0; t < T; t++) pk_store(Y + (size_t)(t0 + t) * ldy, acc[t], row, r1);
-        }
-    }
+    PK_MATMUL(Q4_TOKEN, uint8_t, 4, 1)
 }
