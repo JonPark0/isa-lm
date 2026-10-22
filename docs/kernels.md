@@ -92,6 +92,12 @@ An ISA may also add only a matmul on another ISA's layout, as `neon_i8mm` does
 on the NEON dotprod one: define `ML_HAS_MATMUL_PK_<ISA>` and put it in the
 matmul chain only.
 
+Write a matmul's tile as an `ML_INLINE` function of the token count, mark its
+loops over tokens `ML_UNROLL`, and call it through `PK_TILES`
+(`kernels/x86_pack.h`), which passes the count as a constant. GCC otherwise
+keeps the per-token accumulators on the stack, which costs up to 1.6× in
+prefill speed.
+
 The tests hold packed kernels to these rules:
 
 - **Matvec:** must match the scalar row-major kernel. It is bit-exact with unit

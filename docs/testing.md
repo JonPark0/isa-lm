@@ -157,14 +157,19 @@ avx2 and 129–139 GOPS on avx512vnni.
 
 | ISA        | Q8 `--batch 1` | Q8 batched | Q4 `--batch 1` | Q4 batched |
 |------------|---------------:|-----------:|---------------:|-----------:|
-| sse2       | 34.9 |  93.3 |  73.3 |  89.1 |
-| sse41      | 30.4 |  77.8 |  92.9 | 122.7 |
-| avx2       | 41.4 | 171.7 | 156.4 | 292.0 |
-| avxvnni    | 44.5 | 196.7 | 152.7 | 293.1 |
-| avx512vnni | 67.4 | 229.1 | 211.1 | 383.7 |
+| sse2       | 34.9 | 100.8 |  73.3 |  92.9 |
+| sse41      | 30.4 | 114.4 |  92.9 | 178.2 |
+| avx2       | 41.4 | 202.7 | 156.4 | 394.9 |
+| avxvnni    | 44.5 | 311.9 | 152.7 | 484.2 |
+| avx512vnni | 67.4 | 339.3 | 211.1 | 558.3 |
 
 Packing the SSE2 build raised its Q8 prefill from 51 to 93 tok/s and its Q8
 decode from 16 to 24 tok/s; Q4 decode went from 23 to about 40 tok/s.
+
+The batched kernels run each tile through a body instantiated for a constant
+token count (`PK_TILES`, `ML_UNROLL`), so the per-token accumulators stay in
+registers. Before that, GCC kept them on the stack, and batched prefill was
+1.2–1.6× slower (avx2 Q4 292, avxvnni Q8 197, avx512vnni Q4 384 tok/s).
 
 **Arm, single thread** (GitHub `ubuntu-24.04-arm` runner, Neoverse-class
 cores). These numbers come from the CI benchmark step, which publishes them as
@@ -172,12 +177,14 @@ annotations. The model is dim 1024, 4 layers, hidden 2816.
 
 | ISA | Q4 4096² GOPS (row-major → packed) | Q4 decode tok/s | Q4 prefill tok/s | Q8 prefill tok/s |
 |-----|-----------------------------------:|----------------:|-----------------:|-----------------:|
-| neon (no dot product) | 15.9 → 29.8 | 133 → 231 | 181 → 325 | 220 → 285 |
-| neon_dotprod | 28.0 → 64.9 | 210 → 412 | 316 → 793 | 418 → 895 |
+| neon (no dot product) | 16.7 → 30.6 | 152 → 267 | 184 → 326 | 224 → 290 |
+| neon_dotprod | 29.5 → 67.6 | 261 → 550 | 320 → 948 | 436 → 1144 |
+| neon_i8mm | 29.5 → 67.6 | 261 → 550 | 320 → 1167 | 433 → 1418 |
 
 The neon_dotprod packed kernels use `vdotq_laneq_s32`, so each step reads its 4
-activation bytes from a vector lane instead of broadcasting them. That alone
-raised Q8 prefill from 426 to 895 tok/s.
+activation bytes from a vector lane instead of broadcasting them. neon_i8mm
+decodes with the same kernels and prefills on `smmla`, 23–24% faster than
+`sdot`.
 
 ## Wiki
 
