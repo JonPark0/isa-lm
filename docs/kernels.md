@@ -67,7 +67,7 @@ deferred reduction, precision is bounded by the magnitude of the products, and
 ## Packed kernels
 
 ISAs with packed kernels implement four more functions over the layout in
-[`core/pack.h`](../core/pack.h):
+[`core/pack.h`](https://github.com/JonPark0/isa-lm/blob/main/core/pack.h):
 
 ```c
 void ml_k_matvec_q8_pk_<isa>(float *y, const ml_qtensor *W, const ml_qact *x, int r0, int r1);

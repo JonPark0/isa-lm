@@ -244,7 +244,12 @@ python3 tools/perplexity.py build/avx2/ml_run llama.mlb llama.mlt wikitext-2-tes
     --ml-tok build/avx2/ml_tok --ctx 512 --chunks 4 -t 4
 ```
 
-## Wiki
+## Docs site and wiki
+
+`docs/` is also the [GitHub Pages site](https://jonpark0.github.io/isa-lm/)
+(Settings → Pages → Deploy from branch `main`, folder `/docs`;
+`docs/_config.yml`, landing page `docs/index.md`). To preview it with the
+`github-pages` gem: `PAGES_REPO_NWO=JonPark0/isa-lm bundle exec jekyll serve -s docs`.
 
 The GitHub wiki is generated from `README.md` and `docs/`; edit those, never
 the wiki. `.github/workflows/wiki.yml` runs `tools/sync_wiki.py` on every push

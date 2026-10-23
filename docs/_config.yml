@@ -1,0 +1,18 @@
+# GitHub Pages (Settings → Pages → Deploy from branch: main, folder /docs)
+title: isa-lm
+description: >-
+  Portable C11 LLM inference for legacy and modern CPUs — INT8/INT4 Llama models on x86-64 (SSE2, SSE4.1, AVX2,
+  AVX-VNNI, AVX-512 VNNI) and ARM (ARMv7 NEON, dotprod, i8mm, SVE) with compile-time kernel selection, Hugging Face
+  tokenizers, chat mode and a numpy-checked reference.
+url: https://jonpark0.github.io
+baseurl: /isa-lm
+theme: jekyll-theme-cayman
+plugins:
+  - jekyll-seo-tag
+  - jekyll-sitemap
+  - jekyll-relative-links
+relative_links:
+  enabled: true
+  collections: false
+exclude:
+  - design/2026-10-22-legacy-isa-ml-runtime-plan.md
