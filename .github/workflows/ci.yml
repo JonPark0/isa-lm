@@ -40,6 +40,11 @@ jobs:
       - name: Full test matrix (includes stories15M download and generation)
         timeout-minutes: 30
         run: make test-all
+      - name: Tokenizer check results
+        if: always()
+        run: |
+          r=$(cat build/test-all/tok_*.log 2>/dev/null | grep -h -E "texts match|skip" | tr '\n' ' ')
+          echo "::notice title=tokenizers vs the tokenizers library::${r:-not run}"
       - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v4
