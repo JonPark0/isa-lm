@@ -83,10 +83,20 @@ def test_refuses_spm_variants(change):
 @pytest.mark.parametrize("change", [
     lambda j: j["pre_tokenizer"]["pretokenizers"][0]["pattern"].update(Regex=r"'s|\w+| ?\d+"),   # GPT-2 style
     lambda j: j["pre_tokenizer"]["pretokenizers"][1].update(add_prefix_space=True),
-    lambda j: j.update(normalizer={"type": "NFC"}),
+    lambda j: j.update(normalizer={"type": "NFKC"}),
+    lambda j: j.update(normalizer={"type": "Sequence", "normalizers": [{"type": "NFC"}, {"type": "Lowercase"}]}),
 ])
 def test_refuses_byte_level_variants(change):
     j = copy.deepcopy(_load("bpe_tiny.json"))
     change(j)
     with pytest.raises(ct.Unsupported):
         ct.convert(j)
+
+
+def test_qwen2_variant_flags():
+    """NFC normalizer and the single-digit regex (Qwen2) set their flags."""
+    j = copy.deepcopy(_load("bpe_tiny.json"))
+    assert not ct.convert(j)[1] & (ct.NFC | ct.DIGITS1)
+    j["normalizer"] = {"type": "NFC"}
+    j["pre_tokenizer"]["pretokenizers"][0]["pattern"]["Regex"] = ct.QWEN2_REGEX
+    assert ct.convert(j)[1] & (ct.NFC | ct.DIGITS1) == ct.NFC | ct.DIGITS1

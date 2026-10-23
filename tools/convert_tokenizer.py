@@ -6,7 +6,8 @@ ml_run -z and ml_tok read (model/bpe.c).
 Supported, and checked before writing:
   - SentencePiece-style BPE with byte fallback (Llama 2, TinyLlama, Mistral):
     a Prepend/Replace normalizer, or a Metaspace pre-tokenizer without split;
-  - byte-level BPE with the Llama 3 pre-tokenizer regex (Llama 3, 3.1, 3.2).
+  - byte-level BPE with the Llama 3 pre-tokenizer regex (Llama 3, 3.1, 3.2),
+    or its single-digit variant after an NFC normalizer (Qwen2, Qwen2.5).
 Anything else is refused rather than converted into a tokenizer that would
 encode differently.
 """
@@ -17,10 +18,11 @@ import sys
 
 SPM, BYTE_BPE = 1, 2
 ADDED, BYTE = 1, 2
-ADD_BOS, IGNORE_MERGES, PREPEND_FIRST = 1, 2, 4
+ADD_BOS, IGNORE_MERGES, PREPEND_FIRST, NFC, DIGITS1 = 1, 2, 4, 8, 16
 SP = "▁"
 LLAMA3_REGEX = (r"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}{1,3}|"
                 r" ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+")
+QWEN2_REGEX = LLAMA3_REGEX.replace(r"\p{N}{1,3}", r"\p{N}")
 
 
 class Unsupported(Exception):
@@ -61,13 +63,18 @@ def detect(j):
     flags = IGNORE_MERGES if m.get("ignore_merges") else 0
     split = [p for p in pres if p["type"] == "Split"]
     if any(p["type"] == "ByteLevel" for p in pres):
-        if norms:
-            raise Unsupported("a normalizer before byte-level BPE")
+        if [n["type"] for n in norms] == ["NFC"]:
+            flags |= NFC
+        elif norms:
+            raise Unsupported("a normalizer other than NFC before byte-level BPE")
         if len(pres) != 2 or len(split) != 1 or pres[0] is not split[0]:
             raise Unsupported("byte-level pre-tokenizer other than Split(regex) + ByteLevel")
         s, bl = pres
-        if s["pattern"].get("Regex") != LLAMA3_REGEX or s.get("behavior") != "Isolated" or s.get("invert"):
-            raise Unsupported("pre-tokenizer regex is not the Llama 3 one")
+        rx = s["pattern"].get("Regex")
+        if rx not in (LLAMA3_REGEX, QWEN2_REGEX) or s.get("behavior") != "Isolated" or s.get("invert"):
+            raise Unsupported("pre-tokenizer regex is not the Llama 3 or Qwen2 one")
+        if rx == QWEN2_REGEX:
+            flags |= DIGITS1
         if bl.get("add_prefix_space") or bl.get("use_regex"):
             raise Unsupported("ByteLevel with add_prefix_space or its own regex")
         return BYTE_BPE, flags
