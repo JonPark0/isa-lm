@@ -110,7 +110,7 @@ The row-major matvec kernels spend most of their instructions on per-row
 bookkeeping: every 32-weight block costs one integer dot product but several
 float operations to apply its scale. At load, `ml_model_pack` therefore
 repacks every weight matrix, except the embedding table, into a
-**row-interleaved** layout ([`core/pack.h`](../core/pack.h)):
+**row-interleaved** layout ([`core/pack.h`](https://github.com/JonPark0/isa-lm/blob/main/core/pack.h)):
 
 - **Row groups:** rows are grouped by G, the SIMD lane count: 16 for AVX-512
   VNNI, 8 for AVX2 and AVX-VNNI, 4 for SSE2, SSE4.1 and the NEON builds. One
@@ -141,6 +141,15 @@ packed kernels.
 - **NEON without a dot product** (ARMv7, Cortex-A53/A72) uses
   `vmull_s8`/`vpadalq_s16` on the same 4-row groups.
 - **sve** builds use the NEON dotprod packed kernels.
+
+### Pack cache
+
+`ml_run --pack-cache` writes the packed arrays, exactly as laid out in memory,
+to `MODEL.pk<G>` behind a 512-byte header. The header records the pack group,
+the Q8 offset, the model's size and header, and a hash of bytes sampled across
+the model file. A later run whose build and model match maps the file instead
+of packing (`ml_model_pack_cached`); otherwise it packs and rewrites it,
+through a temporary file and a rename.
 
 ### Prefetch
 

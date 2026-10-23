@@ -176,6 +176,21 @@ static void test_load_rejects_bad_rope_scaling(void) {
     TT_EQ_INT(load_patched(0, 52, 1), ML_E_FORMAT);   /* llama3 with zero factor etc. */
 }
 
+/* q8_mask (offset 72): only Q4 models may keep classes in Q8, and only known
+ * classes. Mixed models themselves are covered end to end (mix_q4.mlb). */
+static void test_load_rejects_bad_q8_mask(void) {
+    TT_EQ_INT(load_patched(0, 72, 8), ML_E_FORMAT);      /* Q8 model with a mask */
+    size_t n;
+    unsigned char *b = slurp(q4_path, &n);
+    const uint32_t bad = 128;                            /* unknown class bit */
+    memcpy(b + 72, &bad, 4);
+    spit(tmp_path, b, n);
+    free(b);
+    ml_model m;
+    TT_EQ_INT(ml_model_load(&m, tmp_path), ML_E_FORMAT);
+    remove(tmp_path);
+}
+
 static void test_load_missing_file(void) {
     ml_model m;
     TT_EQ_INT(ml_model_load(&m, "/nonexistent/model.mlb"), ML_E_IO);
@@ -193,6 +208,7 @@ int TT_ENTRY(int argc, char **argv) {
     TT_RUN(test_load_rejects_bad_shape);
     TT_RUN(test_load_missing_file);
     TT_RUN(test_load_rejects_bad_rope_scaling);
+    TT_RUN(test_load_rejects_bad_q8_mask);
     TT_RUN(test_load_rejects_overflowing_dims);
     TT_RUN(test_load_rejects_tiny_vocab);
     TT_RUN(test_load_rejects_q8_minus_128);

@@ -355,3 +355,25 @@ def test_sync_wiki_links(tmp_path):
     assert out == ("[a](User-Guide#running) [b](https://github.com/o/r/blob/main/docs/design/x.md) "
                    "[c](https://e.com) [d](#local) [e](https://github.com/o/r/blob/main/Makefile)")
     assert sync_wiki.convert_links("[g](docs/testing.md)", "README.md", "o/r", "main") == "[g](Testing)"
+
+
+def test_mixed_q4_q8_classes(tmp_path):
+    """--q8 classes: those matrices are stored (and read back) as Q8."""
+    cfg, w = gen_random.generate(dict(SMALL), 0)
+    path = str(tmp_path / "mix.mlb")
+    mlb.write_mlb(path, cfg, w, "q4", ["emb", "v", "down"])
+    rcfg, t = mlb.read_mlb(path)
+    assert rcfg["q8_mask"] == mlb.Q8_CLASSES["emb"] | mlb.Q8_CLASSES["v"] | mlb.Q8_CLASSES["down"]
+    q8, q4 = mlb.WTYPES["q8"], mlb.WTYPES["q4"]
+    assert t["tok_emb"].type == q8 and t["wcls"].type == q4
+    for layer in t["layers"]:
+        assert layer["wv"].type == q8 and layer["w2"].type == q8
+        assert layer["wq"].type == q4 and layer["wo"].type == q4 and layer["w1"].type == q4
+    # a Q8 model ignores the classes and writes no mask
+    mlb.write_mlb(path, cfg, w, "q8", ["emb"])
+    assert mlb.read_mlb(path)[0]["q8_mask"] == 0
+    try:
+        mlb.q8_mask(["bogus"])
+        assert False
+    except ValueError:
+        pass

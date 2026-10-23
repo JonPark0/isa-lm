@@ -115,7 +115,7 @@ int ml_main(int argc, char **argv) {
     }
     const double td = ml_now() - t0;
     printf("model %s: prefill %.1f tok/s, decode %.2f tok/s (%d tokens each, threads %d, packed %d)\n", model,
-           tokens / tp, tokens / td, tokens, ml_pool_size(s.pool), m.pack_mem ? ml_pack_group() : 0);
+           tokens / tp, tokens / td, tokens, ml_pool_size(s.pool), m.packed ? ml_pack_group() : 0);
     free(prompt);
     ml_state_free(&s);
     ml_model_free(&m);

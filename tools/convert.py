@@ -1,7 +1,7 @@
 """Converts checkpoints to .mlb.
 
-  convert.py llama2c IN.bin OUT.mlb [--wtype q8|q4]   llama2.c legacy (v0) export
-  convert.py hf DIR OUT.mlb [--wtype q8|q4] [--max-seq N]
+  convert.py llama2c IN.bin OUT.mlb [--wtype q8|q4] [--q8 LIST]   llama2.c legacy (v0) export
+  convert.py hf DIR OUT.mlb [--wtype q8|q4] [--q8 LIST] [--max-seq N]
                                                       HF Llama: config.json + *.safetensors
 """
 import argparse
@@ -138,12 +138,16 @@ def main(argv=None):
     ap.add_argument("src")
     ap.add_argument("out")
     ap.add_argument("--wtype", choices=("q8", "q4"), default="q8")
+    ap.add_argument("--q8", default="", metavar="LIST",
+                    help="q4 only: matrix classes kept in Q8, comma-separated from "
+                         "emb, cls, qk, v, o, up, down (e.g. emb,cls,v,down)")
     ap.add_argument("--max-seq", type=int, default=None, help="hf: cap the context length (KV cache size)")
     a = ap.parse_args(argv)
     cfg, w = load_llama2c(a.src) if a.kind == "llama2c" else load_hf(a.src, a.max_seq)
-    mlb.write_mlb(a.out, cfg, w, a.wtype)
+    mlb.write_mlb(a.out, cfg, w, a.wtype, [c for c in a.q8.split(",") if c])
     print(f"wrote {a.out}: dim={cfg['dim']} layers={cfg['n_layers']} vocab={cfg['vocab']} "
-          f"max_seq={cfg['max_seq']} wtype={a.wtype} shared_classifier={cfg['shared_classifier']}")
+          f"max_seq={cfg['max_seq']} wtype={a.wtype}{' (q8: ' + a.q8 + ')' if a.q8 and a.wtype == 'q4' else ''} "
+          f"shared_classifier={cfg['shared_classifier']}")
 
 
 if __name__ == "__main__":

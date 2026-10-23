@@ -69,6 +69,8 @@ The first lines of the output name the kernel each op resolved to, for example
   rounding tie. Two valid implementations can then round it differently, which
   moves logits by up to about 2% while the distribution stays the same (KL
   ~1e-3). The random-model tests keep the strict 1e-3 relative bound.
+- **Chat:** `--chat` replies match the scalar build, `-i` equals one line of
+  stdin, and a conversation that outgrows the context stops with a message.
 - **Bad input:** malformed options (`-n 5x`, ids out of range, NaN
   temperature, …) exit with code 2, and `--help` exits with code 0.
 
@@ -232,7 +234,22 @@ activation bytes from a vector lane instead of broadcasting them. neon_i8mm
 decodes with the same kernels and prefills on `smmla`, 23–24% faster than
 `sdot`.
 
-## Wiki
+## Perplexity
+
+`tools/perplexity.py` scores a text through `ml_run --dump-logits`, for
+comparing weight formats or KV cache types on a real model:
+
+```sh
+python3 tools/perplexity.py build/avx2/ml_run llama.mlb llama.mlt wikitext-2-test.txt \
+    --ml-tok build/avx2/ml_tok --ctx 512 --chunks 4 -t 4
+```
+
+## Docs site and wiki
+
+`docs/` is also the [GitHub Pages site](https://jonpark0.github.io/isa-lm/)
+(Settings → Pages → Deploy from branch `main`, folder `/docs`;
+`docs/_config.yml`, landing page `docs/index.md`). To preview it with the
+`github-pages` gem: `PAGES_REPO_NWO=JonPark0/isa-lm bundle exec jekyll serve -s docs`.
 
 The GitHub wiki is generated from `README.md` and `docs/`; edit those, never
 the wiki. `.github/workflows/wiki.yml` runs `tools/sync_wiki.py` on every push

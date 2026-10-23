@@ -28,7 +28,8 @@ straight into it without copying. Everything is little-endian.
 | 60 | `f32` | `rope_low_freq_factor` | llama3 only: > 0 |
 | 64 | `f32` | `rope_high_freq_factor` | llama3 only: > `rope_low_freq_factor` |
 | 68 | `u32` | `rope_orig_max_seq` | llama3 only: > 0 |
-| 72 | | padding | zero up to offset 256 |
+| 72 | `u32` | `q8_mask` | `wtype` Q4_0 only: matrix classes stored as Q8_0 instead (below); 0 for Q8_0 models |
+| 76 | | padding | zero up to offset 256 |
 
 `dim`, `n_layers`, `n_heads`, `n_kv_heads` and `hidden_dim` are limited to
 65536. `vocab` and `max_seq` are limited to 2^24. Files written before RoPE
@@ -36,12 +37,17 @@ scaling existed have zeros at offsets 52–71, which means plain RoPE.
 
 Derived values: `head_dim = dim / n_heads` and `kv_dim = head_dim × n_kv_heads`.
 
+`q8_mask` bits, one per matrix class: 1 `tok_emb`, 2 `wcls`, 4 `wq` and
+`wk`, 8 `wv`, 16 `wo`, 32 `w1` and `w3`, 64 `w2`. With a shared classifier,
+`tok_emb` is Q8_0 if bit 1 or 2 is set. Files written before mixed models
+existed have 0 there.
+
 ## Body
 
 The arrays start at offset 256 and come in this order:
 
 ```
-tok_emb                     vocab × dim         (wtype)
+tok_emb                     vocab × dim         (wtype, or Q8_0 per q8_mask; same below)
 for each layer:
   attn_norm                 dim                 (F32)
   wq                        dim × dim           (wtype)

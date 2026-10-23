@@ -10,12 +10,15 @@ typedef struct {
     int dim, n_layers, n_heads, n_kv_heads, hidden_dim, vocab, max_seq, head_dim, kv_dim;
     float rope_theta, norm_eps;
     int wtype;
+    unsigned q8_mask;   /* Q4 models: ML_Q8M_* classes stored in Q8 (offset 72) */
     /* RoPE scaling (header offsets 52..71): ML_ROPE_NONE or ML_ROPE_LLAMA3 */
     int rope_type, rope_orig_max_seq;
     float rope_factor, rope_low_freq_factor, rope_high_freq_factor;
 } ml_config;
 
 enum { ML_ROPE_NONE = 0, ML_ROPE_LLAMA3 = 1 };
+enum { ML_Q8M_EMB = 1, ML_Q8M_CLS = 2, ML_Q8M_QK = 4, ML_Q8M_V = 8, ML_Q8M_O = 16,
+       ML_Q8M_UP = 32, ML_Q8M_DOWN = 64, ML_Q8M_ALL = 127 };
 
 typedef struct {
     const float *attn_norm, *ffn_norm;
@@ -29,6 +32,8 @@ typedef struct {
     const float *final_norm;
     ml_layer *layers;
     void *pack_mem;   /* row-interleaved weight copies (ml_model_pack), or NULL */
+    ml_file pack_file;   /* or the same, mapped from a pack cache file */
+    int packed;          /* the matrices point at packed copies */
 } ml_model;
 
 ml_status ml_model_load(ml_model *m, const char *path);

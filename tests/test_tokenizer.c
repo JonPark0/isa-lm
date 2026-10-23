@@ -5,6 +5,7 @@
  * that library is installed). */
 #include <stdlib.h>
 #include <string.h>
+#include "model/chat.h"
 #include "model/tokenizer.h"
 #include "tests/tt.h"
 
@@ -109,6 +110,40 @@ static void test_llama2c(void) {
     TT_EQ_INT(ml_tokenizer_load(&t, l2c_path, 0), ML_E_SHAPE);
 }
 
+/* Chat templates render as the models' Hugging Face templates do. */
+static void check_render(int tpl, const char *sys, const char *user, int first, const char *want) {
+    char *got = ml_chat_render(tpl, sys, user, first);
+    TT_ASSERT(got != NULL);
+    if (got && strcmp(got, want)) fprintf(stderr, "  rendered '%s'\n  want     '%s'\n", got, want);
+    TT_ASSERT(got && !strcmp(got, want));
+    free(got);
+}
+
+static void test_chat_templates(void) {
+    TT_EQ_INT(ml_chat_template("llama3"), ML_CHAT_LLAMA3);
+    TT_EQ_INT(ml_chat_template("chatml"), -1);
+    check_render(ML_CHAT_LLAMA3, "Be brief.", "Hi", 1,
+                 "<|start_header_id|>system<|end_header_id|>\n\nBe brief.<|eot_id|>"
+                 "<|start_header_id|>user<|end_header_id|>\n\nHi<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n");
+    check_render(ML_CHAT_LLAMA3, "Be brief.", "More", 0,   /* the system prompt only once */
+                 "<|start_header_id|>user<|end_header_id|>\n\nMore<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n");
+    check_render(ML_CHAT_ZEPHYR, "Be kind.", "Hi", 1, "<|system|>\nBe kind.</s>\n<|user|>\nHi</s>\n<|assistant|>\n");
+    check_render(ML_CHAT_ZEPHYR, NULL, "More", 0, "\n<|user|>\nMore</s>\n<|assistant|>\n");
+    check_render(ML_CHAT_LLAMA2, "Be kind.", "Hi", 1, "[INST] <<SYS>>\nBe kind.\n<</SYS>>\n\nHi [/INST]");
+    check_render(ML_CHAT_LLAMA2, NULL, "More", 0, "[INST] More [/INST]");
+    char longmsg[600];
+    memset(longmsg, 'x', sizeof longmsg - 1);
+    longmsg[sizeof longmsg - 1] = '\0';
+    char *r = ml_chat_render(ML_CHAT_LLAMA3, longmsg, longmsg, 1);   /* nothing cut */
+    TT_ASSERT(r && strstr(r, "<|start_header_id|>assistant<|end_header_id|>\n\n"));
+    free(r);
+    ml_tokenizer t;   /* stop tokens are found by their text */
+    TT_EQ_INT(ml_tokenizer_load(&t, bpe_path, 0), ML_OK);
+    TT_ASSERT(ml_tokenizer_find(&t, "<|eot_id|>") > 0);
+    TT_EQ_INT(ml_tokenizer_find(&t, "<|no_such_token|>"), -1);
+    ml_tokenizer_free(&t);
+}
+
 int TT_ENTRY(int argc, char **argv) {
     if (argc < 4) { fprintf(stderr, "usage: test_tokenizer SPM.mlt BPE.mlt TOKENIZER.bin\n"); return 2; }
     spm_path = argv[1]; bpe_path = argv[2]; l2c_path = argv[3];
@@ -116,5 +151,6 @@ int TT_ENTRY(int argc, char **argv) {
     TT_RUN(test_byte_bpe);
     TT_RUN(test_limits);
     TT_RUN(test_llama2c);
+    TT_RUN(test_chat_templates);
     TT_MAIN_END("test_tokenizer");
 }

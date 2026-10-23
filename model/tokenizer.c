@@ -123,6 +123,10 @@ int ml_encode(ml_tokenizer *t, const char *text, int bos, int eos, int *out, int
 }
 
 int ml_tokenizer_bos(const ml_tokenizer *t) { return t->kind == ML_TOK_LLAMA2C ? ML_TOK_BOS : t->bos; }
+int ml_tokenizer_find(const ml_tokenizer *t, const char *text) {
+    return t->kind == ML_TOK_LLAMA2C ? lookup(t, text) : ml_bpe_find(t, text);
+}
+
 int ml_tokenizer_eos(const ml_tokenizer *t) { return t->kind == ML_TOK_LLAMA2C ? ML_TOK_EOS : t->eos; }
 
 const char *ml_decode(ml_tokenizer *t, int prev, int tok) {

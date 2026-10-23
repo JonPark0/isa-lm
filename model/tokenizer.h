@@ -55,6 +55,8 @@ int ml_encode(ml_tokenizer *t, const char *text, int bos, int eos, int *out, int
 /* Text of token tok following token prev (strips the space after BOS). */
 const char *ml_decode(ml_tokenizer *t, int prev, int tok);
 int ml_tokenizer_bos(const ml_tokenizer *t);
+/* Id of the token whose text is exactly `text` (added tokens included), or -1. */
+int ml_tokenizer_find(const ml_tokenizer *t, const char *text);
 int ml_tokenizer_eos(const ml_tokenizer *t);
 void ml_tokenizer_free(ml_tokenizer *t);
 
@@ -62,5 +64,6 @@ void ml_tokenizer_free(ml_tokenizer *t);
 ml_status ml_bpe_load(ml_tokenizer *t, FILE *f, int vocab);
 int ml_bpe_encode(const ml_tokenizer *t, const char *text, int bos, int eos, int *out, int max);
 void ml_bpe_free(ml_tokenizer *t);
+int ml_bpe_find(const ml_tokenizer *t, const char *text);
 
 #endif

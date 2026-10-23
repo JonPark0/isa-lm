@@ -1,6 +1,9 @@
-# isa-lm
+# isa-lm — Portable INT8/INT4 LLM Inference for Legacy x86-64 and ARM CPUs (C11)
 
 [![CI](https://github.com/JonPark0/isa-lm/actions/workflows/ci.yml/badge.svg)](https://github.com/JonPark0/isa-lm/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![C11](https://img.shields.io/badge/C-11-blue.svg)](docs/user-guide.md)
+[![Docs](https://img.shields.io/badge/docs-site-green.svg)](https://jonpark0.github.io/isa-lm/)
 
 A dependency-free C11 inference runtime for Llama-style decoder Transformers with
 INT8 and INT4 weights. It runs on x86-64 CPUs from SSE2 up to AVX-512 VNNI, and
@@ -43,16 +46,14 @@ python3 tools/convert.py llama2c stories15M.bin stories15M.mlb --wtype q8
 build/avx2/ml_run stories15M.mlb -z tokenizer.bin -i "Once upon a time" -n 128 -T 0.8
 
 # Hugging Face Llama (safetensors), including Llama 3 RoPE scaling, and its tokenizer.json
-python3 tools/convert.py hf ./Llama-3.2-1B-Instruct llama.mlb --wtype q4 --max-seq 4096
+python3 tools/convert.py hf ./Llama-3.2-1B-Instruct llama.mlb --wtype q4 --q8 v,o,down --max-seq 4096
 python3 tools/convert_tokenizer.py ./Llama-3.2-1B-Instruct/tokenizer.json llama.mlt
-build/avx2/ml_run llama.mlb -z llama.mlt --eos 128009 -n 64 -i "<|start_header_id|>user<|end_header_id|>
-
-Hi!<|eot_id|><|start_header_id|>assistant<|end_header_id|>
-
-"
+build/avx2/ml_run llama.mlb -z llama.mlt --chat llama3 -t 4     # one message per line
 ```
 
 ## Documentation
+
+Site: <https://jonpark0.github.io/isa-lm/> · Wiki: <https://github.com/JonPark0/isa-lm/wiki> (both generated from [`docs/`](docs))
 
 | Document | Contents |
 |----------|----------|
@@ -74,9 +75,46 @@ Hi!<|eot_id|><|start_header_id|>assistant<|end_header_id|>
 | Performance | weights repacked into row-interleaved layouts for every SIMD build from SSE2 and ARMv7 NEON up (Q4 decoding up to 2.2× faster); prompts prefilled in batches of 32 (2–6× faster), on `smmla` with i8mm; software prefetch of the weight stream on x86 (decoding 1.3–2.5× faster on one core); attention 2.4× faster on long contexts, 3.4× with the optional Q8 KV cache (`--kv q8`); numbers in [Testing](docs/testing.md#benchmarking) |
 | Thread pool | bit-identical results for any thread count; ThreadSanitizer clean; a 4-layer dim-2048 Q4 model decodes at 140 tok/s with `-t 1` and 503 tok/s with `-t 4` (avx512vnni, 4 vCPUs) |
 | Windows | cross-compiles with MinGW in CI (not executed); MSVC is supported in CMake but not verified |
+| Quantization | Q8_0, Q4_0, and Q4 with chosen matrix classes in Q8 (`--q8 v,o,down`: Llama 3.2 1B perplexity 18.46 at 904 MB, against 17.30 for Q8 at 1326 MB and 20.46 for Q4 at 737 MB); `tools/perplexity.py` measures it |
 | Tokenizers | llama2.c `tokenizer.bin`; Hugging Face `tokenizer.json` for SentencePiece-style BPE (Llama 2, TinyLlama, Mistral) and Llama 3 byte-level BPE, converted by `tools/convert_tokenizer.py` and identical to the `tokenizers` library on every text tested. TinyLlama 1.1B and Llama 3.2 1B Instruct were run end to end from their Hugging Face files |
 | Not implemented | other tokenizers (WordPiece, Unigram, GPT-2/Qwen pre-tokenizers), RoPE scaling types other than llama3, non-Llama architectures |
 
+## Citing
+
+If isa-lm helps your research, please cite it (GitHub's *Cite this repository* uses [`CITATION.cff`](CITATION.cff)):
+
+```bibtex
+@software{isalm2026,
+  author  = {Park, Yeochoon},
+  title   = {isa-lm: a portable C11 runtime for INT8/INT4 Llama-style language model inference on legacy x86-64 and ARM instruction sets},
+  year    = {2026},
+  version = {0.1.0},
+  url     = {https://github.com/JonPark0/isa-lm}
+}
+```
+
+Please also cite the models you run; their licenses are separate from this one.
+
+## 한국어 요약
+
+**isa-lm**은 INT8/INT4로 양자화한 Llama 계열 언어 모델을 CPU에서 실행하는 C11 추론 런타임입니다.
+외부 라이브러리 없이 구형·저전력 프로세서까지 지원하는 것이 목표입니다.
+
+- **지원 명령어 집합:** x86-64는 SSE2부터 SSE4.1, AVX2, AVX-VNNI, AVX-512 VNNI까지, ARM은 ARMv7 NEON부터
+  NEON dotprod, i8mm, SVE까지 지원합니다. 빌드할 때 명령어 집합을 고르면 연산마다 그에 맞는 커널이 컴파일 단계에서
+  묶입니다. 지원하지 않는 CPU에서 실행하면 비정상 종료 대신 오류 코드 3과 누락된 기능을 알려 줍니다.
+- **양자화:** Q8_0, Q4_0, 그리고 일부 행렬만 Q8로 두는 혼합 정밀도를 지원합니다. KV 캐시도 Q8로 줄일 수 있습니다.
+- **속도:** 명령어 집합별 정수 내적에 맞춘 가중치 재배치, 프롬프트 일괄 처리, 소프트웨어 프리페치, GQA 블록
+  어텐션을 씁니다. 스레드 수를 바꿔도 결과는 비트 단위로 같습니다.
+- **모델과 토크나이저:** llama2.c 체크포인트와 Hugging Face safetensors(Llama 2, Llama 3/3.1/3.2, TinyLlama,
+  Mistral)를 변환합니다. Hugging Face `tokenizer.json`은 `tokenizers` 라이브러리와 같은 결과로 인코딩합니다.
+- **사용:** 텍스트 생성, 대화 모드(`--chat`), top-k·top-p·반복 패널티, 퍼플렉서티 측정을 제공합니다.
+- **검증:** 커널은 스칼라·배정밀도 기준과, 전체 결과는 numpy 참조 구현과 비교합니다. ARM과 구형 x86은 qemu로,
+  Arm 실기는 CI에서 확인합니다.
+
+자세한 문서는 [문서 사이트](https://jonpark0.github.io/isa-lm/)와 [위키](https://github.com/JonPark0/isa-lm/wiki)를 참고하세요.
+
 ## License
 
-No license has been chosen yet.
+[MIT](LICENSE). Third-party notices (llama2.c, Cephes, Unicode data) are in
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).

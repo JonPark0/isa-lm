@@ -134,15 +134,34 @@ encode differently.
   pass it with `--eos`, for example `--eos 128009` (`<|eot_id|>`) for
   Llama 3 Instruct.
 
-A Llama 3.2 Instruct prompt, for example:
+### Chat
+
+`--chat TEMPLATE` wraps each message in the model's chat template, keeps the
+conversation in the KV cache, and stops each reply at the template's end
+token:
 
 ```sh
-build/avx2/ml_run llama3.mlb -z llama3.mlt --eos 128009 -T 0 -n 200 -i "<|start_header_id|>user<|end_header_id|>
-
-What is the capital of France?<|eot_id|><|start_header_id|>assistant<|end_header_id|>
-
-"
+build/avx2/ml_run llama3.mlb -z llama3.mlt --chat llama3 --system "You are a helpful assistant." -t 4
+> What is the capital of France?
+The capital of France is Paris.
+> And of Germany?
+The capital of Germany is Berlin.
 ```
+
+| Template | Models | Reply ends at |
+|----------|--------|---------------|
+| `llama3` | Llama 3, 3.1, 3.2 Instruct | `<|eot_id|>` |
+| `zephyr` | TinyLlama Chat, Zephyr | `</s>` |
+| `llama2` | Llama 2 Chat, Mistral Instruct (without `--system`) | `</s>` |
+
+- **Input:** one turn per line on stdin (a `> ` prompt appears on a terminal),
+  or a single turn with `-i`. End with Ctrl-D.
+- **Length:** `-n` caps each reply; without it a reply may use the rest of the
+  context. The conversation ends with a message when the context is full.
+- **Sampling:** `-T`, `-p`, `--top-k` and `--repeat-penalty` apply as usual.
+
+Without `--chat`, write the template yourself with `-i` and stop with `--eos`
+(`128009` is `<|eot_id|>` in Llama 3).
 
 ### A random test model
 
@@ -151,9 +170,30 @@ python3 tools/gen_random.py --out rand.mlb --wtype q4 --dim 256 --layers 4 --voc
 python3 tools/gen_tokenizer.py --vocab 512 --out tok.bin
 ```
 
-### Q8 or Q4?
+### Q8, Q4, or mixed?
 
-Choose **Q8_0** for accuracy and **Q4_0** for size.
+Choose **Q8_0** for accuracy and **Q4_0** for size. In between, `--q8`
+keeps some matrix classes of a Q4 model in Q8 (`emb`, `cls`, `qk`, `v`, `o`,
+`up`, `down`):
+
+```sh
+python3 tools/convert.py hf ./Llama-3.2-1B-Instruct llama.mlb --wtype q4 --q8 v,o,down
+```
+
+Llama 3.2 1B on wikitext-2 (2044 tokens, `tools/perplexity.py`; decode on
+4 vCPUs, avx512vnni):
+
+| Weights | Size | Perplexity | Decode `-t 4` |
+|---------|-----:|-----------:|--------------:|
+| Q8 | 1326 MB | 17.30 | 31.5 tok/s |
+| Q4 + Q8 `v,o,down` | 904 MB | 18.46 | 47.7 tok/s |
+| Q4 + Q8 `v,down` | 872 MB | 18.79 | |
+| Q4 | 737 MB | 20.46 | 61.3 tok/s |
+
+The down projection (`down`) and the value and output projections matter
+most. The Q8 KV cache costs nothing measurable here: `--kv q8` on the Q8
+model gives 17.27. The embedding and classifier (`emb`, `cls`) are large for a 128K
+vocabulary and help little (Q4 + `emb,cls`: 862 MB, 20.27).
 
 | Format | Bits per weight | Notes |
 |--------|-----------------|-------|
@@ -176,13 +216,19 @@ build/avx2/ml_run model.mlb --tokens 1,450,3681 --dump-logits l.f32
 | `-n N` | Positions to run, prompt included. Default 64; capped at the model's `max_seq`. |
 | `-T F` | Temperature. `0` means greedy decoding (ties go to the lowest id). Default 0. |
 | `-p F` | Top-p in [0, 1]. Values of 0 or 1 sample from the full distribution. Default 0.9. |
+| `--top-k N` | Sample only from the `N` most likely tokens, then apply top-p among them. `0` (default) turns it off; `1` is greedy at any temperature. |
+| `--repeat-penalty F` | Repetition penalty: divide the positive logit of each token seen in the last `--repeat-last-n` tokens by `F` and multiply a negative one, as Hugging Face does. Applies to greedy decoding too. `1` (default) turns it off; 1.1–1.3 is typical. |
+| `--repeat-last-n N` | How many recent tokens, prompt included, the penalty looks at. Default 64. |
 | `-s N` | Seed for the xorshift64* RNG. Default 1. |
 | `-t N` | Threads, 1 to 64. Only builds made with `THREADS=pthread` use more than one. |
 | `--dump-logits F` | Write float32 logits `[n_tokens][vocab]` for every `--tokens` position, then exit. |
 | `--batch N` | Prompt tokens per batched prefill step, 1 to 32. Default 32; `1` processes the prompt token by token. The output is identical either way. |
 | `--kv TYPE` | KV cache type: `f32` (default) or `q8`. `q8` stores K and V as int8 with one scale per position and KV head: about 3.8× less memory and faster attention on long contexts, with slightly different logits. |
+| `--pack-cache` | Save the packed weights next to the model (`MODEL.pk<G>`, G = pack group) and map them from there on later runs instead of packing again. The cache is checked against the model and the build's layout and rewritten when stale. |
 | `--no-pack` | Keep weights row-major instead of repacking them for the packed kernels. Uses less memory during load, but runs slower. |
 | `--profile` | Print the share of forward-pass time per stage (qkv, attention, wo, ffn, classifier, other). |
+| `--chat TEMPLATE` | Chat with the model: `llama3`, `zephyr` or `llama2`, see [Chat](#chat). Needs `-z`. |
+| `--system TEXT` | System prompt for `--chat`. |
 | `--eos ID` | Stop as soon as `ID` is generated. Without it, a run with `-z` stops at the tokenizer's BOS or EOS, and a run without `-z` uses every `-n` position. |
 
 When it finishes, `ml_run` prints two lines to stderr:
@@ -224,7 +270,12 @@ On a 4-vCPU VM with the avx512vnni build, `-t 4` decodes a 4-layer dim-2048 Q4 m
   cache's memory traffic and size by about 3.8×.
 - **Memory:** packing makes one copy of the weights at load and then releases
   the originals' pages. If a device cannot hold two copies of the model even
-  briefly, use `--no-pack`.
+  briefly, use `--no-pack`, or `--pack-cache` once on a bigger machine with the
+  same build.
+- **Start-up:** packing takes time at every start: 1.8 s for Llama 3.2 1B Q4
+  on one core (0.7 s with `-t 4`). With `--pack-cache` later starts map the
+  packed weights directly and take 0.13 s, at the cost of a second copy on
+  disk.
 
 ## Limits
 

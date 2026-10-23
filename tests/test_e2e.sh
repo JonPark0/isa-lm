@@ -18,6 +18,15 @@ for wt in q8 q4; do
         && ok || bad "ref $wt"
 done
 
+# mixed Q4/Q8 model (q8_mask): reference, packed and row-major, batched prefill
+$RUN $B/ml_run $M/mix_q4.mlb --tokens $TOKENS --dump-logits $T/mix.f32 \
+    && python3 tools/ref_forward.py $M/mix_q4.mlb --tokens $TOKENS --out $T/mix.ref.f32 \
+    && python3 tests/compare_logits.py $T/mix.f32 $T/mix.ref.f32 96 1e-3 >/dev/null \
+    && $RUN $B/ml_run $M/mix_q4.mlb --tokens $TOKENS --dump-logits $T/mix.np.f32 --no-pack \
+    && python3 tests/compare_logits.py $T/mix.np.f32 $T/mix.ref.f32 96 1e-3 >/dev/null \
+    && $RUN $B/ml_run $M/mix_q4.mlb --tokens $TOKENS --dump-logits $T/mix.b1.f32 --batch 1 \
+    && cmp -s $T/mix.f32 $T/mix.b1.f32 && ok || bad "mixed Q4/Q8 model"
+
 # Q8 KV cache (--kv q8) against the reference emulating it. K, V and q are
 # quantized from float results that differ in the last bits between C and numpy,
 # so a value near a rounding boundary can land one step away: compare
@@ -52,6 +61,23 @@ G=$($RUN $B/ml_run --help 2>&1 | sed -n 's/^pack group: \([0-9]*\).*/\1/p')
 err=$($RUN $B/ml_run $M/rand_q4.mlb --tokens 1,2 -n 4 2>&1 >/dev/null)
 [ -n "$G" ] && echo "$err" | grep -q "packed: $G," && ok || bad "expected 'packed: $G' (help says pack group '$G'): $err"
 
+# --pack-cache: written on the first run, mapped on the next, same logits;
+# a cache for another model (or a damaged one) is replaced, never used
+if [ "$G" != 0 ]; then
+    cp $M/mix_q4.mlb $T/pc.mlb; rm -f $T/pc.mlb.pk$G
+    $RUN $B/ml_run $M/mix_q4.mlb --tokens $TOKENS --dump-logits $T/pc.ref.f32
+    a=$($RUN $B/ml_run $T/pc.mlb --tokens $TOKENS --dump-logits $T/pc1.f32 --pack-cache 2>&1)
+    b=$($RUN $B/ml_run $T/pc.mlb --tokens $TOKENS --dump-logits $T/pc2.f32 --pack-cache 2>&1)
+    echo "$a" | grep -q ": written" && echo "$b" | grep -q ": loaded" \
+        && cmp -s $T/pc1.f32 $T/pc.ref.f32 && cmp -s $T/pc2.f32 $T/pc.ref.f32 && ok || bad "--pack-cache: $a / $b"
+    python3 tools/gen_random.py --out $T/pc.mlb --wtype q4 --q8 emb,v,o,down --seed 4 >/dev/null
+    c=$($RUN $B/ml_run $T/pc.mlb --tokens 1,2 -n 3 --pack-cache 2>&1)
+    head -c 1000 $T/pc.mlb.pk$G > $T/pc.trunc && mv $T/pc.trunc $T/pc.mlb.pk$G
+    d=$($RUN $B/ml_run $T/pc.mlb --tokens 1,2 -n 3 --pack-cache 2>&1)
+    echo "$c" | grep -q ": written" && echo "$d" | grep -q ": written" && ok || bad "--pack-cache reused a stale cache: $c / $d"
+    rm -f $T/pc.mlb $T/pc.mlb.pk$G
+fi
+
 # --no-pack keeps the row-major kernels: must match the reference too
 for wt in q8 q4; do
     $RUN $B/ml_run $M/rand_$wt.mlb --tokens $TOKENS --dump-logits $T/$wt.np.f32 --no-pack \
@@ -81,6 +107,15 @@ $RUN $B/ml_run $M/rand_q8.mlb -z $TOK -i "ab" -n 16 -T 0 > $T/greedy.txt 2>/dev/
 $RUN $B/ml_run $M/rand_q8.mlb -z $TOK -i "ab" -n 20 -T 0.9 -p 0.9 -s 42 > $T/samp.txt 2>/dev/null \
     && $SCALAR $M/rand_q8.mlb -z $TOK -i "ab" -n 20 -T 0.9 -p 0.9 -s 42 > $T/samp.ref.txt 2>/dev/null \
     && cmp -s $T/samp.txt $T/samp.ref.txt && ok || bad "sampled text differs from scalar"
+
+# --top-k 1 is greedy at any temperature; a repetition penalty changes the text
+$RUN $B/ml_run $M/rand_q8.mlb -z $TOK -i "ab" -n 16 -T 1.3 --top-k 1 -s 5 > $T/topk1.txt 2>/dev/null \
+    && cmp -s $T/topk1.txt $T/greedy.txt && ok || bad "--top-k 1 should give the greedy text"
+$RUN $B/ml_run $M/rand_q8.mlb -z $TOK -i "ab" -n 24 -T 0 > $T/greedy24.txt 2>/dev/null
+$RUN $B/ml_run $M/rand_q8.mlb -z $TOK -i "ab" -n 24 -T 0 --repeat-penalty 1.5 > $T/pen.txt 2>/dev/null \
+    && $SCALAR $M/rand_q8.mlb -z $TOK -i "ab" -n 24 -T 0 --repeat-penalty 1.5 > $T/pen.ref.txt 2>/dev/null \
+    && cmp -s $T/pen.txt $T/pen.ref.txt && ! cmp -s $T/pen.txt $T/greedy24.txt && ok \
+    || bad "--repeat-penalty: should match scalar and differ from plain greedy"
 
 # overflow: steps beyond max_seq (32) stop at max_seq
 err=$($RUN $B/ml_run $M/rand_q8.mlb --tokens 1,2 -n 1000 -T 0 2>&1 >/dev/null); rc=$?
@@ -129,18 +164,36 @@ printf 'x' | $RUN $B/ml_tok $M/bpe_tiny.mlt --bogus >/dev/null 2>&1
 printf '99999' | $RUN $B/ml_tok $M/bpe_tiny.mlt --decode >/dev/null 2>&1
 [ $? -eq 2 ] && ok || bad "ml_tok --decode with an id out of range should exit 2"
 
+# --chat: deterministic replies (same as the scalar build), -i equals a
+# one-line stdin, the conversation stops cleanly when the context is full
+CHAT="$M/chat_q8.mlb -z $M/bpe_tiny.mlt --chat llama3 -T 0 -n 6"
+printf 'hello world\nwhat now\n' | $RUN $B/ml_run $CHAT --system "be brief" > $T/chat.txt 2>/dev/null \
+    && printf 'hello world\nwhat now\n' | $SCALAR $CHAT --system "be brief" > $T/chat.ref.txt 2>/dev/null \
+    && [ -s $T/chat.txt ] && cmp -s $T/chat.txt $T/chat.ref.txt && ok || bad "--chat differs from scalar"
+$RUN $B/ml_run $CHAT -i "hello world" > $T/chat1.txt 2>/dev/null \
+    && printf 'hello world\n' | $RUN $B/ml_run $CHAT > $T/chat1s.txt 2>/dev/null \
+    && cmp -s $T/chat1.txt $T/chat1s.txt && ok || bad "--chat -i differs from one stdin line"
+err=$(seq 1 40 | sed 's/^/tell me more /' | $RUN $B/ml_run $CHAT 2>&1 >/dev/null); rc=$?
+[ $rc -eq 0 ] && echo "$err" | grep -q "context full" && ok || bad "--chat past the context: rc=$rc $err"
+for bad_chat in "--chat chatml" "--system x"; do
+    $RUN $B/ml_run $M/chat_q8.mlb -z $M/bpe_tiny.mlt $bad_chat -i hi >/dev/null 2>&1
+    [ $? -eq 2 ] && ok || bad "ml_run $bad_chat should exit 2"
+done
+$RUN $B/ml_run $M/chat_q8.mlb --chat llama3 -i hi >/dev/null 2>&1
+[ $? -eq 2 ] && ok || bad "--chat without -z should exit 2"
+
 # usage
 err=$($RUN $B/ml_run 2>&1); rc=$?
 [ $rc -eq 2 ] && echo "$err" | grep -q "usage:" && ok || bad "usage rc=$rc"
 $RUN $B/ml_run $M/rand_q8.mlb --tokens 1,500 -n 4 >/dev/null 2>&1
 [ $? -eq 2 ] && ok || bad "out-of-range token id should exit 2"
 
-for bad_opt in "-T nan" "-T inf" "-T -1" "-p nan" "-p 1.5" "-p -0.1"; do
+for bad_opt in "-T nan" "-T inf" "-T -1" "-p nan" "-p 1.5" "-p -0.1" "--top-k -1" "--repeat-penalty 0" "--repeat-penalty nan" "--repeat-last-n -2"; do
     $RUN $B/ml_run $M/rand_q8.mlb --tokens 1 -n 4 $bad_opt >/dev/null 2>&1
     [ $? -eq 2 ] && ok || bad "ml_run $bad_opt should exit 2"
 done
 
-for bad_arg in "--kv q4" "--kv" "-n 5x" "-n 99999999999" "-t 2junk" "-s -1" "--tokens 4294967297" "--tokens 1,,2" "--tokens 1," "-n"; do
+for bad_arg in "--pack-cache --no-pack" "--kv q4" "--kv" "-n 5x" "-n 99999999999" "-t 2junk" "-s -1" "--tokens 4294967297" "--tokens 1,,2" "--tokens 1," "-n"; do
     $RUN $B/ml_run $M/rand_q8.mlb --tokens 1 $bad_arg >/dev/null 2>&1
     [ $? -eq 2 ] && ok || bad "ml_run $bad_arg should exit 2"
 done
