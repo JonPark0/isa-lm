@@ -100,17 +100,3 @@ jobs:
             echo "$out"
             echo "::notice title=bench $isa::$out"
           done
-          # software prefetch on Arm: the same build without it (-DML_NO_PREFETCH),
-          # runs interleaved and best of 3, since decode speed drifts on the runner
-          make -s ISA=neon_dotprod EXTRA_CFLAGS=-DML_NO_PREFETCH
-          nopf=$(ls -td build/neon_dotprod-x* | head -1)
-          out=""
-          for m in q8 q4; do
-            for b in build/neon_dotprod $nopf; do : > $b/dec_$m.txt; done
-            for i in 1 2 3; do for b in build/neon_dotprod $nopf; do
-              $b/ml_bench build/models/bench_$m.mlb -n 64 | tail -1 | sed 's/.*decode \([0-9.]*\).*/\1/' >> $b/dec_$m.txt
-            done; done
-            out="$out $m decode best of 3: prefetch $(sort -n build/neon_dotprod/dec_$m.txt | tail -1), none $(sort -n $nopf/dec_$m.txt | tail -1) tok/s;"
-          done
-          echo "$out"
-          echo "::notice title=bench neon_dotprod prefetch::$out"

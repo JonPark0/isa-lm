@@ -157,7 +157,7 @@ avx2 and 129–139 GOPS on avx512vnni.
 
 **Decoding**, dim-2048 model (4 layers, hidden 5632, vocab 32000), packed
 weights, tok/s, without → with the software prefetch of the weight stream
-(`-DML_NO_PREFETCH` builds the former):
+(`-DML_USE_PREFETCH=0` builds the former):
 
 | ISA | Q8 `-t 1` | Q4 `-t 1` | Q8 `-t 4` | Q4 `-t 4` |
 |-----|----------:|----------:|----------:|----------:|
@@ -169,7 +169,10 @@ weights, tok/s, without → with the software prefetch of the weight stream
 
 Decoding reads every weight once per token. The hardware prefetchers stop at
 4 KB page boundaries, so one core alone could not keep the stream going; the
-packed matvecs now request the weights 4 KB ahead.
+packed matvecs now request the weights 4 KB ahead. On the Arm runner
+(Neoverse) the same prefetch made NEON dotprod Q8 decoding 26% slower (470
+against 638 tok/s, interleaved best of 3) and left Q4 unchanged, so Arm builds
+leave it off.
 
 **Prompt prefill**, 64 tokens, dim-2048 model (4 layers, hidden 5632, vocab
 32000), packed weights, `-t 1` (tok/s):
