@@ -159,6 +159,8 @@ float *ml_forward(ml_state *s, int token, int pos) {
         PROF(ML_PROF_QKV, ml_matvec(s->pool, s->q, &L->wq, &s->qa_dim);
                           ml_matvec(s->pool, k, &L->wk, &s->qa_dim);
                           ml_matvec(s->pool, v, &L->wv, &s->qa_dim));
+        if (L->bq) PROF(ML_PROF_OTHER, ml_k_add(s->q, L->bq, c->dim); ml_k_add(k, L->bk, c->kv_dim);
+                                       ml_k_add(v, L->bv, c->kv_dim));
         PROF(ML_PROF_OTHER, ml_k_rope(s->q, k, cs, sn, c->head_dim, c->n_heads, c->n_kv_heads);
                             store_kv(s, l, pos, k, v));
 
@@ -210,6 +212,11 @@ static void prefill_step(ml_state *s, const int *tok, int n, int pos0, float *lo
         PROF(ML_PROF_QKV, ml_matmul(s->pool, s->bq, D, &L->wq, &s->qb_dim);
                           ml_matmul(s->pool, kc, KV, &L->wk, &s->qb_dim);
                           ml_matmul(s->pool, vc, KV, &L->wv, &s->qb_dim));
+        if (L->bq) PROF(ML_PROF_OTHER, for (int t = 0; t < n; t++) {
+                                           ml_k_add(s->bq + (size_t)t * D, L->bq, D);
+                                           ml_k_add(kc + (size_t)t * KV, L->bk, KV);
+                                           ml_k_add(vc + (size_t)t * KV, L->bv, KV);
+                                       });
         PROF(ML_PROF_OTHER, for (int t = 0; t < n; t++) {
                                 ml_k_rope(s->bq + (size_t)t * D, kc + (size_t)t * KV,
                                           s->rope_cos + (size_t)(pos0 + t) * h2, s->rope_sin + (size_t)(pos0 + t) * h2,

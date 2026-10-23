@@ -11,6 +11,7 @@ typedef struct {
     float rope_theta, norm_eps;
     int wtype;
     unsigned q8_mask;   /* Q4 models: ML_Q8M_* classes stored in Q8 (offset 72) */
+    int qkv_bias;       /* Q/K/V projections have biases (offset 76; Qwen2) */
     /* RoPE scaling (header offsets 52..71): ML_ROPE_NONE or ML_ROPE_LLAMA3 */
     int rope_type, rope_orig_max_seq;
     float rope_factor, rope_low_freq_factor, rope_high_freq_factor;
@@ -23,6 +24,7 @@ enum { ML_Q8M_EMB = 1, ML_Q8M_CLS = 2, ML_Q8M_QK = 4, ML_Q8M_V = 8, ML_Q8M_O = 1
 typedef struct {
     const float *attn_norm, *ffn_norm;
     ml_qtensor wq, wk, wv, wo, w1, w2, w3;
+    const float *bq, *bk, *bv;   /* NULL unless cfg.qkv_bias */
 } ml_layer;
 
 typedef struct {
