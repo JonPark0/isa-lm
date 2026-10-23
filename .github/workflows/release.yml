@@ -1,0 +1,61 @@
+name: Release
+
+# Pushing a tag vX.Y.Z (matching ML_VERSION in core/ml.h) builds the binaries
+# for every platform and ISA, runs them, and publishes a GitHub release with
+# the notes from CHANGELOG.md. workflow_dispatch rebuilds an existing tag.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build and publish, e.g. v0.1.0"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build, test and publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      - name: Cache apt packages
+        uses: actions/cache@v4
+        with:
+          path: ~/apt-cache
+          key: apt-${{ runner.os }}-${{ runner.arch }}-release-${{ hashFiles('.github/workflows/release.yml', '.github/scripts/apt-install.sh') }}
+          restore-keys: apt-${{ runner.os }}-${{ runner.arch }}-release-
+      - name: Install toolchains
+        timeout-minutes: 15
+        env:
+          APT_CACHE_DIR: /home/runner/apt-cache
+        run: |
+          .github/scripts/apt-install.sh \
+            qemu-user gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf libc6-dev-armhf-cross libc6-dev-arm64-cross \
+            gcc-mingw-w64-x86-64 python3-numpy wine64 zip
+      - name: Package
+        run: scripts/package_release.sh "$TAG"
+      - name: Run the packaged binaries
+        run: |
+          make -s ISA=scalar build/scalar/ml_run build/models/rand_q8.mlb
+          scripts/smoke_release.sh
+      - name: Release notes from CHANGELOG.md
+        run: |
+          v=${TAG#v}
+          awk -v v="$v" '/^## /{p = ($2 == v)} p' CHANGELOG.md | tail -n +2 > notes.md
+          test -s notes.md || { echo "CHANGELOG.md has no section for $v"; exit 1; }
+          printf '\n### Downloads\n\nPick the archive for your platform and run `./ml_run` (or `ml_run.cmd` on Windows): it starts the fastest build your CPU supports. Checksums are in `SHA256SUMS`.\n' >> notes.md
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG }}
+          name: isa-lm ${{ env.TAG }}
+          body_path: notes.md
+          files: dist/*

@@ -13,6 +13,8 @@ typedef enum {
     ML_E_ISA
 } ml_status;
 
+#define ML_VERSION "0.1.0"
+
 #define QK 32          /* quantization block size */
 #define ML_ALIGN 64    /* alignment of every tensor array */
 /* Blocks with max |x| below this quantize to zero: 127/amax would overflow to

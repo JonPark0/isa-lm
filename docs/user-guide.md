@@ -12,6 +12,28 @@ running it.
 - For ARM cross builds: `gcc-aarch64-linux-gnu` or `gcc-arm-linux-gnueabihf`,
   plus `qemu-user` to run the results on an x86 host.
 
+## Prebuilt binaries
+
+Each [release](https://github.com/JonPark0/isa-lm/releases) has static
+binaries for every ISA:
+
+| Archive | Builds |
+|---------|--------|
+| `isa-lm-VER-linux-x86_64.tar.gz` | `sse2`, `sse41`, `avx2`, `avxvnni`, `avx512vnni` |
+| `isa-lm-VER-linux-aarch64.tar.gz` | `neon`, `neon_dotprod`, `neon_i8mm`, `sve` |
+| `isa-lm-VER-linux-armv7hf.tar.gz` | `neon`, `scalar` |
+| `isa-lm-VER-windows-x86_64.zip` | `sse2`, `sse41`, `avx2`, `avxvnni`, `avx512vnni` |
+
+The top-level `ml_run`, `ml_bench` and `ml_tok` (`.cmd` on Windows) try the
+builds in `bin/` from the fastest down and start the first one the CPU
+supports. `ISA_LM_ISA=avx2` (for example) picks one yourself. The archives
+also hold the model tools (`tools/convert.py`, `tools/convert_tokenizer.py`,
+`tools/perplexity.py`; they need Python 3 with numpy).
+
+`scripts/package_release.sh` builds the same archives locally, and
+`scripts/smoke_release.sh` runs them; a `vX.Y.Z` tag runs both in CI
+(`.github/workflows/release.yml`) and publishes the release.
+
 ## Building
 
 ```sh
