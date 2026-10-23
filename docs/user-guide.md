@@ -215,14 +215,14 @@ Llama 3.2 1B on wikitext-2 (2044 tokens, `tools/perplexity.py`; decode on
 | Weights | Size | Perplexity | Decode `-t 4` |
 |---------|-----:|-----------:|--------------:|
 | Q8 | 1326 MB | 17.30 | 31.5 tok/s |
-| Q4 + Q8 `v,o,down` | 904 MB | 18.46 | 47.7 tok/s |
-| Q4 + Q8 `v,down` | 872 MB | 18.79 | |
-| Q4 | 737 MB | 20.46 | 61.3 tok/s |
+| Q4 + Q8 `v,o,down` | 904 MB | 17.95 | 47.7 tok/s |
+| Q4 + Q8 `v,down` | 872 MB | 18.22 | |
+| Q4 | 737 MB | 19.91 | 61.3 tok/s |
 
 The down projection (`down`) and the value and output projections matter
 most. The Q8 KV cache costs nothing measurable here: `--kv q8` on the Q8
 model gives 17.27. The embedding and classifier (`emb`, `cls`) are large for a 128K
-vocabulary and help little (Q4 + `emb,cls`: 862 MB, 20.27).
+vocabulary and help little (Q4 + `emb,cls`: 862 MB, 19.90).
 
 Qwen2.5 0.5B Instruct, same text and machine (no BOS; the F32 numpy
 reference scores 19.00):
@@ -230,10 +230,17 @@ reference scores 19.00):
 | Weights | Size | Perplexity | Decode `-t 4` |
 |---------|-----:|-----------:|--------------:|
 | Q8 | 530 MB | 19.05 | 63.3 tok/s |
-| Q4 + Q8 `emb,v,o,down` | 419 MB | 20.43 | 85.2 tok/s |
-| Q4 | 294 MB | 23.58 | 112.0 tok/s |
+| Q4 + Q8 `emb,v,o,down` | 419 MB | 19.97 | 85.2 tok/s |
+| Q4 | 294 MB | 21.73 | 112.0 tok/s |
 
 Small models lose more to Q4_0: here `up` and `down` matter most, then `v`.
+
+The converter fits each Q4 block's scale by weighted least squares over a few
+candidate mappings, rather than dividing the block's maximum by 7 (Llama 3.2
+1B Q4: 19.91 instead of 20.46; Qwen2.5 0.5B: 21.73 instead of 23.58). The
+file format and the kernels are unchanged, so older Q4 files still load;
+convert again to get the better scales. See
+[the quantization rule](file-format.md#quantization-rule).
 
 | Format | Bits per weight | Notes |
 |--------|-----------------|-------|

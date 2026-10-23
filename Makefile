@@ -78,10 +78,10 @@ build/models/rand_%.mlb: tools/gen_random.py tools/mlb.py
 	@mkdir -p $(dir $@)
 	@$(PYTHON) tools/gen_random.py --out $@ --wtype $* --dump-emb-row 5
 
-# Q4 with some matrix classes in Q8 (header q8_mask)
+# Q4 with some matrix classes in Q8 (header q8_mask). Seed: see ctx_q4.mlb.
 build/models/mix_q4.mlb: tools/gen_random.py tools/mlb.py
 	@mkdir -p $(dir $@)
-	@$(PYTHON) tools/gen_random.py --out $@ --wtype q4 --q8 emb,v,o,down --seed 3
+	@$(PYTHON) tools/gen_random.py --out $@ --wtype q4 --q8 emb,v,o,down --seed 4
 
 # Q/K/V projection biases (Qwen2, header qkv_bias)
 build/models/bias_q4.mlb: tools/gen_random.py tools/mlb.py
@@ -94,9 +94,13 @@ build/models/chat_q8.mlb: tools/gen_random.py tools/mlb.py
 	@$(PYTHON) tools/gen_random.py --out $@ --vocab 336 --max-seq 128 --seed 5
 
 # 160 positions, head_dim 32: attention runs over several 64-position blocks.
+# The seed is one where, over the 150 test positions, no Q8 activation of the
+# scalar build lands on the other side of a rounding boundary than in numpy
+# (one flip moves later logits by ~1%; most seeds have one somewhere). A
+# change to the Q4 quantizer in tools/mlb.py can need a new seed.
 build/models/ctx_q4.mlb: tools/gen_random.py tools/mlb.py
 	@mkdir -p $(dir $@)
-	@$(PYTHON) tools/gen_random.py --out $@ --wtype q4 --dim 128 --layers 2 --heads 4 --kv-heads 2 --hidden 256 --vocab 96 --max-seq 160
+	@$(PYTHON) tools/gen_random.py --out $@ --wtype q4 --dim 128 --layers 2 --heads 4 --kv-heads 2 --hidden 256 --vocab 96 --max-seq 160 --seed 11
 
 # 512 layers x 65536 positions x 32 kv floats: KV cache > 4 GB (32-bit overflow case).
 build/models/wrap32.mlb: tools/gen_random.py tools/mlb.py

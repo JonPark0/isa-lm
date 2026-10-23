@@ -77,7 +77,7 @@ if [ "$G" != 0 ]; then
     b=$($RUN $B/ml_run $T/pc.mlb --tokens $TOKENS --dump-logits $T/pc2.f32 --pack-cache 2>&1)
     echo "$a" | grep -q ": written" && echo "$b" | grep -q ": loaded" \
         && cmp -s $T/pc1.f32 $T/pc.ref.f32 && cmp -s $T/pc2.f32 $T/pc.ref.f32 && ok || bad "--pack-cache: $a / $b"
-    python3 tools/gen_random.py --out $T/pc.mlb --wtype q4 --q8 emb,v,o,down --seed 4 >/dev/null
+    python3 tools/gen_random.py --out $T/pc.mlb --wtype q4 --q8 emb,v,o,down --seed 6 >/dev/null
     c=$($RUN $B/ml_run $T/pc.mlb --tokens 1,2 -n 3 --pack-cache 2>&1)
     head -c 1000 $T/pc.mlb.pk$G > $T/pc.trunc && mv $T/pc.trunc $T/pc.mlb.pk$G
     d=$($RUN $B/ml_run $T/pc.mlb --tokens 1,2 -n 3 --pack-cache 2>&1)

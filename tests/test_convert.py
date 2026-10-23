@@ -35,13 +35,15 @@ def test_random_model_layout(tmp_path):
         with open(path, "rb") as f:
             assert f.read(4) == b"MLB1"
         # dequantized weights within half a quantization step of the originals
+        # (Q8); Q4 clips the opposite extreme of a block at level 7, about two
+        # steps from where it would round
         for name, orig in (("tok_emb", w["tok_emb"]), ("wq0", w["layers"][0]["wq"]),
                            ("w2_1", w["layers"][1]["w2"])):
             qt = t["tok_emb"] if name == "tok_emb" else t["layers"][int(name[-1])][name[:2]]
             deq = mlb.dequant(qt)
-            step = np.repeat(qt.d, 32, axis=-1)
+            step = np.abs(np.repeat(qt.d, 32, axis=-1)) * (0.5 if wtype == "q8" else 2.1)
             assert deq.shape == orig.shape
-            assert np.all(np.abs(deq - orig) <= step / 2 + 1e-6), name
+            assert np.all(np.abs(deq - orig) <= step + 1e-6), name
         np.testing.assert_array_equal(t["layers"][0]["attn_norm"], w["layers"][0]["attn_norm"])
 
 
@@ -59,8 +61,24 @@ def test_quantize_q4_layout():
     x = np.zeros((1, 32), np.float32)
     x[0, 0], x[0, 16] = 7.0, -7.0
     p, d = mlb.quantize_q4(x)
-    assert d[0, 0] == 1.0
-    assert p[0, 0] == (7 + 8) | ((-7 + 8) << 4)
+    lo, hi = (int(p[0, 0]) & 15) - 8, (int(p[0, 0]) >> 4) - 8   # elements 0 and 16
+    assert lo * d[0, 0] == 7.0 and hi * d[0, 0] == -7.0
+    np.testing.assert_array_equal(mlb.dequant(mlb.QT(mlb.WTYPES["q4"], p, d, x.shape)), x)
+
+
+def test_quantize_q4_error():
+    """All 16 levels and a fitted scale: lower error than amax/7 rounding."""
+    x = np.random.default_rng(3).standard_normal((64, 256)).astype(np.float32)
+    p, d = mlb.quantize_q4(x)
+    err = mlb.dequant(mlb.QT(mlb.WTYPES["q4"], p, d, x.shape)) - x
+    b = x.reshape(64, -1, 32)
+    s = np.abs(b).max(-1, keepdims=True) / 7
+    naive = (np.round(b / s) * s).reshape(x.shape) - x
+    assert (err ** 2 * x ** 2).sum() < 0.8 * (naive ** 2 * x ** 2).sum()
+    assert (err ** 2).sum() < (naive ** 2).sum()
+    z = mlb.quantize_q4(np.zeros((2, 64), np.float32))
+    assert (z[0] == 0x88).all()   # level 0 is nibble 8
+    assert not z[1].any()
 
 
 import ref_forward  # noqa: E402

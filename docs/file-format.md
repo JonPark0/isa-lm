@@ -105,8 +105,14 @@ if amax < 1e-30:   d = 0, q = 0                      # 127/amax would overflow
 else:              d = amax / 127,  q = trunc(x * (127/amax) + copysign(0.5, x)),  clamp to ±127
 ```
 
-Q4 uses 7 instead of 127 and clamps to [-8, 7]. Every SIMD implementation is
-bit-identical to the scalar one.
+Every SIMD implementation is bit-identical to the scalar one.
+
+Q4_0 weights are written once, so `tools/mlb.py` fits each block instead: the
+element of largest magnitude goes to a level between -6 and -10 (clamped to
+[-8, 7]) in steps of 0.2, the scale `d` is the least-squares fit for those
+levels with each element weighted by x², and the candidate with the least
+weighted error is kept. `d` can be negative. Any `d` and nibbles are valid
+input to the runtime.
 
 ## RoPE
 
