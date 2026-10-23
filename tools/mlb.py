@@ -90,6 +90,16 @@ def _pack_q4(v):
 Q4_STEPS = np.arange(-10, 3, dtype=np.float32) * np.float32(0.2)   # largest element -> level -(8 + step)
 
 
+def _sum32(a):
+    """Sum over the last axis of 32 in a fixed order: numpy's own reductions
+    order float32 additions by the CPU's SIMD width, which would make the
+    converted file depend on the machine."""
+    while a.shape[-1] > 1:
+        h = a.shape[-1] // 2
+        a = a[..., :h] + a[..., h:]
+    return a[..., 0]
+
+
 def _q4_search(b):
     """Blocks b[n, 32] -> (levels, scales) minimizing the x^2-weighted error."""
     mx = np.take_along_axis(b, np.abs(b).argmax(axis=-1)[:, None], axis=-1)[:, 0]
@@ -100,7 +110,7 @@ def _q4_search(b):
     best = step = None
     for s in Q4_STEPS:
         lv = np.clip(np.rint(y * -(8 + s)), -8, 7)
-        num, den = (wb * lv).sum(-1), (w * lv * lv).sum(-1)
+        num, den = _sum32(wb * lv), _sum32(w * lv * lv)
         # with the least-squares scale num/den the error is sum(w x^2) - num^2/den
         score = num * num / np.where(den > 0, den, 1)
         if best is None:
@@ -109,8 +119,8 @@ def _q4_search(b):
             better = score > best
             best, step = np.where(better, score, best), np.where(better, s, step)
     lv = np.clip(np.rint(y * -(8 + step)[:, None]), -8, 7)
-    den = (w * lv * lv).sum(-1)
-    d = np.where(den > 0, (wb * lv).sum(-1) / np.where(den > 0, den, 1), 0)
+    den = _sum32(w * lv * lv)
+    d = np.where(den > 0, _sum32(wb * lv) / np.where(den > 0, den, 1), 0)
     return np.where(zero[:, None], 0, lv), np.where(zero, 0, d).astype(np.float32)
 
 
