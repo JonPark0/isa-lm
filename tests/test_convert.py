@@ -62,8 +62,9 @@ def test_quantize_q4_layout():
     x[0, 0], x[0, 16] = 7.0, -7.0
     p, d = mlb.quantize_q4(x)
     lo, hi = (int(p[0, 0]) & 15) - 8, (int(p[0, 0]) >> 4) - 8   # elements 0 and 16
-    assert lo * d[0, 0] == 7.0 and hi * d[0, 0] == -7.0
-    np.testing.assert_array_equal(mlb.dequant(mlb.QT(mlb.WTYPES["q4"], p, d, x.shape)), x)
+    # levels -7/7 with d = -1 and -6/6 with d = -7/6 fit exactly: either may win
+    np.testing.assert_allclose([lo * d[0, 0], hi * d[0, 0]], [7.0, -7.0], rtol=1e-6)
+    np.testing.assert_allclose(mlb.dequant(mlb.QT(mlb.WTYPES["q4"], p, d, x.shape)), x, atol=1e-5)
 
 
 def test_quantize_q4_error():
