@@ -20,7 +20,7 @@ version() {   # version RUNNER BINARY: prints the version line of --help
     $1 "$2" --help 2>&1 | grep -q "isa-lm $VER"
 }
 for b in "$T"/isa-lm-$VER-linux-x86_64/bin/*/ml_tok; do
-    "$b" --help >/dev/null 2>&1; rc=$?
+    rc=0; "$b" --help >/dev/null 2>&1 || rc=$?   # not a bare call: set -e would exit with its 3
     [ $rc -eq 3 ] && { echo "skip $b: CPU lacks it"; continue; }
     check version "" "$b"
 done
