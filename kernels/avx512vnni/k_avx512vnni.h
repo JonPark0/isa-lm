@@ -25,7 +25,7 @@ void ml_k_matmul_q4_pk_avx512vnni(float *Y, int ldy, const ml_qtensor *W, const 
 void ml_k_quantize_q8_avx512vnni(ml_qact *out, const float *x, int k);
 void ml_k_rmsnorm_avx512vnni(float *o, const float *x, const float *w, int n, float eps);
 void ml_k_add_avx512vnni(float *y, const float *x, int n);
-float ml_k_dot_f32_avx512vnni(const float *a, const float *b, int n);
-void ml_k_axpy_f32_avx512vnni(float *y, float a, const float *x, int n);
+void ml_k_dot_f32_avx512vnni(float *s, const float *q, const float *k, size_t ldk, int rows, int n, float scale);
+void ml_k_axpy_f32_avx512vnni(float *y, const float *a, const float *x, size_t ldx, int rows, int n);
 
 #endif

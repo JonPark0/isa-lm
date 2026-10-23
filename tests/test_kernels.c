@@ -284,31 +284,94 @@ static void test_add(void) {
     }
 }
 
+/* Attention scores: rows of K with a row stride, against one query. */
 static void test_dot_f32(void) {
-    for (int s = 0; s < 5; s++) {
-        int n = sizes[s];
-        fill(A, n, 0, 1); fill(B, n, 0, 1);   /* positive: no cancellation */
-        double ref = 0;
-        for (int i = 0; i < n; i++) ref += (double)A[i] * B[i];
-        float r1 = ml_k_dot_f32(A, B, n), r2 = ml_k_dot_f32_scalar(A, B, n);
-        TT_NEAR(r1, r2, 1e-5);
-        TT_NEAR(r2, ref, 1e-5);
+    static const int rows_l[] = { 1, 3, 4, 5, 9 };
+    for (int s = 0; s < 5; s++) for (int ri = 0; ri < 5; ri++) {
+        const int n = sizes[s] < 300 ? sizes[s] : 300, rows = rows_l[ri];
+        const size_t ld = (size_t)n + 3;
+        float *K = xalloc(sizeof(float) * ld * rows), r1[9], r2[9];
+        fill(A, n, 0, 1); fill(K, (int)(ld * rows), 0, 1);   /* positive: no cancellation */
+        ml_k_dot_f32(r1, A, K, ld, rows, n, 0.125f);
+        ml_k_dot_f32_scalar(r2, A, K, ld, rows, n, 0.125f);
+        for (int t = 0; t < rows; t++) {
+            double ref = 0;
+            for (int i = 0; i < n; i++) ref += (double)A[i] * K[t * ld + i];
+            TT_NEAR(r1[t], r2[t], 1e-5);
+            TT_NEAR(r2[t], ref * 0.125, 1e-5);
+        }
+        free(K);
     }
 }
 
+/* Weighted sum over V rows: y += sum_t a[t] * x_t. */
 static void test_axpy_f32(void) {
-    for (int s = 0; s < 5; s++) {
-        int n = sizes[s];
-        fill(A, n, -2, 2); fill(B, n, -2, 2);
+    static const int rows_l[] = { 1, 3, 4, 5, 9 };
+    for (int s = 0; s < 5; s++) for (int ri = 0; ri < 5; ri++) {
+        const int n = sizes[s], rows = rows_l[ri];
+        const size_t ld = (size_t)n + 3;
+        float *X = xalloc(sizeof(float) * ld * rows), a[9];
+        fill(A, n, -2, 2); fill(X, (int)(ld * rows), -2, 2); fill(a, rows, 0, 1);
         memcpy(O1, A, sizeof(float) * n); memcpy(O2, A, sizeof(float) * n);
-        const float a = 0.37f;
-        ml_k_axpy_f32(O1, a, B, n);
-        ml_k_axpy_f32_scalar(O2, a, B, n);
+        ml_k_axpy_f32(O1, a, X, ld, rows, n);
+        ml_k_axpy_f32_scalar(O2, a, X, ld, rows, n);
         for (int i = 0; i < n; i++) {
-            double sc = fabs(A[i]) + fabs(a * B[i]);
+            double ref = A[i], sc = fabs(A[i]);
+            for (int t = 0; t < rows; t++) { ref += (double)a[t] * X[t * ld + i]; sc += fabs(a[t] * X[t * ld + i]); }
             TT_CLOSE(O1[i], O2[i], 1e-5, sc);
-            TT_CLOSE(O2[i], A[i] + (double)a * B[i], 1e-5, sc);
+            TT_CLOSE(O2[i], ref, 1e-5, sc);
         }
+        free(X);
+    }
+}
+
+static void fill_q8(int8_t *q, size_t n) {
+    for (size_t i = 0; i < n; i++) q[i] = (int8_t)(rand() % 255 - 127);
+}
+
+/* Q8 KV cache scores: integer dot products, one scale per row (strided). */
+static void test_dot_q8(void) {
+    static const int rows_l[] = { 1, 3, 4, 5, 9 };
+    for (int s = 0; s < 5; s++) for (int ri = 0; ri < 5; ri++) {
+        const int n = sizes[s] < 300 ? sizes[s] : 300, rows = rows_l[ri];
+        const size_t ld = (size_t)n + 5, ldd = 3;
+        int8_t *K = xalloc(ld * rows), *q = xalloc((size_t)n);
+        float dk[27], r1[9], r2[9];
+        fill_q8(K, ld * rows); fill_q8(q, (size_t)n); fill(dk, 27, 0.001f, 0.05f);
+        ml_k_dot_q8(r1, q, 0.02f, K, dk, ld, ldd, rows, n, 0.125f);
+        ml_k_dot_q8_scalar(r2, q, 0.02f, K, dk, ld, ldd, rows, n, 0.125f);
+        for (int t = 0; t < rows; t++) {
+            long long ref = 0;
+            for (int i = 0; i < n; i++) ref += q[i] * K[t * ld + i];
+            TT_ASSERT(r1[t] == r2[t]);   /* exact integer sum, same float ops */
+            TT_NEAR(r2[t], (double)ref * 0.02 * 0.125 * dk[t * ldd], 1e-5);
+        }
+        free(K); free(q);
+    }
+}
+
+/* Q8 KV cache mix: y += sum_t (a[t] * dx_t) * x_t. */
+static void test_axpy_q8(void) {
+    static const int rows_l[] = { 1, 3, 4, 5, 9 };
+    for (int s = 0; s < 5; s++) for (int ri = 0; ri < 5; ri++) {
+        const int n = sizes[s], rows = rows_l[ri];
+        const size_t ld = (size_t)n + 5, ldd = 2;
+        int8_t *X = xalloc(ld * rows);
+        float a[9], dx[18];
+        fill_q8(X, ld * rows); fill(A, n, -2, 2); fill(a, rows, 0, 1); fill(dx, 18, 0.001f, 0.05f);
+        memcpy(O1, A, sizeof(float) * n); memcpy(O2, A, sizeof(float) * n);
+        ml_k_axpy_q8(O1, a, X, dx, ld, ldd, rows, n);
+        ml_k_axpy_q8_scalar(O2, a, X, dx, ld, ldd, rows, n);
+        for (int i = 0; i < n; i++) {
+            double ref = A[i], sc = fabs(A[i]);
+            for (int t = 0; t < rows; t++) {
+                const double term = (double)a[t] * dx[t * ldd] * X[t * ld + i];
+                ref += term; sc += fabs(term);
+            }
+            TT_CLOSE(O1[i], O2[i], 1e-5, sc);
+            TT_CLOSE(O2[i], ref, 1e-5, sc);
+        }
+        free(X);
     }
 }
 
@@ -351,7 +414,7 @@ int TT_ENTRY(int argc, char **argv) {
     O1 = xalloc(4 * MAXN); O2 = xalloc(4 * MAXN); W = xalloc(4 * MAXN);
     printf("ISA: %s\n", ML_ISA_NAME);
     SHOW(matvec_q8); SHOW(matvec_q4); SHOW(quantize_q8); SHOW(rmsnorm); SHOW(softmax);
-    SHOW(rope); SHOW(silu_mul); SHOW(add); SHOW(dot_f32); SHOW(axpy_f32);
+    SHOW(rope); SHOW(silu_mul); SHOW(add); SHOW(dot_f32); SHOW(axpy_f32); SHOW(dot_q8); SHOW(axpy_q8);
 #if ML_PACK_G
     SHOW(matvec_q8_pk); SHOW(matvec_q4_pk); SHOW(matmul_q8_pk); SHOW(matmul_q4_pk);
     printf("pack: %d rows, q8 offset %d\n", ML_PACK_G, ML_PACK_Q8_OFFSET);
@@ -377,6 +440,8 @@ int TT_ENTRY(int argc, char **argv) {
     TT_RUN(test_add);
     TT_RUN(test_dot_f32);
     TT_RUN(test_axpy_f32);
+    TT_RUN(test_dot_q8);
+    TT_RUN(test_axpy_q8);
     TT_RUN(test_rope);
     TT_MAIN_END("test_kernels");
 }

@@ -69,10 +69,15 @@ $(BUILD)/obj/%.o: %.S
 $(BUILD)/test_%: $(BUILD)/obj/tests/test_%.o $(GUARD_OBJ) $(LIB_OBJ)
 	@$(CC) $(LDFLAGS) $^ -o $@ $(LDLIBS)
 
-MODELS := build/models/rand_q8.mlb build/models/rand_q4.mlb
+MODELS := build/models/rand_q8.mlb build/models/rand_q4.mlb build/models/ctx_q4.mlb
 build/models/rand_%.mlb: tools/gen_random.py tools/mlb.py
 	@mkdir -p $(dir $@)
 	@$(PYTHON) tools/gen_random.py --out $@ --wtype $* --dump-emb-row 5
+
+# 160 positions, head_dim 32: attention runs over several 64-position blocks.
+build/models/ctx_q4.mlb: tools/gen_random.py tools/mlb.py
+	@mkdir -p $(dir $@)
+	@$(PYTHON) tools/gen_random.py --out $@ --wtype q4 --dim 128 --layers 2 --heads 4 --kv-heads 2 --hidden 256 --vocab 96 --max-seq 160
 
 # 512 layers x 65536 positions x 32 kv floats: KV cache > 4 GB (32-bit overflow case).
 build/models/wrap32.mlb: tools/gen_random.py tools/mlb.py

@@ -14,7 +14,13 @@ typedef struct {
     ml_arena arena;
     ml_pool *pool;
     float *x, *xb, *xb2, *hb, *hb2, *q, *att, *logits;
-    float *kcache, *vcache;        /* [layer][max_seq][kv_dim] */
+    int kv_type;                   /* ML_F32 or ML_Q8_0 (see ml_state_init) */
+    float *kcache, *vcache;        /* F32: [layer][max_seq][kv_dim] */
+    int8_t *kq, *vq;               /* Q8: [layer][max_seq][kv_dim] */
+    float *kd, *vd;                /* Q8: [layer][max_seq][n_kv_heads] scales */
+    float *kbuf, *vbuf;            /* Q8: this step's K and V before quantization, [ML_BATCH_MAX][kv_dim] */
+    int8_t *qq;                    /* Q8: quantized query heads [dim] */
+    float *qd;                     /* Q8: their scales [n_heads] */
     float *rope_cos, *rope_sin;    /* [max_seq][head_dim/2] */
     ml_qact qa_dim, qa_hidden;
     /* prompt prefill: up to ML_BATCH_MAX tokens per batched step */
@@ -27,7 +33,10 @@ typedef struct {
 
 #define ML_BATCH_MAX 32
 
-ml_status ml_state_init(ml_state *s, ml_model *m, int nthreads);
+/* kv_type: ML_F32 keeps the KV cache in float; ML_Q8_0 stores each position's
+ * K and V per KV head as int8 with one scale (about 3.8x less memory, faster
+ * attention on long contexts, slightly different logits). */
+ml_status ml_state_init(ml_state *s, ml_model *m, int nthreads, int kv_type);
 /* Runs n tokens at positions pos0.. through the model in batches, filling the
  * KV cache. If logits is non-NULL it receives [n][vocab] logits; otherwise
  * the classifier is skipped. ML_E_SHAPE if a position or token is out of range. */

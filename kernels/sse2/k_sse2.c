@@ -188,25 +188,133 @@ void ml_k_add_sse2(float *y, const float *x, int n) {
 }
 #endif
 
-float ml_k_dot_f32_sse2(const float *a, const float *b, int n) {
-    __m128 a0 = _mm_setzero_ps(), a1 = _mm_setzero_ps();
-    int i = 0;
-    for (; i + 8 <= n; i += 8) {
-        a0 = _mm_add_ps(a0, _mm_mul_ps(_mm_loadu_ps(a + i), _mm_loadu_ps(b + i)));
-        a1 = _mm_add_ps(a1, _mm_mul_ps(_mm_loadu_ps(a + i + 4), _mm_loadu_ps(b + i + 4)));
+/* Scores of 4 rows per pass: each row has its own accumulator, so the
+ * arithmetic per row is the same in the 4-row and the 1-row loop. */
+void ml_k_dot_f32_sse2(float *s, const float *q, const float *k, size_t ldk, int rows, int n, float scale) {
+    int t = 0;
+    for (; t + 4 <= rows; t += 4) {
+        const float *k0 = k + (size_t)t * ldk, *k1 = k0 + ldk, *k2 = k1 + ldk, *k3 = k2 + ldk;
+        __m128 a0 = _mm_setzero_ps(), a1 = _mm_setzero_ps(), a2 = _mm_setzero_ps(), a3 = _mm_setzero_ps();
+        int i = 0;
+        for (; i + 4 <= n; i += 4) {
+            const __m128 qv = _mm_loadu_ps(q + i);
+            a0 = _mm_add_ps(a0, _mm_mul_ps(qv, _mm_loadu_ps(k0 + i)));
+            a1 = _mm_add_ps(a1, _mm_mul_ps(qv, _mm_loadu_ps(k1 + i)));
+            a2 = _mm_add_ps(a2, _mm_mul_ps(qv, _mm_loadu_ps(k2 + i)));
+            a3 = _mm_add_ps(a3, _mm_mul_ps(qv, _mm_loadu_ps(k3 + i)));
+        }
+        float r0 = hsum_ps(a0), r1 = hsum_ps(a1), r2 = hsum_ps(a2), r3 = hsum_ps(a3);
+        for (; i < n; i++) { r0 += q[i] * k0[i]; r1 += q[i] * k1[i]; r2 += q[i] * k2[i]; r3 += q[i] * k3[i]; }
+        s[t] = r0 * scale; s[t + 1] = r1 * scale; s[t + 2] = r2 * scale; s[t + 3] = r3 * scale;
     }
-    for (; i + 4 <= n; i += 4) a0 = _mm_add_ps(a0, _mm_mul_ps(_mm_loadu_ps(a + i), _mm_loadu_ps(b + i)));
-    float s = hsum_ps(_mm_add_ps(a0, a1));
-    for (; i < n; i++) s += a[i] * b[i];
-    return s;
+    for (; t < rows; t++) {
+        const float *k0 = k + (size_t)t * ldk;
+        __m128 a0 = _mm_setzero_ps();
+        int i = 0;
+        for (; i + 4 <= n; i += 4) a0 = _mm_add_ps(a0, _mm_mul_ps(_mm_loadu_ps(q + i), _mm_loadu_ps(k0 + i)));
+        float r0 = hsum_ps(a0);
+        for (; i < n; i++) r0 += q[i] * k0[i];
+        s[t] = r0 * scale;
+    }
 }
 
-void ml_k_axpy_f32_sse2(float *y, float a, const float *x, int n) {
-    const __m128 va = _mm_set1_ps(a);
+/* y += sum_t a[t] * x_t, 16 outputs at a time held in registers across all
+ * rows. Each output adds its terms in row order, whatever the chunk. */
+void ml_k_axpy_f32_sse2(float *y, const float *a, const float *x, size_t ldx, int rows, int n) {
     int i = 0;
-    for (; i + 4 <= n; i += 4)
-        _mm_storeu_ps(y + i, _mm_add_ps(_mm_loadu_ps(y + i), _mm_mul_ps(va, _mm_loadu_ps(x + i))));
-    for (; i < n; i++) y[i] += a * x[i];
+    for (; i + 16 <= n; i += 16) {
+        __m128 y0 = _mm_loadu_ps(y + i), y1 = _mm_loadu_ps(y + i + 4), y2 = _mm_loadu_ps(y + i + 8), y3 = _mm_loadu_ps(y + i + 12);
+        const float *xt = x + i;
+        for (int t = 0; t < rows; t++, xt += ldx) {
+            const __m128 av = _mm_set1_ps(a[t]);
+            y0 = _mm_add_ps(y0, _mm_mul_ps(av, _mm_loadu_ps(xt)));
+            y1 = _mm_add_ps(y1, _mm_mul_ps(av, _mm_loadu_ps(xt + 4)));
+            y2 = _mm_add_ps(y2, _mm_mul_ps(av, _mm_loadu_ps(xt + 8)));
+            y3 = _mm_add_ps(y3, _mm_mul_ps(av, _mm_loadu_ps(xt + 12)));
+        }
+        _mm_storeu_ps(y + i, y0); _mm_storeu_ps(y + i + 4, y1); _mm_storeu_ps(y + i + 8, y2); _mm_storeu_ps(y + i + 12, y3);
+    }
+    for (; i + 4 <= n; i += 4) {
+        __m128 y0 = _mm_loadu_ps(y + i);
+        const float *xt = x + i;
+        for (int t = 0; t < rows; t++, xt += ldx) y0 = _mm_add_ps(y0, _mm_mul_ps(_mm_set1_ps(a[t]), _mm_loadu_ps(xt)));
+        _mm_storeu_ps(y + i, y0);
+    }
+    for (; i < n; i++) {
+        float v = y[i];
+        for (int t = 0; t < rows; t++) v += a[t] * x[(size_t)t * ldx + i];
+        y[i] = v;
+    }
+}
+
+/* Q8 KV cache kernels. Integer dot products widen to int16 for pmaddwd; the
+ * query's widened chunk is shared by 4 rows. */
+static inline int32_t hsum_epi32_sse2(__m128i v) {
+    v = _mm_add_epi32(v, _mm_shuffle_epi32(v, 0x4E));
+    v = _mm_add_epi32(v, _mm_shuffle_epi32(v, 0xB1));
+    return _mm_cvtsi128_si32(v);
+}
+
+void ml_k_dot_q8_sse2(float *s, const int8_t *q, float dq, const int8_t *k, const float *dk, size_t ldk, size_t lddk, int rows, int n, float scale) {
+    const float c = dq * scale;
+    int t = 0;
+    for (; t + 4 <= rows; t += 4) {
+        const int8_t *k0 = k + (size_t)t * ldk;
+        __m128i a[4] = { _mm_setzero_si128(), _mm_setzero_si128(), _mm_setzero_si128(), _mm_setzero_si128() };
+        int i = 0;
+        for (; i + 16 <= n; i += 16) {
+            __m128i ql, qh;
+            sext16(_mm_loadu_si128((const __m128i *)(q + i)), &ql, &qh);
+            for (int j = 0; j < 4; j++) {
+                __m128i kl, kh;
+                sext16(_mm_loadu_si128((const __m128i *)(k0 + (size_t)j * ldk + i)), &kl, &kh);
+                a[j] = _mm_add_epi32(a[j], _mm_add_epi32(_mm_madd_epi16(ql, kl), _mm_madd_epi16(qh, kh)));
+            }
+        }
+        for (int j = 0; j < 4; j++) {
+            const int8_t *kt = k0 + (size_t)j * ldk;
+            int32_t sum = hsum_epi32_sse2(a[j]);
+            for (int r = i; r < n; r++) sum += q[r] * kt[r];
+            s[t + j] = (float)sum * c * dk[(size_t)(t + j) * lddk];
+        }
+    }
+    for (; t < rows; t++) {
+        const int8_t *kt = k + (size_t)t * ldk;
+        __m128i a0 = _mm_setzero_si128();
+        int i = 0;
+        for (; i + 16 <= n; i += 16) {
+            __m128i ql, qh, kl, kh;
+            sext16(_mm_loadu_si128((const __m128i *)(q + i)), &ql, &qh);
+            sext16(_mm_loadu_si128((const __m128i *)(kt + i)), &kl, &kh);
+            a0 = _mm_add_epi32(a0, _mm_add_epi32(_mm_madd_epi16(ql, kl), _mm_madd_epi16(qh, kh)));
+        }
+        int32_t sum = hsum_epi32_sse2(a0);
+        for (; i < n; i++) sum += q[i] * kt[i];
+        s[t] = (float)sum * c * dk[(size_t)t * lddk];
+    }
+}
+
+/* 16 outputs at a time held in registers across all rows. */
+void ml_k_axpy_q8_sse2(float *y, const float *a, const int8_t *x, const float *dx, size_t ldx, size_t lddx, int rows, int n) {
+    int i = 0;
+    for (; i + 16 <= n; i += 16) {
+        __m128 y0 = _mm_loadu_ps(y + i), y1 = _mm_loadu_ps(y + i + 4), y2 = _mm_loadu_ps(y + i + 8), y3 = _mm_loadu_ps(y + i + 12);
+        for (int t = 0; t < rows; t++) {
+            const __m128 w = _mm_set1_ps(a[t] * dx[(size_t)t * lddx]);
+            __m128i lo, hi;
+            sext16(_mm_loadu_si128((const __m128i *)(x + (size_t)t * ldx + i)), &lo, &hi);
+            y0 = _mm_add_ps(y0, _mm_mul_ps(w, _mm_cvtepi32_ps(_mm_srai_epi32(_mm_unpacklo_epi16(lo, lo), 16))));
+            y1 = _mm_add_ps(y1, _mm_mul_ps(w, _mm_cvtepi32_ps(_mm_srai_epi32(_mm_unpackhi_epi16(lo, lo), 16))));
+            y2 = _mm_add_ps(y2, _mm_mul_ps(w, _mm_cvtepi32_ps(_mm_srai_epi32(_mm_unpacklo_epi16(hi, hi), 16))));
+            y3 = _mm_add_ps(y3, _mm_mul_ps(w, _mm_cvtepi32_ps(_mm_srai_epi32(_mm_unpackhi_epi16(hi, hi), 16))));
+        }
+        _mm_storeu_ps(y + i, y0); _mm_storeu_ps(y + i + 4, y1); _mm_storeu_ps(y + i + 8, y2); _mm_storeu_ps(y + i + 12, y3);
+    }
+    for (; i < n; i++) {
+        float v = y[i];
+        for (int t = 0; t < rows; t++) v += (a[t] * dx[(size_t)t * lddx]) * (float)x[(size_t)t * ldx + i];
+        y[i] = v;
+    }
 }
 
 /* Packed kernels: 4-row groups (core/pack.h). SSE2 has no 8-bit multiply, so

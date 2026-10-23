@@ -101,18 +101,52 @@ void ml_k_add_sve(float *y, const float *x, int n) {
     }
 }
 
-float ml_k_dot_f32_sve(const float *a, const float *b, int n) {
-    svfloat32_t acc = svdup_f32(0.0f);
-    for (int i = 0; i < n; i += (int)svcntw()) {
-        const svbool_t pg = svwhilelt_b32(i, n);
-        acc = svmla_f32_m(pg, acc, svld1_f32(pg, a + i), svld1_f32(pg, b + i));
+/* Scores of 4 rows per pass, predicated over n. */
+void ml_k_dot_f32_sve(float *s, const float *q, const float *k, size_t ldk, int rows, int n, float scale) {
+    const svbool_t all = svptrue_b32();
+    int t = 0;
+    for (; t + 4 <= rows; t += 4) {
+        const float *k0 = k + (size_t)t * ldk, *k1 = k0 + ldk, *k2 = k1 + ldk, *k3 = k2 + ldk;
+        svfloat32_t a0 = svdup_f32(0.0f), a1 = a0, a2 = a0, a3 = a0;
+        for (int i = 0; i < n; i += (int)svcntw()) {
+            const svbool_t pg = svwhilelt_b32(i, n);
+            const svfloat32_t qv = svld1_f32(pg, q + i);
+            a0 = svmla_f32_m(pg, a0, qv, svld1_f32(pg, k0 + i));
+            a1 = svmla_f32_m(pg, a1, qv, svld1_f32(pg, k1 + i));
+            a2 = svmla_f32_m(pg, a2, qv, svld1_f32(pg, k2 + i));
+            a3 = svmla_f32_m(pg, a3, qv, svld1_f32(pg, k3 + i));
+        }
+        s[t] = svaddv_f32(all, a0) * scale; s[t + 1] = svaddv_f32(all, a1) * scale;
+        s[t + 2] = svaddv_f32(all, a2) * scale; s[t + 3] = svaddv_f32(all, a3) * scale;
     }
-    return svaddv_f32(svptrue_b32(), acc);
+    for (; t < rows; t++) {
+        const float *k0 = k + (size_t)t * ldk;
+        svfloat32_t a0 = svdup_f32(0.0f);
+        for (int i = 0; i < n; i += (int)svcntw()) {
+            const svbool_t pg = svwhilelt_b32(i, n);
+            a0 = svmla_f32_m(pg, a0, svld1_f32(pg, q + i), svld1_f32(pg, k0 + i));
+        }
+        s[t] = svaddv_f32(all, a0) * scale;
+    }
 }
 
-void ml_k_axpy_f32_sve(float *y, float a, const float *x, int n) {
-    for (int i = 0; i < n; i += (int)svcntw()) {
-        const svbool_t pg = svwhilelt_b32(i, n);
-        svst1_f32(pg, y + i, svmla_n_f32_x(pg, svld1_f32(pg, y + i), svld1_f32(pg, x + i), a));
+/* y += sum_t a[t] * x_t, four vectors of outputs at a time held in registers
+ * across all rows. */
+void ml_k_axpy_f32_sve(float *y, const float *a, const float *x, size_t ldx, int rows, int n) {
+    const int vl = (int)svcntw();
+    for (int i = 0; i < n; i += 4 * vl) {
+        const svbool_t p0 = svwhilelt_b32(i, n), p1 = svwhilelt_b32(i + vl, n);
+        const svbool_t p2 = svwhilelt_b32(i + 2 * vl, n), p3 = svwhilelt_b32(i + 3 * vl, n);
+        svfloat32_t y0 = svld1_f32(p0, y + i), y1 = svld1_f32(p1, y + i + vl);
+        svfloat32_t y2 = svld1_f32(p2, y + i + 2 * vl), y3 = svld1_f32(p3, y + i + 3 * vl);
+        const float *xt = x + i;
+        for (int t = 0; t < rows; t++, xt += ldx) {
+            y0 = svmla_n_f32_x(p0, y0, svld1_f32(p0, xt), a[t]);
+            y1 = svmla_n_f32_x(p1, y1, svld1_f32(p1, xt + vl), a[t]);
+            y2 = svmla_n_f32_x(p2, y2, svld1_f32(p2, xt + 2 * vl), a[t]);
+            y3 = svmla_n_f32_x(p3, y3, svld1_f32(p3, xt + 3 * vl), a[t]);
+        }
+        svst1_f32(p0, y + i, y0); svst1_f32(p1, y + i + vl, y1);
+        svst1_f32(p2, y + i + 2 * vl, y2); svst1_f32(p3, y + i + 3 * vl, y3);
     }
 }

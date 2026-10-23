@@ -25,6 +25,7 @@ static const char USAGE[] =
     "  --dump-logits F  write float32 logits for every --tokens position, then exit\n"
     "  --batch N        prompt tokens per batched prefill step, 1..32 (default 32; 1 = token by token)\n"
     "  --no-pack        keep weights row-major (no repacking at load: less memory, slower)\n"
+    "  --kv TYPE        KV cache type: f32 (default) or q8 (3.8x smaller, faster on long contexts)\n"
     "  --profile        print time spent per stage (qkv, attention, wo, ffn, classifier, other)\n"
     "  -h, --help       show this help\n";
 
@@ -81,7 +82,7 @@ static int parse_tokens(const char *s, int *out, int max, int vocab) {
 
 int ml_main(int argc, char **argv) {
     const char *model_path = NULL, *tok_path = NULL, *prompt = NULL, *tokens_arg = NULL, *dump = NULL;
-    int profile = 0, no_pack = 0;
+    int profile = 0, no_pack = 0, kv_type = ML_F32;
     int steps = 64, nthreads = 1, eos = -1, batch = ML_BATCH_MAX;
     float temp = 0.0f, topp = 0.9f;
     unsigned long long seed = 1;
@@ -108,6 +109,11 @@ int ml_main(int argc, char **argv) {
         else if (!strcmp(a, "--eos")) ok = parse_int(v, 0, 1 << 24, &eos);
         else if (!strcmp(a, "--batch")) ok = parse_int(v, 1, ML_BATCH_MAX, &batch);
         else if (!strcmp(a, "--dump-logits")) dump = v;
+        else if (!strcmp(a, "--kv")) {
+            if (!strcmp(v, "f32")) kv_type = ML_F32;
+            else if (!strcmp(v, "q8")) kv_type = ML_Q8_0;
+            else ok = 0;
+        }
         else return usage("unknown option");
         if (!ok) { fprintf(stderr, "error: bad value '%s' for %s\n", v, a); return usage(NULL); }
     }
@@ -143,7 +149,7 @@ int ml_main(int argc, char **argv) {
     if (np <= 0) { ptoks[0] = ML_TOK_BOS; np = 1; }
 
     ml_state s;
-    if ((st = ml_state_init(&s, &m, nthreads)) != ML_OK) {
+    if ((st = ml_state_init(&s, &m, nthreads, kv_type)) != ML_OK) {
         fprintf(stderr, "error: %s\n", ml_status_str(st));
         rc = 1;
         goto out_tok;
@@ -205,8 +211,8 @@ int ml_main(int argc, char **argv) {
     const double dt = ml_now() - t0 + tp;
     if (npre > 0)
         fprintf(stderr, "prefill: %d tokens in %.1f ms (%.1f tok/s)\n", npre, tp * 1e3, tp > 0 ? npre / tp : 0.0);
-    fprintf(stderr, "positions: %d, tok/s: %.2f, threads: %d, isa: %s, packed: %d\n", pos, dt > 0 ? pos / dt : 0.0,
-            ml_pool_size(s.pool), ML_ISA_NAME, m.pack_mem ? ml_pack_group() : 0);
+    fprintf(stderr, "positions: %d, tok/s: %.2f, threads: %d, isa: %s, packed: %d, kv: %s\n", pos, dt > 0 ? pos / dt : 0.0,
+            ml_pool_size(s.pool), ML_ISA_NAME, m.pack_mem ? ml_pack_group() : 0, kv_type == ML_Q8_0 ? "q8" : "f32");
     if (profile) {
         double total = 0.0;
         for (int i = 0; i < ML_PROF_COUNT; i++) total += s.prof[i];

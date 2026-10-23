@@ -194,25 +194,135 @@ void ml_k_add_avx2(float *y, const float *x, int n) {
     for (; i < n; i++) y[i] += x[i];
 }
 
-float ml_k_dot_f32_avx2(const float *a, const float *b, int n) {
-    __m256 a0 = _mm256_setzero_ps(), a1 = _mm256_setzero_ps();
-    int i = 0;
-    for (; i + 16 <= n; i += 16) {
-        a0 = _mm256_fmadd_ps(_mm256_loadu_ps(a + i), _mm256_loadu_ps(b + i), a0);
-        a1 = _mm256_fmadd_ps(_mm256_loadu_ps(a + i + 8), _mm256_loadu_ps(b + i + 8), a1);
+/* Scores of 4 rows per pass: each row has its own accumulator, so the
+ * arithmetic per row is the same in the 4-row and the 1-row loop. */
+void ml_k_dot_f32_avx2(float *s, const float *q, const float *k, size_t ldk, int rows, int n, float scale) {
+    int t = 0;
+    for (; t + 4 <= rows; t += 4) {
+        const float *k0 = k + (size_t)t * ldk, *k1 = k0 + ldk, *k2 = k1 + ldk, *k3 = k2 + ldk;
+        __m256 a0 = _mm256_setzero_ps(), a1 = _mm256_setzero_ps(), a2 = _mm256_setzero_ps(), a3 = _mm256_setzero_ps();
+        int i = 0;
+        for (; i + 8 <= n; i += 8) {
+            const __m256 qv = _mm256_loadu_ps(q + i);
+            a0 = _mm256_fmadd_ps(qv, _mm256_loadu_ps(k0 + i), a0);
+            a1 = _mm256_fmadd_ps(qv, _mm256_loadu_ps(k1 + i), a1);
+            a2 = _mm256_fmadd_ps(qv, _mm256_loadu_ps(k2 + i), a2);
+            a3 = _mm256_fmadd_ps(qv, _mm256_loadu_ps(k3 + i), a3);
+        }
+        float r0 = hsum256_ps(a0), r1 = hsum256_ps(a1), r2 = hsum256_ps(a2), r3 = hsum256_ps(a3);
+        for (; i < n; i++) { r0 += q[i] * k0[i]; r1 += q[i] * k1[i]; r2 += q[i] * k2[i]; r3 += q[i] * k3[i]; }
+        s[t] = r0 * scale; s[t + 1] = r1 * scale; s[t + 2] = r2 * scale; s[t + 3] = r3 * scale;
     }
-    for (; i + 8 <= n; i += 8) a0 = _mm256_fmadd_ps(_mm256_loadu_ps(a + i), _mm256_loadu_ps(b + i), a0);
-    float s = hsum256_ps(_mm256_add_ps(a0, a1));
-    for (; i < n; i++) s += a[i] * b[i];
-    return s;
+    for (; t < rows; t++) {
+        const float *k0 = k + (size_t)t * ldk;
+        __m256 a0 = _mm256_setzero_ps();
+        int i = 0;
+        for (; i + 8 <= n; i += 8) a0 = _mm256_fmadd_ps(_mm256_loadu_ps(q + i), _mm256_loadu_ps(k0 + i), a0);
+        float r0 = hsum256_ps(a0);
+        for (; i < n; i++) r0 += q[i] * k0[i];
+        s[t] = r0 * scale;
+    }
 }
 
-void ml_k_axpy_f32_avx2(float *y, float a, const float *x, int n) {
-    const __m256 va = _mm256_set1_ps(a);
+/* y += sum_t a[t] * x_t, 32 outputs at a time held in registers across all
+ * rows. Each output adds its terms in row order, whatever the chunk. */
+void ml_k_axpy_f32_avx2(float *y, const float *a, const float *x, size_t ldx, int rows, int n) {
     int i = 0;
-    for (; i + 8 <= n; i += 8)
-        _mm256_storeu_ps(y + i, _mm256_fmadd_ps(va, _mm256_loadu_ps(x + i), _mm256_loadu_ps(y + i)));
-    for (; i < n; i++) y[i] += a * x[i];
+    for (; i + 32 <= n; i += 32) {
+        __m256 y0 = _mm256_loadu_ps(y + i), y1 = _mm256_loadu_ps(y + i + 8), y2 = _mm256_loadu_ps(y + i + 16), y3 = _mm256_loadu_ps(y + i + 24);
+        const float *xt = x + i;
+        for (int t = 0; t < rows; t++, xt += ldx) {
+            const __m256 av = _mm256_set1_ps(a[t]);
+            y0 = _mm256_fmadd_ps(av, _mm256_loadu_ps(xt), y0);
+            y1 = _mm256_fmadd_ps(av, _mm256_loadu_ps(xt + 8), y1);
+            y2 = _mm256_fmadd_ps(av, _mm256_loadu_ps(xt + 16), y2);
+            y3 = _mm256_fmadd_ps(av, _mm256_loadu_ps(xt + 24), y3);
+        }
+        _mm256_storeu_ps(y + i, y0); _mm256_storeu_ps(y + i + 8, y1); _mm256_storeu_ps(y + i + 16, y2); _mm256_storeu_ps(y + i + 24, y3);
+    }
+    for (; i + 8 <= n; i += 8) {
+        __m256 y0 = _mm256_loadu_ps(y + i);
+        const float *xt = x + i;
+        for (int t = 0; t < rows; t++, xt += ldx) y0 = _mm256_fmadd_ps(_mm256_set1_ps(a[t]), _mm256_loadu_ps(xt), y0);
+        _mm256_storeu_ps(y + i, y0);
+    }
+    for (; i < n; i++) {
+        float v = y[i];
+        for (int t = 0; t < rows; t++) v += a[t] * x[(size_t)t * ldx + i];
+        y[i] = v;
+    }
+}
+
+/* Q8 KV cache kernels: 16 quants per step widened with vpmovsxbw for
+ * vpmaddwd; the query's widened chunk is shared by 4 rows. */
+static inline int32_t hsum256_epi32(__m256i v) {
+    __m128i s = _mm_add_epi32(_mm256_castsi256_si128(v), _mm256_extracti128_si256(v, 1));
+    s = _mm_add_epi32(s, _mm_shuffle_epi32(s, 0x4E));
+    s = _mm_add_epi32(s, _mm_shuffle_epi32(s, 0xB1));
+    return _mm_cvtsi128_si32(s);
+}
+
+void ml_k_dot_q8_avx2(float *s, const int8_t *q, float dq, const int8_t *k, const float *dk, size_t ldk, size_t lddk, int rows, int n, float scale) {
+    const float c = dq * scale;
+    int t = 0;
+    for (; t + 4 <= rows; t += 4) {
+        const int8_t *k0 = k + (size_t)t * ldk, *k1 = k0 + ldk, *k2 = k1 + ldk, *k3 = k2 + ldk;
+        __m256i a0 = _mm256_setzero_si256(), a1 = a0, a2 = a0, a3 = a0;
+        int i = 0;
+        for (; i + 16 <= n; i += 16) {
+            const __m256i qv = _mm256_cvtepi8_epi16(_mm_loadu_si128((const __m128i *)(q + i)));
+            a0 = _mm256_add_epi32(a0, _mm256_madd_epi16(qv, _mm256_cvtepi8_epi16(_mm_loadu_si128((const __m128i *)(k0 + i)))));
+            a1 = _mm256_add_epi32(a1, _mm256_madd_epi16(qv, _mm256_cvtepi8_epi16(_mm_loadu_si128((const __m128i *)(k1 + i)))));
+            a2 = _mm256_add_epi32(a2, _mm256_madd_epi16(qv, _mm256_cvtepi8_epi16(_mm_loadu_si128((const __m128i *)(k2 + i)))));
+            a3 = _mm256_add_epi32(a3, _mm256_madd_epi16(qv, _mm256_cvtepi8_epi16(_mm_loadu_si128((const __m128i *)(k3 + i)))));
+        }
+        int32_t r0 = hsum256_epi32(a0), r1 = hsum256_epi32(a1), r2 = hsum256_epi32(a2), r3 = hsum256_epi32(a3);
+        for (; i < n; i++) { r0 += q[i] * k0[i]; r1 += q[i] * k1[i]; r2 += q[i] * k2[i]; r3 += q[i] * k3[i]; }
+        s[t] = (float)r0 * c * dk[(size_t)t * lddk];
+        s[t + 1] = (float)r1 * c * dk[(size_t)(t + 1) * lddk];
+        s[t + 2] = (float)r2 * c * dk[(size_t)(t + 2) * lddk];
+        s[t + 3] = (float)r3 * c * dk[(size_t)(t + 3) * lddk];
+    }
+    for (; t < rows; t++) {
+        const int8_t *kt = k + (size_t)t * ldk;
+        __m256i a0 = _mm256_setzero_si256();
+        int i = 0;
+        for (; i + 16 <= n; i += 16)
+            a0 = _mm256_add_epi32(a0, _mm256_madd_epi16(_mm256_cvtepi8_epi16(_mm_loadu_si128((const __m128i *)(q + i))),
+                                                        _mm256_cvtepi8_epi16(_mm_loadu_si128((const __m128i *)(kt + i)))));
+        int32_t sum = hsum256_epi32(a0);
+        for (; i < n; i++) sum += q[i] * kt[i];
+        s[t] = (float)sum * c * dk[(size_t)t * lddk];
+    }
+}
+
+/* 32 outputs at a time held in registers across all rows. */
+void ml_k_axpy_q8_avx2(float *y, const float *a, const int8_t *x, const float *dx, size_t ldx, size_t lddx, int rows, int n) {
+    int i = 0;
+    for (; i + 32 <= n; i += 32) {
+        __m256 y0 = _mm256_loadu_ps(y + i), y1 = _mm256_loadu_ps(y + i + 8), y2 = _mm256_loadu_ps(y + i + 16), y3 = _mm256_loadu_ps(y + i + 24);
+        for (int t = 0; t < rows; t++) {
+            const int8_t *xt = x + (size_t)t * ldx + i;
+            const __m256 w = _mm256_set1_ps(a[t] * dx[(size_t)t * lddx]);
+            y0 = _mm256_fmadd_ps(w, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_loadl_epi64((const __m128i *)xt))), y0);
+            y1 = _mm256_fmadd_ps(w, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_loadl_epi64((const __m128i *)(xt + 8)))), y1);
+            y2 = _mm256_fmadd_ps(w, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_loadl_epi64((const __m128i *)(xt + 16)))), y2);
+            y3 = _mm256_fmadd_ps(w, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_loadl_epi64((const __m128i *)(xt + 24)))), y3);
+        }
+        _mm256_storeu_ps(y + i, y0); _mm256_storeu_ps(y + i + 8, y1); _mm256_storeu_ps(y + i + 16, y2); _mm256_storeu_ps(y + i + 24, y3);
+    }
+    for (; i + 8 <= n; i += 8) {
+        __m256 y0 = _mm256_loadu_ps(y + i);
+        for (int t = 0; t < rows; t++)
+            y0 = _mm256_fmadd_ps(_mm256_set1_ps(a[t] * dx[(size_t)t * lddx]),
+                                 _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_loadl_epi64((const __m128i *)(x + (size_t)t * ldx + i)))), y0);
+        _mm256_storeu_ps(y + i, y0);
+    }
+    for (; i < n; i++) {
+        float v = y[i];
+        for (int t = 0; t < rows; t++) v += (a[t] * dx[(size_t)t * lddx]) * (float)x[(size_t)t * ldx + i];
+        y[i] = v;
+    }
 }
 
 /* Batched packed kernels: each weight vector feeds up to PK_TILE tokens;

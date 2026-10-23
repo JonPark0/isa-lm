@@ -18,10 +18,39 @@ for wt in q8 q4; do
         && ok || bad "ref $wt"
 done
 
+# Q8 KV cache (--kv q8) against the reference emulating it. K, V and q are
+# quantized from float results that differ in the last bits between C and numpy,
+# so a value near a rounding boundary can land one step away: compare
+# distributions (argmax, top-5, KL), as for real models.
+for wt in q8 q4; do
+    $RUN $B/ml_run $M/rand_$wt.mlb --tokens $TOKENS --dump-logits $T/$wt.kv8.f32 --kv q8 \
+        && python3 tools/ref_forward.py $M/rand_$wt.mlb --tokens $TOKENS --out $T/$wt.kv8.ref.f32 --kv q8 \
+        && python3 tests/compare_logits.py $T/$wt.kv8.f32 $T/$wt.kv8.ref.f32 96 --kl 1e-3 >/dev/null \
+        && ok || bad "ref --kv q8 $wt"
+done
+
+# 150 positions: attention crosses its 64-position blocks, both cache types.
+# The host scalar build with an F32 cache must match the reference closely.
+# Over 150 positions, builds with FMA (and any Q8 cache, which quantizes
+# values that differ in their last bits) drift by up to ~2% as rounding
+# boundaries fall differently; main behaved the same. They are held to 5%
+# without the argmax check: enough to catch a wrong block offset or stride,
+# which garbles the logits.
+CTX=$(seq 1 150 | awk '{print ($1 * 37) % 95 + 1}' | paste -sd, -)
+for kv in f32 q8; do
+    if [ $kv = f32 ]; then strict="1e-3"; else strict="5e-2 --any-argmax"; fi
+    python3 tools/ref_forward.py $M/ctx_q4.mlb --tokens $CTX --out $T/ctx.$kv.ref.f32 --kv $kv \
+        && $SCALAR $M/ctx_q4.mlb --tokens $CTX --dump-logits $T/ctx.$kv.scalar.f32 --kv $kv \
+        && python3 tests/compare_logits.py $T/ctx.$kv.scalar.f32 $T/ctx.$kv.ref.f32 96 $strict >/dev/null \
+        && $RUN $B/ml_run $M/ctx_q4.mlb --tokens $CTX --dump-logits $T/ctx.$kv.f32 --kv $kv \
+        && python3 tests/compare_logits.py $T/ctx.$kv.f32 $T/ctx.$kv.ref.f32 96 5e-2 --any-argmax >/dev/null \
+        && ok || bad "150-position ref --kv $kv"
+done
+
 # builds with packed kernels must actually pack (Q4 is packed by every one)
 G=$($RUN $B/ml_run --help 2>&1 | sed -n 's/^pack group: \([0-9]*\).*/\1/p')
 err=$($RUN $B/ml_run $M/rand_q4.mlb --tokens 1,2 -n 4 2>&1 >/dev/null)
-[ -n "$G" ] && echo "$err" | grep -q "packed: $G\$" && ok || bad "expected 'packed: $G' (help says pack group '$G'): $err"
+[ -n "$G" ] && echo "$err" | grep -q "packed: $G," && ok || bad "expected 'packed: $G' (help says pack group '$G'): $err"
 
 # --no-pack keeps the row-major kernels: must match the reference too
 for wt in q8 q4; do
@@ -37,6 +66,8 @@ for wt in q8 q4; do
         && cmp -s $T/$wt.f32 $T/$wt.b1.f32 && cmp -s $T/$wt.f32 $T/$wt.b5.f32 \
         && ok || bad "batched prefill logits differ ($wt)"
 done
+$RUN $B/ml_run $M/ctx_q4.mlb --tokens $CTX --dump-logits $T/ctx.q8.b1.f32 --kv q8 --batch 1 \
+    && cmp -s $T/ctx.q8.f32 $T/ctx.q8.b1.f32 && ok || bad "batched prefill logits differ (--kv q8)"
 $RUN $B/ml_run $M/rand_q8.mlb -z $TOK -i "abcdefghij" -n 24 -T 0 --batch 1 > $T/gb1.txt 2>/dev/null \
     && $RUN $B/ml_run $M/rand_q8.mlb -z $TOK -i "abcdefghij" -n 24 -T 0 > $T/gb.txt 2>/dev/null \
     && cmp -s $T/gb1.txt $T/gb.txt && ok || bad "generation with batched prefill differs from --batch 1"
@@ -66,6 +97,8 @@ for t in 3 4 7; do
         && $RUN $B/ml_run $M/rand_q8.mlb --tokens $TOKENS --dump-logits $T/tn.f32 -t $t \
         && cmp -s $T/t1.f32 $T/tn.f32 && ok || bad "logits with -t $t differ from -t 1"
 done
+$RUN $B/ml_run $M/ctx_q4.mlb --tokens $CTX --dump-logits $T/ctx.q8.t3.f32 --kv q8 -t 3 \
+    && cmp -s $T/ctx.q8.f32 $T/ctx.q8.t3.f32 && ok || bad "logits with --kv q8 -t 3 differ from -t 1"
 err=$($RUN $B/ml_run $M/rand_q4.mlb --tokens 1,2 -n 8 -t 4 2>&1 >/dev/null)
 echo "$err" | grep -q "threads: $NT," && ok || bad "expected 'threads: $NT' in: $err"
 
@@ -95,7 +128,7 @@ for bad_opt in "-T nan" "-T inf" "-T -1" "-p nan" "-p 1.5" "-p -0.1"; do
     [ $? -eq 2 ] && ok || bad "ml_run $bad_opt should exit 2"
 done
 
-for bad_arg in "-n 5x" "-n 99999999999" "-t 2junk" "-s -1" "--tokens 4294967297" "--tokens 1,,2" "--tokens 1," "-n"; do
+for bad_arg in "--kv q4" "--kv" "-n 5x" "-n 99999999999" "-t 2junk" "-s -1" "--tokens 4294967297" "--tokens 1,,2" "--tokens 1," "-n"; do
     $RUN $B/ml_run $M/rand_q8.mlb --tokens 1 $bad_arg >/dev/null 2>&1
     [ $? -eq 2 ] && ok || bad "ml_run $bad_arg should exit 2"
 done

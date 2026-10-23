@@ -238,6 +238,50 @@
 #define ml_k_axpy_f32 ml_k_axpy_f32_scalar
 #endif
 
+#if defined(ML_HAS_DOT_Q8_AVX512VNNI)
+#define ml_k_dot_q8 ml_k_dot_q8_avx512vnni
+#elif defined(ML_HAS_DOT_Q8_AVXVNNI)
+#define ml_k_dot_q8 ml_k_dot_q8_avxvnni
+#elif defined(ML_HAS_DOT_Q8_AVX2)
+#define ml_k_dot_q8 ml_k_dot_q8_avx2
+#elif defined(ML_HAS_DOT_Q8_SSE41)
+#define ml_k_dot_q8 ml_k_dot_q8_sse41
+#elif defined(ML_HAS_DOT_Q8_SSE2)
+#define ml_k_dot_q8 ml_k_dot_q8_sse2
+#elif defined(ML_HAS_DOT_Q8_SVE)
+#define ml_k_dot_q8 ml_k_dot_q8_sve
+#elif defined(ML_HAS_DOT_Q8_NEON_I8MM)
+#define ml_k_dot_q8 ml_k_dot_q8_neon_i8mm
+#elif defined(ML_HAS_DOT_Q8_NEON_DOTPROD)
+#define ml_k_dot_q8 ml_k_dot_q8_neon_dotprod
+#elif defined(ML_HAS_DOT_Q8_NEON)
+#define ml_k_dot_q8 ml_k_dot_q8_neon
+#else
+#define ml_k_dot_q8 ml_k_dot_q8_scalar
+#endif
+
+#if defined(ML_HAS_AXPY_Q8_AVX512VNNI)
+#define ml_k_axpy_q8 ml_k_axpy_q8_avx512vnni
+#elif defined(ML_HAS_AXPY_Q8_AVXVNNI)
+#define ml_k_axpy_q8 ml_k_axpy_q8_avxvnni
+#elif defined(ML_HAS_AXPY_Q8_AVX2)
+#define ml_k_axpy_q8 ml_k_axpy_q8_avx2
+#elif defined(ML_HAS_AXPY_Q8_SSE41)
+#define ml_k_axpy_q8 ml_k_axpy_q8_sse41
+#elif defined(ML_HAS_AXPY_Q8_SSE2)
+#define ml_k_axpy_q8 ml_k_axpy_q8_sse2
+#elif defined(ML_HAS_AXPY_Q8_SVE)
+#define ml_k_axpy_q8 ml_k_axpy_q8_sve
+#elif defined(ML_HAS_AXPY_Q8_NEON_I8MM)
+#define ml_k_axpy_q8 ml_k_axpy_q8_neon_i8mm
+#elif defined(ML_HAS_AXPY_Q8_NEON_DOTPROD)
+#define ml_k_axpy_q8 ml_k_axpy_q8_neon_dotprod
+#elif defined(ML_HAS_AXPY_Q8_NEON)
+#define ml_k_axpy_q8 ml_k_axpy_q8_neon
+#else
+#define ml_k_axpy_q8 ml_k_axpy_q8_scalar
+#endif
+
 /* Packed (row-interleaved) matvec kernels and the layout they expect. */
 #if defined(ML_HAS_MATVEC_PK_AVX512VNNI)
 #define ml_k_matvec_q8_pk ml_k_matvec_q8_pk_avx512vnni
