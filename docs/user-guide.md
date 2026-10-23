@@ -101,10 +101,10 @@ python3 tools/convert.py llama2c stories15M.bin stories15M.mlb --wtype q8
 
 Use the matching llama2.c `tokenizer.bin` as it is.
 
-### From a Hugging Face Llama checkpoint
+### From a Hugging Face checkpoint
 
-The converter needs a directory containing `config.json` and one or more
-`*.safetensors` files:
+The converter reads Llama, Mistral and Qwen2 (Qwen2.5) checkpoints: a
+directory containing `config.json` and one or more `*.safetensors` files:
 
 ```sh
 python3 tools/convert.py hf ./TinyLlama-1.1B model.mlb --wtype q4 --max-seq 2048
@@ -118,6 +118,10 @@ python3 tools/convert.py hf ./TinyLlama-1.1B model.mlb --wtype q4 --max-seq 2048
 - **RoPE scaling:** `rope_scaling` of type `llama3` is supported (Llama 3.1 and
   3.2). The converter refuses other types (linear, dynamic, yarn) instead of
   writing a model that would compute wrong outputs.
+- **Architectures:** `model_type` must be `llama`, `mistral` or `qwen2`, with
+  SiLU and no biases other than Qwen2's q/k/v biases. Others (Gemma, Phi, …)
+  are refused. Sliding-window attention is not implemented: a model that uses
+  it gets its context capped at the window, where it equals full attention.
 - **Context length:** `--max-seq` caps the context, and with it the KV cache.
   Without it the converter uses `max_position_embeddings`, which is often
   131072 for Llama 3.
@@ -142,13 +146,14 @@ Two kinds are supported, and they encode exactly as the Hugging Face
 |------|--------|-------|
 | SentencePiece-style BPE with byte fallback | Llama 2, TinyLlama, Mistral, Vicuna | spaces become `▁`, characters outside the vocabulary become `<0xXX>` byte tokens |
 | byte-level BPE with the Llama 3 pre-tokenizer | Llama 3, 3.1, 3.2 | text is split by the Llama 3 regex (letters, numbers, contractions, white space) before merging |
+| byte-level BPE with NFC and the Qwen2 pre-tokenizer | Qwen2, Qwen2.5 | text is normalized to NFC, then split as Llama 3 but with one digit per number chunk |
 
-The converter refuses anything else (WordPiece, Unigram, GPT-2 or Qwen
-pre-tokenizers, extra normalizers) rather than write a tokenizer that would
+The converter refuses anything else (WordPiece, Unigram, GPT-2
+pre-tokenizers, other normalizers) rather than write a tokenizer that would
 encode differently.
 
 - **BOS:** added when the tokenizer's template adds it (`<s>`,
-  `<|begin_of_text|>`).
+  `<|begin_of_text|>`); Qwen2 adds none.
 - **Special tokens** written in the prompt, such as `<|eot_id|>`, are encoded
   as the special tokens.
 - **Stopping:** generation stops at the tokenizer's EOS (`</s>`,
@@ -175,6 +180,8 @@ The capital of Germany is Berlin.
 | `llama3` | Llama 3, 3.1, 3.2 Instruct | `<|eot_id|>` |
 | `zephyr` | TinyLlama Chat, Zephyr | `</s>` |
 | `llama2` | Llama 2 Chat, Mistral Instruct (without `--system`) | `</s>` |
+| `qwen` | Qwen2.5 Instruct; without `--system` it uses Qwen's default system prompt | `<|im_end|>` |
+| `chatml` | other ChatML models; a system turn only with `--system` | `<|im_end|>` |
 
 - **Input:** one turn per line on stdin (a `> ` prompt appears on a terminal),
   or a single turn with `-i`. End with Ctrl-D.
@@ -217,6 +224,17 @@ most. The Q8 KV cache costs nothing measurable here: `--kv q8` on the Q8
 model gives 17.27. The embedding and classifier (`emb`, `cls`) are large for a 128K
 vocabulary and help little (Q4 + `emb,cls`: 862 MB, 20.27).
 
+Qwen2.5 0.5B Instruct, same text and machine (no BOS; the F32 numpy
+reference scores 19.00):
+
+| Weights | Size | Perplexity | Decode `-t 4` |
+|---------|-----:|-----------:|--------------:|
+| Q8 | 530 MB | 19.05 | 63.3 tok/s |
+| Q4 + Q8 `emb,v,o,down` | 419 MB | 20.43 | 85.2 tok/s |
+| Q4 | 294 MB | 23.58 | 112.0 tok/s |
+
+Small models lose more to Q4_0: here `up` and `down` matter most, then `v`.
+
 | Format | Bits per weight | Notes |
 |--------|-----------------|-------|
 | `Q8_0` | 9 | close to FP32 quality; best throughput on VNNI and dotprod CPUs |
@@ -249,7 +267,7 @@ build/avx2/ml_run model.mlb --tokens 1,450,3681 --dump-logits l.f32
 | `--pack-cache` | Save the packed weights next to the model (`MODEL.pk<G>`, G = pack group) and map them from there on later runs instead of packing again. The cache is checked against the model and the build's layout and rewritten when stale. |
 | `--no-pack` | Keep weights row-major instead of repacking them for the packed kernels. Uses less memory during load, but runs slower. |
 | `--profile` | Print the share of forward-pass time per stage (qkv, attention, wo, ffn, classifier, other). |
-| `--chat TEMPLATE` | Chat with the model: `llama3`, `zephyr` or `llama2`, see [Chat](#chat). Needs `-z`. |
+| `--chat TEMPLATE` | Chat with the model: `llama3`, `zephyr`, `llama2`, `qwen` or `chatml`, see [Chat](#chat). Needs `-z`. |
 | `--system TEXT` | System prompt for `--chat`. |
 | `--eos ID` | Stop as soon as `ID` is generated. Without it, a run with `-z` stops at the tokenizer's BOS or EOS, and a run without `-z` uses every `-n` position. |
 

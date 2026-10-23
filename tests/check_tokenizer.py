@@ -9,6 +9,7 @@ import argparse
 import random
 import subprocess
 import sys
+import unicodedata
 
 CORPUS = [
     "Hello world", "Once upon a time, there was a little girl named Lily.",
@@ -26,11 +27,23 @@ CORPUS = [
     "Zero​width nbsp　ideographic sep",
     "<s>special</s> in <|begin_of_text|> text <|eot_id|> and <|reserved_special_token_7|>",
     "a" * 300, "ab " * 120, "🙂" * 50,
+    # NFC (Qwen2): decomposed accents, out-of-order marks, conjoining jamo,
+    # singletons, exclusions and blocked compositions
+    "cafe\u0301 re\u0301sume\u0301 A\u030a \u212b \u2126 \u0958 \u0344 \u0f73",
+    "a\u0301\u0323 a\u0323\u0301 q\u0307\u0323 o\u031b\u0323\u0302 e\u0302\u0301\u0301",
+    "\u1100\u1161\u11a8 \u1112\u1161\u11ab\u1100\u1173\u11af \uac00\u11a8 \u1100\u1161 \u1100\u11a8",
+    "\u0915\u093c \u09c7\u09be \u0b47\u0b56 \u1025\u102e \u3046\u3099 \u30cf\u309a",
 ]
+# every composite NFC builds, decomposed (letters split by spaces in chunks;
+# tools/gen_unicode.py follows the tokenizers library in leaving U+11938 out)
+_COMP = [c for c in map(chr, range(0x110000)) if unicodedata.normalize("NFD", c) != c
+         and unicodedata.normalize("NFC", unicodedata.normalize("NFD", c)) == c and c != "\U00011938"]
+CORPUS += [" ".join(unicodedata.normalize("NFD", c) for c in _COMP[i:i + 200])
+           for i in range(0, len(_COMP), 200)]
 
 
 POOL = list("aZqé漢字한글Жж123٣٤ \n\r\t'’.,!?-_()[]{}<>/\\@#$%^&*\"`~:;|+=") + [
-    "\u0301", "\u0915", "\u093f", "\u00a0", "\u3000", "\u2028", "🙂", "👍🏽", "\U0001F1F0", "s", "t", "re", "ll", "  ", "\n\n"]
+    "\u0301", "\u0323", "\u0302", "\u031b", "\u1100", "\u1161", "\u11a8", "\u3099", "e\u0301", "\u0915", "\u093f", "\u00a0", "\u3000", "\u2028", "🙂", "👍🏽", "\U0001F1F0", "s", "t", "re", "ll", "  ", "\n\n"]
 
 
 def fuzz(n, seed):

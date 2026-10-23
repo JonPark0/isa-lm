@@ -98,6 +98,8 @@ def forward(cfg, t, tokens, kv="f32"):
             q = m.matvec(L["wq"], h)
             k = m.matvec(L["wk"], h)
             v = m.matvec(L["wv"], h)
+            if "bq" in L:   # float32 adds, as the runtime does
+                q, k, v = q + L["bq"], k + L["bk"], v + L["bv"]
             q = rope(q, cos_t[pos], sin_t[pos], hd)
             k = rope(k, cos_t[pos], sin_t[pos], hd)
             if kv == "q8":   # per position and KV head: int8 quants, one scale

@@ -67,7 +67,8 @@ ml_status ml_bpe_load(ml_tokenizer *t, FILE *f, int vocab) {
         fread(&bos, 4, 1, f) != 1 || fread(&eos, 4, 1, f) != 1 || !read_u32(f, &flags))
         return ML_E_FORMAT;
     if (ver != 1 || (kind != ML_TOK_SPM && kind != ML_TOK_BYTE_BPE) || nv == 0 || nv > (1u << 24) ||
-        nm > (1u << 24) || bos < -1 || bos >= (int32_t)nv || eos < -1 || eos >= (int32_t)nv)
+        nm > (1u << 24) || bos < -1 || bos >= (int32_t)nv || eos < -1 || eos >= (int32_t)nv ||
+        (flags & ~(uint32_t)ML_TOKF_ALL))
         return ML_E_FORMAT;
     if (vocab > 0 && nv > (uint32_t)vocab) return ML_E_SHAPE;
     t->kind = (int)kind;
@@ -270,13 +271,14 @@ static int encode_spm(const ml_tokenizer *t, const unsigned char *s, int n, int 
 /* The Llama 3 pre-tokenizer regex, matched by hand on code points:
  *   (?i:'s|'t|'re|'ve|'m|'ll|'d) | [^\r\n\p{L}\p{N}]?\p{L}+ | \p{N}{1,3}
  *   | ' '?[^\s\p{L}\p{N}]+[\r\n]* | \s*[\r\n]+ | \s+(?!\S) | \s+
+ * Qwen2 uses \p{N} instead of \p{N}{1,3} (ndig = 1).
  * Returns the end of the chunk that starts at code point k. */
 #define IS_L(i) ml_uni_is_letter(cp[i])
 #define IS_N(i) ml_uni_is_number(cp[i])
 #define IS_S(i) ml_uni_is_space(cp[i])
 #define IS_NL(i) (cp[i] == '\r' || cp[i] == '\n')
 #define IS_OTHER(i) (!IS_S(i) && !IS_L(i) && !IS_N(i))
-static int chunk_end(const uint32_t *cp, int m, int k) {
+static int chunk_end(const uint32_t *cp, int m, int k, int ndig) {
     if (cp[k] == '\'' && k + 1 < m) {
         const uint32_t a = cp[k + 1] | 0x20, b = k + 2 < m ? cp[k + 2] | 0x20 : 0;
         if (cp[k + 1] < 0x80 && (a == 's' || a == 't' || a == 'm' || a == 'd')) return k + 2;
@@ -291,7 +293,7 @@ static int chunk_end(const uint32_t *cp, int m, int k) {
         return j;
     }
     if (IS_N(k)) {
-        for (j = k; j < m && j < k + 3 && IS_N(j); j++) {}
+        for (j = k; j < m && j < k + ndig && IS_N(j); j++) {}
         return j;
     }
     j = k;
@@ -335,10 +337,17 @@ static int encode_byte_bpe(const ml_tokenizer *t, const unsigned char *s, int n,
     }
     off[m] = n;
     for (int k = 0; k < m;) {
-        const int j = chunk_end(cp, m, k);
+        const int j = chunk_end(cp, m, k, t->flags & ML_TOKF_DIGITS1 ? 1 : 3);
         if (encode_chunk(t, s + off[k], off[j] - off[k], sym, e) < 0) return -1;
         k = j;
     }
+    return 0;
+}
+
+/* Text below U+0300 (no UTF-8 lead byte from 0xCC) is already in NFC. */
+static int needs_nfc(const unsigned char *s, int n) {
+    for (int i = 0; i < n; i++)
+        if (s[i] >= 0xCC) return 1;
     return 0;
 }
 
@@ -359,19 +368,25 @@ int ml_bpe_encode(const ml_tokenizer *t, const char *text, int bos, int eos, int
     const unsigned char *s = (const unsigned char *)text;
     const int n = (int)strlen(text);
     emit_buf e = { out, 0, max };
-    int *sym = malloc(sizeof(int) * (3 * (size_t)n + 4));
-    unsigned char *buf = malloc(3 * (size_t)n + 4);
-    uint32_t *cp = malloc(sizeof(uint32_t) * ((size_t)n + 1));
-    int *off = malloc(sizeof(int) * ((size_t)n + 1));
+    /* NFC can make UTF-8 text up to three times longer */
+    const size_t cap = (t->flags & ML_TOKF_NFC ? 3 : 1) * (size_t)n + 1;
+    int *sym = malloc(sizeof(int) * (3 * cap + 4));
+    unsigned char *buf = malloc(3 * cap + 4);
+    uint32_t *cp = malloc(sizeof(uint32_t) * cap);
+    int *off = malloc(sizeof(int) * cap);
     int rc = sym && buf && cp && off ? 0 : -1;
     if (rc == 0 && bos && t->bos >= 0 && (t->flags & ML_TOKF_ADD_BOS)) rc = emit(&e, &t->bos, 1);
     /* added tokens are matched first; the text between them is encoded */
     for (int i = 0; rc == 0 && i < n;) {
         int id = -1;
         const int a = i + find_added(t, s + i, n - i, &id);
-        if (a > i)
-            rc = t->kind == ML_TOK_SPM ? encode_spm(t, s + i, a - i, !(t->flags & ML_TOKF_PREPEND_FIRST) || i == 0, sym, buf, &e)
-                                       : encode_byte_bpe(t, s + i, a - i, sym, cp, off, &e);
+        if (a > i && t->kind == ML_TOK_SPM)
+            rc = encode_spm(t, s + i, a - i, !(t->flags & ML_TOKF_PREPEND_FIRST) || i == 0, sym, buf, &e);
+        else if (a > i && (t->flags & ML_TOKF_NFC) && needs_nfc(s + i, a - i)) {
+            const int len = ml_uni_nfc(s + i, a - i, buf);   /* buf is free in byte-level BPE */
+            rc = len < 0 ? -1 : encode_byte_bpe(t, buf, len, sym, cp, off, &e);
+        } else if (a > i)
+            rc = encode_byte_bpe(t, s + i, a - i, sym, cp, off, &e);
         if (rc == 0 && a < n) rc = emit(&e, &id, 1);
         i = a < n ? a + t->piece_len[id] : n;
     }

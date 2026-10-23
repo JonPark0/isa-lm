@@ -2,7 +2,7 @@
 
   convert.py llama2c IN.bin OUT.mlb [--wtype q8|q4] [--q8 LIST]   llama2.c legacy (v0) export
   convert.py hf DIR OUT.mlb [--wtype q8|q4] [--q8 LIST] [--max-seq N]
-                                                      HF Llama: config.json + *.safetensors
+                                                      HF Llama, Mistral, Qwen2: config.json + *.safetensors
 """
 import argparse
 import glob
@@ -84,10 +84,30 @@ def _unrotate(w, n_heads):
     return w.reshape(n_heads, 2, hd // 2, dim).transpose(0, 2, 1, 3).reshape(rows, dim)
 
 
+HF_TYPES = ("llama", "mistral", "qwen2")
+
+
+def _window(c):
+    """Sliding-window attention span, or None when every layer attends to the full context."""
+    w = c.get("sliding_window")
+    if c.get("model_type") == "qwen2" and not c.get("use_sliding_window", False):
+        return None
+    return int(w) if w else None
+
+
 def load_hf(d, max_seq=None):
-    """-> (cfg, float32 weights) from a HF Llama directory."""
+    """-> (cfg, float32 weights) from a HF Llama, Mistral or Qwen2 directory."""
     with open(os.path.join(d, "config.json")) as fh:
         c = json.load(fh)
+    mtype = c.get("model_type", "llama")
+    if mtype not in HF_TYPES:
+        raise ValueError(f"model_type {mtype!r} is not supported (only {', '.join(HF_TYPES)})")
+    if c.get("hidden_act", "silu") != "silu":
+        raise ValueError(f"hidden_act {c['hidden_act']!r} is not supported (only silu)")
+    if c.get("head_dim") not in (None, c["hidden_size"] // c["num_attention_heads"]):
+        raise ValueError("head_dim != hidden_size / num_attention_heads is not supported")
+    if c.get("mlp_bias"):
+        raise ValueError("MLP biases are not supported")
     rope_scaling = None
     rs = c.get("rope_scaling")
     if rs:
@@ -108,9 +128,15 @@ def load_hf(d, max_seq=None):
     nh = c["num_attention_heads"]
     nkv = c.get("num_key_value_heads", nh)
     tied = c.get("tie_word_embeddings", False) or "lm_head.weight" not in t
+    # Within the window, sliding-window attention equals full attention: cap the
+    # context there instead of implementing the window.
+    seq = min(c["max_position_embeddings"], max_seq or c["max_position_embeddings"], _window(c) or 1 << 31)
+    if any(k.endswith(("o_proj.bias", "mlp.gate_proj.bias", "mlp.up_proj.bias", "mlp.down_proj.bias"))
+           for k in t):
+        raise ValueError("biases other than on the q/k/v projections are not supported")
+    bias = "model.layers.0.self_attn.q_proj.bias" in t
     cfg = dict(dim=c["hidden_size"], n_layers=c["num_hidden_layers"], n_heads=nh, n_kv_heads=nkv,
-               hidden_dim=c["intermediate_size"], vocab=c["vocab_size"],
-               max_seq=min(c["max_position_embeddings"], max_seq or c["max_position_embeddings"]),
+               hidden_dim=c["intermediate_size"], vocab=c["vocab_size"], max_seq=seq, qkv_bias=int(bias),
                rope_theta=float(c.get("rope_theta", 10000.0)), norm_eps=float(c.get("rms_norm_eps", 1e-5)),
                shared_classifier=int(tied), rope_scaling=rope_scaling)
     w = {"tok_emb": t["model.embed_tokens.weight"], "final_norm": t["model.norm.weight"], "layers": []}
@@ -127,6 +153,10 @@ def load_hf(d, max_seq=None):
             "w2": t[p + "mlp.down_proj.weight"],
             "w3": t[p + "mlp.up_proj.weight"],
         })
+        if bias:   # q/k biases follow their rows through the RoPE permutation
+            w["layers"][-1].update(bq=_unrotate(t[p + "self_attn.q_proj.bias"][:, None], nh)[:, 0],
+                                   bk=_unrotate(t[p + "self_attn.k_proj.bias"][:, None], nkv)[:, 0],
+                                   bv=t[p + "self_attn.v_proj.bias"])
     if not tied:
         w["wcls"] = t["lm_head.weight"]
     return cfg, w

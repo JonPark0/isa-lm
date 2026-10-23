@@ -13,9 +13,10 @@ TINY = np.float32(1e-30)   # blocks with max |x| below this quantize to zero (ML
 ALIGN = 64
 HEADER_SIZE = 256
 WTYPES = {"f32": 0, "q8": 1, "q4": 2}
-_HDR = struct.Struct("<4sIIIIIIIIffIIIfffII")   # magic .. rope scaling, q8 mask: 76 bytes
+_HDR = struct.Struct("<4sIIIIIIIIffIIIfffIII")   # magic .. rope scaling, q8 mask, qkv bias: 80 bytes
 ROPE_TYPES = {None: 0, "llama3": 1}
 LAYER_KEYS = ("attn_norm", "wq", "wk", "wv", "wo", "ffn_norm", "w1", "w2", "w3")
+BIAS_KEYS = ("bq", "bk", "bv")   # F32, after wo, when the header's qkv_bias is set (Qwen2)
 
 QT = namedtuple("QT", "type q d shape")   # quantized tensor as stored
 
@@ -110,6 +111,9 @@ def _order(cfg, w):
     for i, layer in enumerate(w["layers"]):
         for k in LAYER_KEYS:
             yield f"layers.{i}.{k}", ("f" if k.endswith("norm") else "q"), layer[k]
+            if k == "wo" and cfg.get("qkv_bias"):
+                for b in BIAS_KEYS:
+                    yield f"layers.{i}.{b}", "f", layer[b]
     yield "final_norm", "f", w["final_norm"]
     if not cfg.get("shared_classifier", 0):
         yield "wcls", "q", w["wcls"]
@@ -133,7 +137,7 @@ def write_mlb(path, cfg, w, wtype, q8=()):
                     cfg["norm_eps"], WTYPES[wtype], int(cfg.get("shared_classifier", 0)),
                     ROPE_TYPES[rs.get("type")], rs.get("factor", 0.0), rs.get("low_freq_factor", 0.0),
                     rs.get("high_freq_factor", 0.0), rs.get("original_max_position_embeddings", 0),
-                    mask)
+                    mask, int(bool(cfg.get("qkv_bias"))))
     layout = []
     with open(path, "wb") as f:
         f.write(hdr.ljust(HEADER_SIZE, b"\0"))
@@ -166,7 +170,7 @@ def read_mlb(path):
     keys = ("version", "dim", "n_layers", "n_heads", "n_kv_heads", "hidden_dim", "vocab",
             "max_seq", "rope_theta", "norm_eps", "wtype", "shared_classifier")
     cfg = dict(zip(keys, f[1:13]))
-    rtype, rf, rlo, rhi, rorig, cfg["q8_mask"] = f[13:]
+    rtype, rf, rlo, rhi, rorig, cfg["q8_mask"], cfg["qkv_bias"] = f[13:]
     cfg["rope_scaling"] = None if rtype == 0 else {
         "type": {v: k for k, v in ROPE_TYPES.items()}[rtype], "factor": rf, "low_freq_factor": rlo,
         "high_freq_factor": rhi, "original_max_position_embeddings": rorig}
@@ -198,6 +202,8 @@ def read_mlb(path):
         layer = {}
         for k in LAYER_KEYS:
             layer[k] = take(np.float32, dim) if k.endswith("norm") else mat(k)
+            if k == "wo" and cfg["qkv_bias"]:
+                layer["bq"], layer["bk"], layer["bv"] = take(np.float32, dim), take(np.float32, kv), take(np.float32, kv)
         t["layers"].append(layer)
     t["final_norm"] = take(np.float32, dim)
     t["wcls"] = t["tok_emb"] if cfg["shared_classifier"] else mat("wcls")

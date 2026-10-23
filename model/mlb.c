@@ -54,6 +54,9 @@ static ml_status parse_header(ml_config *cfg, int *shared, const uint8_t *h) {
     if (cfg->wtype != ML_Q8_0 && cfg->wtype != ML_Q4_0) return ML_E_FORMAT;
     cfg->q8_mask = rd32(h + 72);
     if ((cfg->q8_mask & ~(unsigned)ML_Q8M_ALL) || (cfg->wtype == ML_Q8_0 && cfg->q8_mask)) return ML_E_FORMAT;
+    const uint32_t bias = rd32(h + 76);
+    if (bias > 1) return ML_E_FORMAT;
+    cfg->qkv_bias = (int)bias;
     if (cfg->dim % QK || cfg->hidden_dim % QK) return ML_E_SHAPE;
     if (cfg->dim % cfg->n_heads || cfg->n_heads % cfg->n_kv_heads) return ML_E_SHAPE;
     cfg->head_dim = cfg->dim / cfg->n_heads;
@@ -101,6 +104,11 @@ ml_status ml_model_load(ml_model *m, const char *path) {
         L->wk = take_mat(&cur, c->kv_dim, c->dim, WT(ML_Q8M_QK));
         L->wv = take_mat(&cur, c->kv_dim, c->dim, WT(ML_Q8M_V));
         L->wo = take_mat(&cur, c->dim, c->dim, WT(ML_Q8M_O));
+        if (c->qkv_bias) {
+            L->bq = take(&cur, normsz);
+            L->bk = take(&cur, (size_t)c->kv_dim * sizeof(float));
+            L->bv = take(&cur, (size_t)c->kv_dim * sizeof(float));
+        }
         L->ffn_norm = take(&cur, normsz);
         L->w1 = take_mat(&cur, c->hidden_dim, c->dim, WT(ML_Q8M_UP));
         L->w2 = take_mat(&cur, c->dim, c->hidden_dim, WT(ML_Q8M_DOWN));

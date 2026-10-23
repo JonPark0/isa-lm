@@ -42,7 +42,10 @@ typedef struct {
 } ml_tokenizer;
 
 enum { ML_TOKA_ADDED = 1, ML_TOKA_BYTE = 2 };
-enum { ML_TOKF_ADD_BOS = 1, ML_TOKF_IGNORE_MERGES = 2, ML_TOKF_PREPEND_FIRST = 4 };
+enum { ML_TOKF_ADD_BOS = 1, ML_TOKF_IGNORE_MERGES = 2, ML_TOKF_PREPEND_FIRST = 4,
+       ML_TOKF_NFC = 8,          /* byte-level: NFC-normalize text between added tokens */
+       ML_TOKF_DIGITS1 = 16,     /* byte-level: \p{N} chunks of one digit (Qwen2), not 1-3 */
+       ML_TOKF_ALL = 31 };
 
 /* Loads either format (detected by the "MLT1" magic). vocab: the model's
  * vocabulary size; llama2.c files hold exactly that many tokens, MLT1 files

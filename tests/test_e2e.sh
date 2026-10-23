@@ -27,6 +27,13 @@ $RUN $B/ml_run $M/mix_q4.mlb --tokens $TOKENS --dump-logits $T/mix.f32 \
     && $RUN $B/ml_run $M/mix_q4.mlb --tokens $TOKENS --dump-logits $T/mix.b1.f32 --batch 1 \
     && cmp -s $T/mix.f32 $T/mix.b1.f32 && ok || bad "mixed Q4/Q8 model"
 
+# Q/K/V biases (qkv_bias, Qwen2): reference, batched prefill
+$RUN $B/ml_run $M/bias_q4.mlb --tokens $TOKENS --dump-logits $T/bias.f32 \
+    && python3 tools/ref_forward.py $M/bias_q4.mlb --tokens $TOKENS --out $T/bias.ref.f32 \
+    && python3 tests/compare_logits.py $T/bias.f32 $T/bias.ref.f32 96 1e-3 >/dev/null \
+    && $RUN $B/ml_run $M/bias_q4.mlb --tokens $TOKENS --dump-logits $T/bias.b1.f32 --batch 1 \
+    && cmp -s $T/bias.f32 $T/bias.b1.f32 && ok || bad "Q/K/V bias model"
+
 # Q8 KV cache (--kv q8) against the reference emulating it. K, V and q are
 # quantized from float results that differ in the last bits between C and numpy,
 # so a value near a rounding boundary can land one step away: compare
@@ -175,7 +182,7 @@ $RUN $B/ml_run $CHAT -i "hello world" > $T/chat1.txt 2>/dev/null \
     && cmp -s $T/chat1.txt $T/chat1s.txt && ok || bad "--chat -i differs from one stdin line"
 err=$(seq 1 40 | sed 's/^/tell me more /' | $RUN $B/ml_run $CHAT 2>&1 >/dev/null); rc=$?
 [ $rc -eq 0 ] && echo "$err" | grep -q "context full" && ok || bad "--chat past the context: rc=$rc $err"
-for bad_chat in "--chat chatml" "--system x"; do
+for bad_chat in "--chat vicuna" "--system x"; do
     $RUN $B/ml_run $M/chat_q8.mlb -z $M/bpe_tiny.mlt $bad_chat -i hi >/dev/null 2>&1
     [ $? -eq 2 ] && ok || bad "ml_run $bad_chat should exit 2"
 done

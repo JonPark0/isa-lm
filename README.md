@@ -49,10 +49,11 @@ make ISA=avx2
 python3 tools/convert.py llama2c stories15M.bin stories15M.mlb --wtype q8
 build/avx2/ml_run stories15M.mlb -z tokenizer.bin -i "Once upon a time" -n 128 -T 0.8
 
-# Hugging Face Llama (safetensors), including Llama 3 RoPE scaling, and its tokenizer.json
+# Hugging Face Llama, Mistral or Qwen2 (safetensors), and its tokenizer.json
 python3 tools/convert.py hf ./Llama-3.2-1B-Instruct llama.mlb --wtype q4 --q8 v,o,down --max-seq 4096
 python3 tools/convert_tokenizer.py ./Llama-3.2-1B-Instruct/tokenizer.json llama.mlt
 build/avx2/ml_run llama.mlb -z llama.mlt --chat llama3 -t 4     # one message per line
+build/avx2/ml_run qwen.mlb -z qwen.mlt --chat qwen -t 4         # Qwen2.5 Instruct
 ```
 
 ## Documentation
@@ -80,8 +81,8 @@ Site: <https://jonpark0.github.io/isa-lm/> · Wiki: <https://github.com/JonPark0
 | Thread pool | bit-identical results for any thread count; ThreadSanitizer clean; a 4-layer dim-2048 Q4 model decodes at 140 tok/s with `-t 1` and 503 tok/s with `-t 4` (avx512vnni, 4 vCPUs) |
 | Windows | cross-compiles with MinGW in CI (not executed); MSVC is supported in CMake but not verified |
 | Quantization | Q8_0, Q4_0, and Q4 with chosen matrix classes in Q8 (`--q8 v,o,down`: Llama 3.2 1B perplexity 18.46 at 904 MB, against 17.30 for Q8 at 1326 MB and 20.46 for Q4 at 737 MB); `tools/perplexity.py` measures it |
-| Tokenizers | llama2.c `tokenizer.bin`; Hugging Face `tokenizer.json` for SentencePiece-style BPE (Llama 2, TinyLlama, Mistral) and Llama 3 byte-level BPE, converted by `tools/convert_tokenizer.py` and identical to the `tokenizers` library on every text tested. TinyLlama 1.1B and Llama 3.2 1B Instruct were run end to end from their Hugging Face files |
-| Not implemented | other tokenizers (WordPiece, Unigram, GPT-2/Qwen pre-tokenizers), RoPE scaling types other than llama3, non-Llama architectures |
+| Tokenizers | llama2.c `tokenizer.bin`; Hugging Face `tokenizer.json` for SentencePiece-style BPE (Llama 2, TinyLlama, Mistral), Llama 3 byte-level BPE and Qwen2 byte-level BPE with NFC, converted by `tools/convert_tokenizer.py` and identical to the `tokenizers` library on every text tested. TinyLlama 1.1B, Llama 3.2 1B Instruct and Qwen2.5 0.5B Instruct were run end to end from their Hugging Face files (Qwen2.5 Q8 perplexity 19.05 against 19.00 for an F32 reference) |
+| Not implemented | other tokenizers (WordPiece, Unigram, GPT-2 pre-tokenizers), RoPE scaling types other than llama3, sliding-window attention, architectures other than Llama, Mistral and Qwen2 |
 
 ## Citing
 
@@ -111,7 +112,7 @@ Please also cite the models you run; their licenses are separate from this one.
 - **속도:** 명령어 집합별 정수 내적에 맞춘 가중치 재배치, 프롬프트 일괄 처리, 소프트웨어 프리페치, GQA 블록
   어텐션을 씁니다. 스레드 수를 바꿔도 결과는 비트 단위로 같습니다.
 - **모델과 토크나이저:** llama2.c 체크포인트와 Hugging Face safetensors(Llama 2, Llama 3/3.1/3.2, TinyLlama,
-  Mistral)를 변환합니다. Hugging Face `tokenizer.json`은 `tokenizers` 라이브러리와 같은 결과로 인코딩합니다.
+  Mistral, Qwen2/Qwen2.5)를 변환합니다. Hugging Face `tokenizer.json`은 `tokenizers` 라이브러리와 같은 결과로 인코딩합니다.
 - **사용:** 텍스트 생성, 대화 모드(`--chat`), top-k·top-p·반복 패널티, 퍼플렉서티 측정을 제공합니다.
 - **검증:** 커널은 스칼라·배정밀도 기준과, 전체 결과는 numpy 참조 구현과 비교합니다. ARM과 구형 x86은 qemu로,
   Arm 실기는 CI에서 확인합니다.

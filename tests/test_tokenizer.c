@@ -7,6 +7,7 @@
 #include <string.h>
 #include "model/chat.h"
 #include "model/tokenizer.h"
+#include "model/unicode.h"
 #include "tests/tt.h"
 
 static const char *spm_path, *bpe_path, *l2c_path;
@@ -89,12 +90,47 @@ static void test_limits(void) {
         fclose(f);
         TT_EQ_INT(ml_tokenizer_load(&t, tmp, 0), ML_E_FORMAT);
     }
+    buf[28] = 0x20;   /* unknown flag */
+    f = fopen(tmp, "wb");
+    fwrite(buf, 1, n, f);
+    fclose(f);
+    TT_EQ_INT(ml_tokenizer_load(&t, tmp, 0), ML_E_FORMAT);
+    buf[28] = 0;
     buf[4] = 9;   /* version */
     f = fopen(tmp, "wb");
     fwrite(buf, 1, n, f);
     fclose(f);
     TT_EQ_INT(ml_tokenizer_load(&t, tmp, 0), ML_E_FORMAT);
     remove(tmp);
+}
+
+static void check_nfc(const char *in, const char *want) {
+    unsigned char out[64];
+    const int n = ml_uni_nfc((const unsigned char *)in, (int)strlen(in), out);
+    TT_ASSERT(n == (int)strlen(want) && !memcmp(out, want, (size_t)n));
+    if (n != (int)strlen(want) || memcmp(out, want, (size_t)n)) fprintf(stderr, "  NFC of '%s'\n", in);
+}
+
+/* NFC and single-digit numbers (Qwen2 flags; check_tokenizer.py compares the
+ * real Qwen2.5 tokenizer with the tokenizers library). */
+static void test_qwen2_flags(void) {
+    check_nfc("cafe\xCC\x81", "caf\xC3\xA9");                              /* e + U+0301 */
+    check_nfc("a\xCC\x81\xCC\xA3", "\xE1\xBA\xA1\xCC\x81");                   /* reordered, then a+U+0323 */
+    check_nfc("\xE1\x84\x80\xE1\x85\xA1\xE1\x86\xA8", "\xEA\xB0\x81");     /* jamo -> U+AC01 */
+    check_nfc("\xEA\xB0\x80\xE1\x86\xA8", "\xEA\xB0\x81");                   /* LV + T */
+    check_nfc("\xE2\x84\xAB", "\xC3\x85");                                   /* U+212B singleton */
+    check_nfc("\xE0\xA5\x98", "\xE0\xA4\x95\xE0\xA4\xBC");                   /* U+0958 excluded */
+    check_nfc("x\xFF\xCC\x81", "x\xFF\xCC\x81");                              /* invalid byte blocks */
+    check_nfc("\xCC\x81" "e", "\xCC\x81" "e");                                /* leading mark */
+
+    ml_tokenizer t;
+    TT_EQ_INT(ml_tokenizer_load(&t, bpe_path, 0), ML_OK);
+    t.flags |= ML_TOKF_NFC | ML_TOKF_DIGITS1;
+    int a[16], b[16];
+    const int na = ml_encode(&t, "naive cafe\xCC\x81", 1, 0, a, 16), nb = ml_encode(&t, "naive caf\xC3\xA9", 1, 0, b, 16);
+    TT_ASSERT(na == nb && na > 0 && !memcmp(a, b, sizeof(int) * (size_t)na));
+    check_ids(&t, "123", IDS(0, 18, 19, 20));
+    ml_tokenizer_free(&t);
 }
 
 /* The llama2.c format still loads and encodes. */
@@ -121,7 +157,8 @@ static void check_render(int tpl, const char *sys, const char *user, int first, 
 
 static void test_chat_templates(void) {
     TT_EQ_INT(ml_chat_template("llama3"), ML_CHAT_LLAMA3);
-    TT_EQ_INT(ml_chat_template("chatml"), -1);
+    TT_EQ_INT(ml_chat_template("qwen"), ML_CHAT_QWEN);
+    TT_EQ_INT(ml_chat_template("vicuna"), -1);
     check_render(ML_CHAT_LLAMA3, "Be brief.", "Hi", 1,
                  "<|start_header_id|>system<|end_header_id|>\n\nBe brief.<|eot_id|>"
                  "<|start_header_id|>user<|end_header_id|>\n\nHi<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n");
@@ -131,6 +168,11 @@ static void test_chat_templates(void) {
     check_render(ML_CHAT_ZEPHYR, NULL, "More", 0, "\n<|user|>\nMore</s>\n<|assistant|>\n");
     check_render(ML_CHAT_LLAMA2, "Be kind.", "Hi", 1, "[INST] <<SYS>>\nBe kind.\n<</SYS>>\n\nHi [/INST]");
     check_render(ML_CHAT_LLAMA2, NULL, "More", 0, "[INST] More [/INST]");
+    check_render(ML_CHAT_CHATML, NULL, "Hi", 1, "<|im_start|>user\nHi<|im_end|>\n<|im_start|>assistant\n");
+    check_render(ML_CHAT_QWEN, NULL, "Hi", 1,
+                 "<|im_start|>system\nYou are Qwen, created by Alibaba Cloud. You are a helpful assistant.<|im_end|>\n"
+                 "<|im_start|>user\nHi<|im_end|>\n<|im_start|>assistant\n");
+    check_render(ML_CHAT_QWEN, "Be kind.", "More", 0, "\n<|im_start|>user\nMore<|im_end|>\n<|im_start|>assistant\n");
     char longmsg[600];
     memset(longmsg, 'x', sizeof longmsg - 1);
     longmsg[sizeof longmsg - 1] = '\0';
@@ -150,6 +192,7 @@ int TT_ENTRY(int argc, char **argv) {
     TT_RUN(test_spm);
     TT_RUN(test_byte_bpe);
     TT_RUN(test_limits);
+    TT_RUN(test_qwen2_flags);
     TT_RUN(test_llama2c);
     TT_RUN(test_chat_templates);
     TT_MAIN_END("test_tokenizer");

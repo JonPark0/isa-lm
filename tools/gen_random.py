@@ -27,6 +27,10 @@ def generate(cfg, seed=0):
         w["layers"].append({"attn_norm": norm(), "wq": mat(dim, dim), "wk": mat(kv, dim),
                             "wv": mat(kv, dim), "wo": mat(dim, dim), "ffn_norm": norm(),
                             "w1": mat(hid, dim), "w2": mat(dim, hid), "w3": mat(hid, dim)})
+        if cfg.get("qkv_bias"):
+            w["layers"][-1].update(bq=(0.2 * rng.standard_normal(dim)).astype(np.float32),
+                                   bk=(0.2 * rng.standard_normal(kv)).astype(np.float32),
+                                   bv=(0.2 * rng.standard_normal(kv)).astype(np.float32))
     w["final_norm"] = norm()
     w["wcls"] = mat(cfg["vocab"], dim)
     cfg = dict(cfg, shared_classifier=0)
@@ -48,6 +52,7 @@ def main():
     ap.add_argument("--vocab", type=int, default=96)
     ap.add_argument("--max-seq", type=int, default=32)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--qkv-bias", action="store_true", help="Q/K/V projection biases (Qwen2)")
     ap.add_argument("--rope-scaling", default=None, metavar="F,LO,HI,ORIG",
                     help="llama3 RoPE scaling: factor, low/high freq factors, original context")
     ap.add_argument("--dump-emb-row", type=int, default=None,
@@ -55,7 +60,7 @@ def main():
     a = ap.parse_args()
     cfg = dict(dim=a.dim, n_layers=a.layers, n_heads=a.heads, n_kv_heads=a.kv_heads,
                hidden_dim=a.hidden, vocab=a.vocab, max_seq=a.max_seq,
-               rope_theta=10000.0, norm_eps=1e-5)
+               rope_theta=10000.0, norm_eps=1e-5, qkv_bias=int(a.qkv_bias))
     if a.rope_scaling:
         f, lo, hi, orig = a.rope_scaling.split(",")
         cfg["rope_scaling"] = {"type": "llama3", "factor": float(f), "low_freq_factor": float(lo),

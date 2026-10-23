@@ -29,7 +29,8 @@ straight into it without copying. Everything is little-endian.
 | 64 | `f32` | `rope_high_freq_factor` | llama3 only: > `rope_low_freq_factor` |
 | 68 | `u32` | `rope_orig_max_seq` | llama3 only: > 0 |
 | 72 | `u32` | `q8_mask` | `wtype` Q4_0 only: matrix classes stored as Q8_0 instead (below); 0 for Q8_0 models |
-| 76 | | padding | zero up to offset 256 |
+| 76 | `u32` | `qkv_bias` | 0 or 1: the q, k and v projections have biases (Qwen2) |
+| 80 | | padding | zero up to offset 256 |
 
 `dim`, `n_layers`, `n_heads`, `n_kv_heads` and `hidden_dim` are limited to
 65536. `vocab` and `max_seq` are limited to 2^24. Files written before RoPE
@@ -41,6 +42,10 @@ Derived values: `head_dim = dim / n_heads` and `kv_dim = head_dim × n_kv_heads`
 `wk`, 8 `wv`, 16 `wo`, 32 `w1` and `w3`, 64 `w2`. With a shared classifier,
 `tok_emb` is Q8_0 if bit 1 or 2 is set. Files written before mixed models
 existed have 0 there.
+
+With `qkv_bias` set, each layer stores `bq`, `bk` and `bv` after `wo`; they
+are added to the projections before RoPE. Files written before biases existed
+have 0 at offset 76.
 
 ## Body
 
@@ -54,6 +59,7 @@ for each layer:
   wk                        kv_dim × dim        (wtype)
   wv                        kv_dim × dim        (wtype)
   wo                        dim × dim           (wtype)
+  bq, bk, bv                dim, kv_dim, kv_dim (F32; only if qkv_bias)
   ffn_norm                  dim                 (F32)
   w1   (gate)               hidden_dim × dim    (wtype)
   w2   (down)               dim × hidden_dim    (wtype)
@@ -144,7 +150,7 @@ All size arithmetic is overflow-checked, which matters on 32-bit targets.
 | 16 | `u32` | `n_merges` | merge rules |
 | 20 | `i32` | `bos` | BOS id, or −1 |
 | 24 | `i32` | `eos` | EOS id, or −1 |
-| 28 | `u32` | `flags` | 1: prepend BOS when encoding; 2: `ignore_merges` (a whole pre-token found in the vocabulary is one token); 4: SentencePiece prefix `▁` only at the start of the text, not after each added token |
+| 28 | `u32` | `flags` | 1: prepend BOS when encoding; 2: `ignore_merges` (a whole pre-token found in the vocabulary is one token); 4: SentencePiece prefix `▁` only at the start of the text, not after each added token; 8: byte-level, NFC-normalize the text between added tokens; 16: byte-level, numbers are split into single digits (`\p{N}` instead of `\p{N}{1,3}`); other bits must be 0 |
 
 Then `n_vocab` tokens, each `u8 attr`, `u32 len` and `len` bytes:
 

@@ -180,6 +180,7 @@ static void test_load_rejects_bad_rope_scaling(void) {
  * classes. Mixed models themselves are covered end to end (mix_q4.mlb). */
 static void test_load_rejects_bad_q8_mask(void) {
     TT_EQ_INT(load_patched(0, 72, 8), ML_E_FORMAT);      /* Q8 model with a mask */
+    TT_EQ_INT(load_patched(0, 76, 2), ML_E_FORMAT);      /* qkv_bias is a 0/1 flag */
     size_t n;
     unsigned char *b = slurp(q4_path, &n);
     const uint32_t bad = 128;                            /* unknown class bit */

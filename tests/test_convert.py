@@ -173,13 +173,13 @@ def _interleaved_rope(v, pos, hd, theta):
     return np.stack([a * np.cos(ang) - b * np.sin(ang), a * np.sin(ang) + b * np.cos(ang)], -1).reshape(-1, hd)
 
 
-def _make_hf(tmp_path):
-    cfg, w = gen_random.generate(dict(SMALL), seed=5)
+def _make_hf(tmp_path, bias=False, **extra):
+    cfg, w = gen_random.generate(dict(SMALL, qkv_bias=bias), seed=5)
     dim, nh, nkv = cfg["dim"], cfg["n_heads"], cfg["n_kv_heads"]
     hd = dim // nh
 
     def to_hf(m, n_heads):   # interleaved rows -> rotate_half rows (inverse of the converter)
-        return m.reshape(n_heads, hd // 2, 2, dim).transpose(0, 2, 1, 3).reshape(-1, dim)
+        return m.reshape(n_heads, hd // 2, 2, -1).transpose(0, 2, 1, 3).reshape(-1, m.shape[1])
 
     t, orig = {}, {}
 
@@ -195,6 +195,10 @@ def _make_hf(tmp_path):
         put(p + "self_attn.q_proj.weight", to_hf(L["wq"], nh))
         put(p + "self_attn.k_proj.weight", to_hf(L["wk"], nkv))
         put(p + "self_attn.v_proj.weight", L["wv"])
+        if bias:
+            put(p + "self_attn.q_proj.bias", to_hf(L["bq"][:, None], nh)[:, 0])
+            put(p + "self_attn.k_proj.bias", to_hf(L["bk"][:, None], nkv)[:, 0])
+            put(p + "self_attn.v_proj.bias", L["bv"])
         put(p + "self_attn.o_proj.weight", L["wo"])
         put(p + "post_attention_layernorm.weight", L["ffn_norm"])
         put(p + "mlp.gate_proj.weight", L["w1"])
@@ -202,13 +206,13 @@ def _make_hf(tmp_path):
         put(p + "mlp.up_proj.weight", L["w3"])
     put("model.norm.weight", w["final_norm"])
     d = tmp_path / "hf"
-    d.mkdir()
+    d.mkdir(parents=True)
     _write_safetensors(str(d / "model.safetensors"), t)
     (d / "config.json").write_text(json.dumps({
         "hidden_size": dim, "intermediate_size": cfg["hidden_dim"], "num_hidden_layers": cfg["n_layers"],
         "num_attention_heads": nh, "num_key_value_heads": nkv, "vocab_size": cfg["vocab"],
         "max_position_embeddings": cfg["max_seq"], "rope_theta": 10000.0, "rms_norm_eps": 1e-5,
-        "tie_word_embeddings": True}))
+        "tie_word_embeddings": True, **extra}))
     return str(d), cfg, orig
 
 
@@ -245,6 +249,60 @@ def test_hf_tied_model_runs_in_c(tmp_path):
     got = np.fromfile(tmp_path / "c.f32", np.float32).reshape(3, -1)
     ref = ref_forward.forward(rcfg, t, [1, 7, 3])
     assert np.abs(got - ref).max() <= 1e-3 * np.abs(ref).max()
+
+
+def test_hf_qwen2_biases(tmp_path):
+    """Qwen2 q/k biases are permuted with their rows: RoPE'd scores match HF."""
+    d, cfg, orig = _make_hf(tmp_path, bias=True, model_type="qwen2", sliding_window=4096,
+                            use_sliding_window=False)
+    ccfg, w = convert.load_hf(d)
+    assert ccfg["qkv_bias"] == 1 and ccfg["max_seq"] == cfg["max_seq"]
+    dim, nh, nkv = cfg["dim"], cfg["n_heads"], cfg["n_kv_heads"]
+    hd = dim // nh
+    p = "model.layers.1.self_attn."
+    L = w["layers"][1]
+    x = np.random.default_rng(1).standard_normal(dim)
+    for pos in (0, 5):
+        qh = _hf_rope(orig[p + "q_proj.weight"] @ x + orig[p + "q_proj.bias"], pos, hd, 10000.0)
+        kh = _hf_rope(orig[p + "k_proj.weight"] @ x + orig[p + "k_proj.bias"], pos + 1, hd, 10000.0)
+        qi = _interleaved_rope(L["wq"] @ x + L["bq"], pos, hd, 10000.0)
+        ki = _interleaved_rope(L["wk"] @ x + L["bk"], pos + 1, hd, 10000.0)
+        for h in range(nh):
+            np.testing.assert_allclose(qh[h] @ kh[h // (nh // nkv)], qi[h] @ ki[h // (nh // nkv)],
+                                       rtol=1e-5, atol=1e-6)
+    np.testing.assert_array_equal(L["bv"], orig[p + "v_proj.bias"])
+
+
+def test_hf_qwen2_runs_in_c(tmp_path):
+    exe = os.path.join(ROOT, "build", "scalar", "ml_run")
+    if not os.path.exists(exe):
+        import pytest
+        pytest.skip("build/scalar/ml_run not built")
+    d, _, _ = _make_hf(tmp_path, bias=True, model_type="qwen2")
+    out = str(tmp_path / "qwen.mlb")
+    convert.main(["hf", d, out])
+    rcfg, t = mlb.read_mlb(out)
+    assert rcfg["qkv_bias"] == 1
+    subprocess.run([exe, out, "--tokens", "1,7,3", "--dump-logits", str(tmp_path / "c.f32")], check=True)
+    got = np.fromfile(tmp_path / "c.f32", np.float32).reshape(3, -1)
+    ref = ref_forward.forward(rcfg, t, [1, 7, 3])
+    assert np.abs(got - ref).max() <= 1e-3 * np.abs(ref).max()
+
+
+def test_hf_sliding_window_caps_context(tmp_path):
+    d, cfg, _ = _make_hf(tmp_path, model_type="mistral", sliding_window=16)
+    assert convert.load_hf(d)[0]["max_seq"] == 16
+    d2, _, _ = _make_hf(tmp_path / "q", model_type="qwen2", sliding_window=16, use_sliding_window=True)
+    assert convert.load_hf(d2)[0]["max_seq"] == 16
+
+
+def test_hf_unsupported_models_refused(tmp_path):
+    import pytest
+    for i, extra in enumerate(({"model_type": "gemma"}, {"hidden_act": "gelu"}, {"head_dim": 4},
+                               {"mlp_bias": True})):
+        d, _, _ = _make_hf(tmp_path / str(i), **extra)
+        with pytest.raises(ValueError):
+            convert.load_hf(d)
 
 
 def test_large_vocab_loads_in_c(tmp_path):
