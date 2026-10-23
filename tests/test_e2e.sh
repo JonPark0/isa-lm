@@ -61,6 +61,23 @@ G=$($RUN $B/ml_run --help 2>&1 | sed -n 's/^pack group: \([0-9]*\).*/\1/p')
 err=$($RUN $B/ml_run $M/rand_q4.mlb --tokens 1,2 -n 4 2>&1 >/dev/null)
 [ -n "$G" ] && echo "$err" | grep -q "packed: $G," && ok || bad "expected 'packed: $G' (help says pack group '$G'): $err"
 
+# --pack-cache: written on the first run, mapped on the next, same logits;
+# a cache for another model (or a damaged one) is replaced, never used
+if [ "$G" != 0 ]; then
+    cp $M/mix_q4.mlb $T/pc.mlb; rm -f $T/pc.mlb.pk$G
+    $RUN $B/ml_run $M/mix_q4.mlb --tokens $TOKENS --dump-logits $T/pc.ref.f32
+    a=$($RUN $B/ml_run $T/pc.mlb --tokens $TOKENS --dump-logits $T/pc1.f32 --pack-cache 2>&1)
+    b=$($RUN $B/ml_run $T/pc.mlb --tokens $TOKENS --dump-logits $T/pc2.f32 --pack-cache 2>&1)
+    echo "$a" | grep -q ": written" && echo "$b" | grep -q ": loaded" \
+        && cmp -s $T/pc1.f32 $T/pc.ref.f32 && cmp -s $T/pc2.f32 $T/pc.ref.f32 && ok || bad "--pack-cache: $a / $b"
+    python3 tools/gen_random.py --out $T/pc.mlb --wtype q4 --q8 emb,v,o,down --seed 4 >/dev/null
+    c=$($RUN $B/ml_run $T/pc.mlb --tokens 1,2 -n 3 --pack-cache 2>&1)
+    head -c 1000 $T/pc.mlb.pk$G > $T/pc.trunc && mv $T/pc.trunc $T/pc.mlb.pk$G
+    d=$($RUN $B/ml_run $T/pc.mlb --tokens 1,2 -n 3 --pack-cache 2>&1)
+    echo "$c" | grep -q ": written" && echo "$d" | grep -q ": written" && ok || bad "--pack-cache reused a stale cache: $c / $d"
+    rm -f $T/pc.mlb $T/pc.mlb.pk$G
+fi
+
 # --no-pack keeps the row-major kernels: must match the reference too
 for wt in q8 q4; do
     $RUN $B/ml_run $M/rand_$wt.mlb --tokens $TOKENS --dump-logits $T/$wt.np.f32 --no-pack \
@@ -176,7 +193,7 @@ for bad_opt in "-T nan" "-T inf" "-T -1" "-p nan" "-p 1.5" "-p -0.1" "--top-k -1
     [ $? -eq 2 ] && ok || bad "ml_run $bad_opt should exit 2"
 done
 
-for bad_arg in "--kv q4" "--kv" "-n 5x" "-n 99999999999" "-t 2junk" "-s -1" "--tokens 4294967297" "--tokens 1,,2" "--tokens 1," "-n"; do
+for bad_arg in "--pack-cache --no-pack" "--kv q4" "--kv" "-n 5x" "-n 99999999999" "-t 2junk" "-s -1" "--tokens 4294967297" "--tokens 1,,2" "--tokens 1," "-n"; do
     $RUN $B/ml_run $M/rand_q8.mlb --tokens 1 $bad_arg >/dev/null 2>&1
     [ $? -eq 2 ] && ok || bad "ml_run $bad_arg should exit 2"
 done

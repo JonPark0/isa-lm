@@ -37,6 +37,7 @@ static const char USAGE[] =
     "  --dump-logits F  write float32 logits for every --tokens position, then exit\n"
     "  --batch N        prompt tokens per batched prefill step, 1..32 (default 32; 1 = token by token)\n"
     "  --no-pack        keep weights row-major (no repacking at load: less memory, slower)\n"
+    "  --pack-cache     keep the packed weights in MODEL.pk<G> and map them from there next time\n"
     "  --kv TYPE        KV cache type: f32 (default) or q8 (3.8x smaller, faster on long contexts)\n"
     "  --profile        print time spent per stage (qkv, attention, wo, ffn, classifier, other)\n"
     "  --chat TEMPLATE  chat with the model: llama3, zephyr (TinyLlama) or llama2 (also Mistral);\n"
@@ -165,7 +166,7 @@ int ml_main(int argc, char **argv) {
     const char *model_path = NULL, *tok_path = NULL, *prompt = NULL, *tokens_arg = NULL, *dump = NULL;
     const char *chat = NULL, *system = NULL;
     int steps_given = 0;
-    int profile = 0, no_pack = 0, kv_type = ML_F32;
+    int profile = 0, no_pack = 0, pack_cache = 0, kv_type = ML_F32;
     int steps = 64, nthreads = 1, eos = -1, batch = ML_BATCH_MAX;
     float temp = 0.0f, topp = 0.9f, rep_pen = 1.0f;
     int topk = 0, rep_last = 64;
@@ -178,6 +179,7 @@ int ml_main(int argc, char **argv) {
         }
         if (!strcmp(a, "--profile")) { profile = 1; continue; }
         if (!strcmp(a, "--no-pack")) { no_pack = 1; continue; }
+        if (!strcmp(a, "--pack-cache")) { pack_cache = 1; continue; }
         if (a[0] != '-') { if (model_path) return usage("more than one model given"); model_path = a; continue; }
         if (i + 1 >= argc) return usage("option needs a value");
         const char *v = argv[++i];
@@ -209,6 +211,7 @@ int ml_main(int argc, char **argv) {
     if (!model_path) return usage(NULL);
     if (prompt && !tok_path) return usage("-i needs -z tokenizer");
     if (prompt && tokens_arg) return usage("give -i or --tokens, not both");
+    if (pack_cache && no_pack) return usage("give --pack-cache or --no-pack, not both");
     if (dump && !tokens_arg) return usage("--dump-logits needs --tokens");
     if (chat && !tok_path) return usage("--chat needs -z tokenizer");
     if (chat && (tokens_arg || dump)) return usage("--chat takes -i or stdin, not --tokens or --dump-logits");
@@ -251,7 +254,16 @@ int ml_main(int argc, char **argv) {
         goto out_tok;
     }
 
-    if (!no_pack && (st = ml_model_pack(&m, s.pool)) != ML_OK) {
+    if (!no_pack && pack_cache && ml_pack_group()) {
+        char cache[4096];
+        const char *how;
+        snprintf(cache, sizeof cache, "%s.pk%d", model_path, ml_pack_group());
+        st = ml_model_pack_cached(&m, s.pool, cache, &how);
+        if (st == ML_OK) fprintf(stderr, "pack cache %s: %s\n", cache, how);
+    } else if (!no_pack) {
+        st = ml_model_pack(&m, s.pool);
+    }
+    if (st != ML_OK) {
         fprintf(stderr, "error: packing weights: %s\n", ml_status_str(st));
         rc = 1;
         goto out_state;
@@ -319,7 +331,7 @@ int ml_main(int argc, char **argv) {
     if (npre > 0)
         fprintf(stderr, "prefill: %d tokens in %.1f ms (%.1f tok/s)\n", npre, tp * 1e3, tp > 0 ? npre / tp : 0.0);
     fprintf(stderr, "positions: %d, tok/s: %.2f, threads: %d, isa: %s, packed: %d, kv: %s\n", pos, dt > 0 ? pos / dt : 0.0,
-            ml_pool_size(s.pool), ML_ISA_NAME, m.pack_mem ? ml_pack_group() : 0, kv_type == ML_Q8_0 ? "q8" : "f32");
+            ml_pool_size(s.pool), ML_ISA_NAME, m.packed ? ml_pack_group() : 0, kv_type == ML_Q8_0 ? "q8" : "f32");
     if (profile) {
         double total = 0.0;
         for (int i = 0; i < ML_PROF_COUNT; i++) total += s.prof[i];

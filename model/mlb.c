@@ -116,6 +116,8 @@ ml_status ml_model_load(ml_model *m, const char *path) {
 void ml_model_free(ml_model *m) {
     ml_aligned_free(m->pack_mem);
     m->pack_mem = NULL;
+    if (m->pack_file.data) ml_file_unmap(&m->pack_file);
+    m->packed = 0;
     free(m->layers);
     m->layers = NULL;
     ml_file_unmap(&m->file);

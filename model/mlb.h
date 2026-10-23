@@ -32,6 +32,8 @@ typedef struct {
     const float *final_norm;
     ml_layer *layers;
     void *pack_mem;   /* row-interleaved weight copies (ml_model_pack), or NULL */
+    ml_file pack_file;   /* or the same, mapped from a pack cache file */
+    int packed;          /* the matrices point at packed copies */
 } ml_model;
 
 ml_status ml_model_load(ml_model *m, const char *path);

@@ -142,6 +142,15 @@ packed kernels.
   `vmull_s8`/`vpadalq_s16` on the same 4-row groups.
 - **sve** builds use the NEON dotprod packed kernels.
 
+### Pack cache
+
+`ml_run --pack-cache` writes the packed arrays, exactly as laid out in memory,
+to `MODEL.pk<G>` behind a 512-byte header. The header records the pack group,
+the Q8 offset, the model's size and header, and a hash of bytes sampled across
+the model file. A later run whose build and model match maps the file instead
+of packing (`ml_model_pack_cached`); otherwise it packs and rewrites it,
+through a temporary file and a rename.
+
 ### Prefetch
 
 Decoding reads every weight once per token, a long sequential stream per

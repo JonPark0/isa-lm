@@ -224,6 +224,7 @@ build/avx2/ml_run model.mlb --tokens 1,450,3681 --dump-logits l.f32
 | `--dump-logits F` | Write float32 logits `[n_tokens][vocab]` for every `--tokens` position, then exit. |
 | `--batch N` | Prompt tokens per batched prefill step, 1 to 32. Default 32; `1` processes the prompt token by token. The output is identical either way. |
 | `--kv TYPE` | KV cache type: `f32` (default) or `q8`. `q8` stores K and V as int8 with one scale per position and KV head: about 3.8× less memory and faster attention on long contexts, with slightly different logits. |
+| `--pack-cache` | Save the packed weights next to the model (`MODEL.pk<G>`, G = pack group) and map them from there on later runs instead of packing again. The cache is checked against the model and the build's layout and rewritten when stale. |
 | `--no-pack` | Keep weights row-major instead of repacking them for the packed kernels. Uses less memory during load, but runs slower. |
 | `--profile` | Print the share of forward-pass time per stage (qkv, attention, wo, ffn, classifier, other). |
 | `--chat TEMPLATE` | Chat with the model: `llama3`, `zephyr` or `llama2`, see [Chat](#chat). Needs `-z`. |
@@ -269,7 +270,12 @@ On a 4-vCPU VM with the avx512vnni build, `-t 4` decodes a 4-layer dim-2048 Q4 m
   cache's memory traffic and size by about 3.8×.
 - **Memory:** packing makes one copy of the weights at load and then releases
   the originals' pages. If a device cannot hold two copies of the model even
-  briefly, use `--no-pack`.
+  briefly, use `--no-pack`, or `--pack-cache` once on a bigger machine with the
+  same build.
+- **Start-up:** packing takes time at every start: 1.8 s for Llama 3.2 1B Q4
+  on one core (0.7 s with `-t 4`). With `--pack-cache` later starts map the
+  packed weights directly and take 0.13 s, at the cost of a second copy on
+  disk.
 
 ## Limits
 
