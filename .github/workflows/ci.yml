@@ -33,11 +33,18 @@ jobs:
           .github/scripts/apt-install.sh \
             qemu-user gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf libc6-dev-armhf-cross libc6-dev-arm64-cross \
             gcc-mingw-w64-x86-64 python3-numpy python3-pytest
+      - name: Install the tokenizers library (reference for the tokenizer checks)
+        run: pip install --user --break-system-packages tokenizers || echo "tokenizers unavailable, those rows will SKIP"
       - name: Host CPU features
         run: grep -o -w -E 'sse4_1|avx2|avx_vnni|avx512_vnni' /proc/cpuinfo | sort -u
       - name: Full test matrix (includes stories15M download and generation)
         timeout-minutes: 30
         run: make test-all
+      - name: Tokenizer check results
+        if: always()
+        run: |
+          r=$(cat build/test-all/tok_*.log 2>/dev/null | grep -h -E "texts match|skip" | tr '\n' ' ')
+          echo "::notice title=tokenizers vs the tokenizers library::${r:-not run}"
       - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v4

@@ -1,4 +1,4 @@
-# `.mlb` file format, version 1
+# File formats: `.mlb` model, version 1, and `.mlt` tokenizer
 
 An `.mlb` file is a fixed 256-byte header followed by tensor arrays. Every array
 starts at a 64-byte boundary, so the runtime can `mmap` the file and point
@@ -123,3 +123,33 @@ otherwise               → (1 − s) · inv_i / f + s · inv_i,  s = (orig / wa
 | zero or over-limit dimension, `dim` or `hidden_dim` not a multiple of 32, `dim % n_heads ≠ 0`, `n_heads % n_kv_heads ≠ 0`, odd `head_dim`, `vocab < 3` | `ML_E_SHAPE` |
 
 All size arithmetic is overflow-checked, which matters on 32-bit targets.
+
+## `.mlt` tokenizer format
+
+`tools/convert_tokenizer.py` writes this from a Hugging Face `tokenizer.json`;
+`model/bpe.c` reads it. All integers are little-endian.
+
+| Offset | Type | Field | Meaning |
+|-------:|------|-------|---------|
+| 0 | `char[4]` | magic | `MLT1` |
+| 4 | `u32` | `version` | 1 |
+| 8 | `u32` | `kind` | 1 = SentencePiece-style BPE, 2 = byte-level BPE with the Llama 3 pre-tokenizer |
+| 12 | `u32` | `n_vocab` | tokens, at most the model's `vocab` |
+| 16 | `u32` | `n_merges` | merge rules |
+| 20 | `i32` | `bos` | BOS id, or −1 |
+| 24 | `i32` | `eos` | EOS id, or −1 |
+| 28 | `u32` | `flags` | 1: prepend BOS when encoding; 2: `ignore_merges` (a whole pre-token found in the vocabulary is one token); 4: SentencePiece prefix `▁` only at the start of the text, not after each added token |
+
+Then `n_vocab` tokens, each `u8 attr`, `u32 len` and `len` bytes:
+
+- **attr 1 (added):** matched literally in the text before anything else
+  (`<s>`, `<|eot_id|>`); the longest match wins.
+- **attr 2 (byte):** a SentencePiece byte-fallback token `<0xXX>`, stored as
+  its single byte.
+- **Bytes:** byte-level pieces are stored as the raw bytes they stand for (not
+  the GPT-2 printable characters of `tokenizer.json`); SentencePiece pieces as
+  UTF-8 with `▁` (U+2581) for spaces.
+
+Then `n_merges` rules of three `u32`: left, right and merged token, in rank
+order. Encoding applies the lowest-ranked applicable merge first, the
+leftmost among equal ranks, which is what the `tokenizers` library does.

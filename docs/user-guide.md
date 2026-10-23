@@ -99,9 +99,50 @@ python3 tools/convert.py hf ./TinyLlama-1.1B model.mlb --wtype q4 --max-seq 2048
 - **Context length:** `--max-seq` caps the context, and with it the KV cache.
   Without it the converter uses `max_position_embeddings`, which is often
   131072 for Llama 3.
-- **Tokenizer:** the converter does not produce one. `ml_run -i` needs a
-  llama2.c-format `tokenizer.bin`. For other models, pass token ids with
-  `--tokens`.
+- **Tokenizer:** convert the checkpoint's `tokenizer.json` separately, see
+  [Tokenizers](#tokenizers).
+
+### Tokenizers
+
+`ml_run -z` reads either a llama2.c `tokenizer.bin` or an `.mlt` file
+converted from a Hugging Face `tokenizer.json`:
+
+```sh
+python3 tools/convert_tokenizer.py ./Llama-3.2-1B-Instruct/tokenizer.json llama3.mlt
+printf "Hello, world" | build/avx2/ml_tok llama3.mlt        # 128000 9906 11 1917
+echo "9906 11 1917" | build/avx2/ml_tok llama3.mlt --decode          # Hello, world
+```
+
+Two kinds are supported, and they encode exactly as the Hugging Face
+`tokenizers` library does (the tests compare them on hundreds of texts):
+
+| Kind | Models | Notes |
+|------|--------|-------|
+| SentencePiece-style BPE with byte fallback | Llama 2, TinyLlama, Mistral, Vicuna | spaces become `▁`, characters outside the vocabulary become `<0xXX>` byte tokens |
+| byte-level BPE with the Llama 3 pre-tokenizer | Llama 3, 3.1, 3.2 | text is split by the Llama 3 regex (letters, numbers, contractions, white space) before merging |
+
+The converter refuses anything else (WordPiece, Unigram, GPT-2 or Qwen
+pre-tokenizers, extra normalizers) rather than write a tokenizer that would
+encode differently.
+
+- **BOS:** added when the tokenizer's template adds it (`<s>`,
+  `<|begin_of_text|>`).
+- **Special tokens** written in the prompt, such as `<|eot_id|>`, are encoded
+  as the special tokens.
+- **Stopping:** generation stops at the tokenizer's EOS (`</s>`,
+  `<|end_of_text|>`). Instruct models often end a turn with another token:
+  pass it with `--eos`, for example `--eos 128009` (`<|eot_id|>`) for
+  Llama 3 Instruct.
+
+A Llama 3.2 Instruct prompt, for example:
+
+```sh
+build/avx2/ml_run llama3.mlb -z llama3.mlt --eos 128009 -T 0 -n 200 -i "<|start_header_id|>user<|end_header_id|>
+
+What is the capital of France?<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+
+"
+```
 
 ### A random test model
 
@@ -129,7 +170,7 @@ build/avx2/ml_run model.mlb --tokens 1,450,3681 --dump-logits l.f32
 
 | Option | Meaning |
 |--------|---------|
-| `-z FILE` | llama2.c `tokenizer.bin`. Needed for `-i` and for text output. |
+| `-z FILE` | Tokenizer: llama2.c `tokenizer.bin`, or `.mlt` from `tools/convert_tokenizer.py`. Needed for `-i` and for text output. |
 | `-i TEXT` | Prompt text. Encoded with BOS. |
 | `--tokens LIST` | Prompt as comma-separated token ids. Each id must be below `vocab`. |
 | `-n N` | Positions to run, prompt included. Default 64; capped at the model's `max_seq`. |
@@ -142,7 +183,7 @@ build/avx2/ml_run model.mlb --tokens 1,450,3681 --dump-logits l.f32
 | `--kv TYPE` | KV cache type: `f32` (default) or `q8`. `q8` stores K and V as int8 with one scale per position and KV head: about 3.8× less memory and faster attention on long contexts, with slightly different logits. |
 | `--no-pack` | Keep weights row-major instead of repacking them for the packed kernels. Uses less memory during load, but runs slower. |
 | `--profile` | Print the share of forward-pass time per stage (qkv, attention, wo, ffn, classifier, other). |
-| `--eos ID` | Stop as soon as `ID` is generated. Without it, a run with `-z` stops at llama2.c's BOS/EOS (ids 1 and 2), and a run without `-z` uses every `-n` position. Llama 3, for example, has no stop token at ids 1 and 2, so pass `--eos 128001`. |
+| `--eos ID` | Stop as soon as `ID` is generated. Without it, a run with `-z` stops at the tokenizer's BOS or EOS, and a run without `-z` uses every `-n` position. |
 
 When it finishes, `ml_run` prints two lines to stderr:
 

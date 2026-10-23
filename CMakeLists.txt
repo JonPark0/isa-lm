@@ -80,6 +80,7 @@ function(ml_exe name src)
 endfunction()
 
 ml_exe(ml_run app/ml_run.c)
+ml_exe(ml_tok app/ml_tok.c)
 if(EXISTS ${CMAKE_SOURCE_DIR}/app/ml_bench.c)
   ml_exe(ml_bench app/ml_bench.c)
 endif()

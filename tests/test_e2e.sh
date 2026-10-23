@@ -117,6 +117,18 @@ if cmp -s $T/noprof.txt $T/prof.txt && echo "$err" | grep -q "^profile:" \
     && for k in qkv attention wo ffn classifier other; do echo "$err" | grep -q " $k "; done; then ok
 else bad "--profile output: $err"; fi
 
+# ml_tok: tokenizers converted from tokenizer.json (ids from the tokenizers library)
+out=$(printf 'hello world' | $RUN $B/ml_tok $M/spm_tiny.mlt)
+[ "$out" = "1 313" ] && ok || bad "ml_tok spm encode: '$out'"
+out=$(printf "it's what they'll do" | $RUN $B/ml_tok $M/bpe_tiny.mlt)
+[ "$out" = "0 287 272 313 316 273 308" ] && ok || bad "ml_tok byte-level encode: '$out'"
+out=$(printf '287 272 313 316 273 308' | $RUN $B/ml_tok $M/bpe_tiny.mlt --decode)
+[ "$out" = "it's what they'll do" ] && ok || bad "ml_tok byte-level decode: '$out'"
+printf 'x' | $RUN $B/ml_tok $M/bpe_tiny.mlt --bogus >/dev/null 2>&1
+[ $? -eq 2 ] && ok || bad "ml_tok with a bad option should exit 2"
+printf '99999' | $RUN $B/ml_tok $M/bpe_tiny.mlt --decode >/dev/null 2>&1
+[ $? -eq 2 ] && ok || bad "ml_tok --decode with an id out of range should exit 2"
+
 # usage
 err=$($RUN $B/ml_run 2>&1); rc=$?
 [ $rc -eq 2 ] && echo "$err" | grep -q "usage:" && ok || bad "usage rc=$rc"

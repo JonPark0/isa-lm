@@ -71,5 +71,20 @@ if [ -f $M/stories15M.mlb ] && [ -f $M/tokenizer.bin ]; then
     row "stories15M logits avx2 --kv q8" "build/avx2/ml_run $M/stories15M.mlb --tokens $S --dump-logits $LOG/s.f32 --kv q8 && python3 tests/compare_logits.py $LOG/s.f32 $LOG/s_ref.f32 32000 --kl 1e-2"
 else skip "stories15M generate" "download blocked"; rm -f $M/stories15M.bin; fi
 
+# Hugging Face tokenizers: real tokenizer.json files (network), checked against
+# the tokenizers library when it is installed (check_tokenizer.py exits 77 if not)
+for spec in "tinyllama TinyLlama/TinyLlama-1.1B-Chat-v1.0" "llama3 unsloth/Llama-3.2-1B"; do
+    name=${spec%% *}; repo=${spec#* }
+    [ -f $M/$name.json ] || curl -sfL -o $M/$name.json https://huggingface.co/$repo/resolve/main/tokenizer.json || rm -f $M/$name.json
+    if [ ! -f $M/$name.json ]; then skip "tokenizer $name vs tokenizers lib" "download blocked"; continue; fi
+    python3 tools/convert_tokenizer.py $M/$name.json $M/$name.mlt >/dev/null
+    python3 tests/check_tokenizer.py $M/$name.json $M/$name.mlt build/avx2/ml_tok --text README.md docs/architecture.md > $LOG/tok_$name.log 2>&1
+    case $? in
+        0) rows="$rows$(printf '%-34s PASS' "tokenizer $name vs tokenizers lib")\n"; printf '%-34s PASS\n' "tokenizer $name vs tokenizers lib" ;;
+        77) skip "tokenizer $name vs tokenizers lib" "tokenizers package not installed" ;;
+        *) rows="$rows$(printf '%-34s FAIL' "tokenizer $name vs tokenizers lib")\n"; printf '%-34s FAIL\n' "tokenizer $name vs tokenizers lib"; failed=1 ;;
+    esac
+done
+
 echo; echo "== summary =="; printf "$rows"
 exit $failed

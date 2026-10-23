@@ -4,9 +4,10 @@
 
 | Command | What it checks |
 |---------|----------------|
-| `make ISA=X test` | C unit tests: `test_arena`, `test_quant`, `test_kernels` (including the packed and batched kernels), `test_load`, `test_sampler`, `test_threads` |
+| `make ISA=X test` | C unit tests: `test_arena`, `test_quant`, `test_kernels` (including the packed and batched kernels), `test_load`, `test_sampler`, `test_threads`, `test_tokenizer` |
 | `make ISA=X e2e` | `tests/test_e2e.sh` runs `ml_run` against the numpy reference, the scalar build, and CLI edge cases |
-| `python3 -m pytest tests` | the Python tools: format round trips, the reference forward, both converters, RoPE scaling |
+| `python3 -m pytest tests` | the Python tools: format round trips, the reference forward, the model and tokenizer converters, RoPE scaling |
+| `tests/check_tokenizer.py` | `ml_tok` against the Hugging Face `tokenizers` library (run by `make test-all`, see below) |
 | `make guard-test` | x86 ISA guard, using `qemu-x86_64 -cpu core2duo/Nehalem/SandyBridge/Haswell` |
 | `make guard-test-arm` | AArch64 ISA guard, using `qemu-aarch64 -cpu cortex-a53/cortex-a76/neoverse-n2/max` |
 | `make ISA=sve CROSS=aarch64-linux-gnu- test-sve` | the SVE build at 128-bit and 512-bit vector length |
@@ -70,6 +71,20 @@ The first lines of the output name the kernel each op resolved to, for example
   ~1e-3). The random-model tests keep the strict 1e-3 relative bound.
 - **Bad input:** malformed options (`-n 5x`, ids out of range, NaN
   temperature, …) exit with code 2, and `--help` exits with code 0.
+
+### Tokenizers
+
+- **`test_tokenizer`:** encodes texts with two small tokenizers trained by the
+  `tokenizers` library (`tests/data/spm_tiny.json`, `bpe_tiny.json`, one of
+  each kind) and checks the library's ids, decoding, byte fallback, added
+  tokens, and damaged files.
+- **`tests/check_tokenizer.py`:** encodes and decodes a corpus with `ml_tok`
+  and with the `tokenizers` library and requires identical results. The corpus
+  holds contractions, numbers, accents, CJK, Korean, Hindi, Arabic, emoji,
+  every kind of white space and newline, code, added tokens in the text, long
+  repeats, 200 random strings and whole documents. `make test-all` runs it on
+  the real TinyLlama and Llama 3.2 `tokenizer.json` files (network needed) and
+  reports SKIP when the `tokenizers` package is missing; CI installs it.
 
 ### Loader robustness
 

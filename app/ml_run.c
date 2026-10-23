@@ -12,7 +12,8 @@
 
 static const char USAGE[] =
     "usage: ml_run MODEL.mlb [options]\n"
-    "  -z FILE          tokenizer.bin (needed for -i and text output)\n"
+    "  -z FILE          tokenizer: llama2.c tokenizer.bin, or .mlt from tools/convert_tokenizer.py\n"
+    "                   (needed for -i and text output)\n"
     "  -i TEXT          prompt text\n"
     "  --tokens LIST    prompt as comma-separated token ids\n"
     "  -n N             positions to run, prompt included (default 64, max: model max_seq)\n"
@@ -20,7 +21,7 @@ static const char USAGE[] =
     "  -p F             top-p in [0, 1] (default 0.9)\n"
     "  -s N             random seed (default 1)\n"
     "  -t N             threads (default 1)\n"
-    "  --eos ID         stop when ID is generated (default: BOS/EOS ids 1 and 2 with -z,\n"
+    "  --eos ID         stop when ID is generated (default: the tokenizer's BOS/EOS with -z,\n"
     "                   otherwise run all -n positions)\n"
     "  --dump-logits F  write float32 logits for every --tokens position, then exit\n"
     "  --batch N        prompt tokens per batched prefill step, 1..32 (default 32; 1 = token by token)\n"
@@ -138,15 +139,19 @@ int ml_main(int argc, char **argv) {
     }
 
     const int maxp = c->max_seq + 1;
-    int *ptoks = malloc(sizeof(int) * (size_t)(prompt ? strlen(prompt) + 3 : (size_t)maxp));
+    /* at most one token per byte, plus BOS and SentencePiece's prefix (3 bytes) */
+    const size_t pcap = prompt ? 3 * strlen(prompt) + 8 : (size_t)maxp;
+    int *ptoks = malloc(sizeof(int) * pcap);
     int np = 0, rc = 0;
     if (tokens_arg) {
         np = parse_tokens(tokens_arg, ptoks, maxp, c->vocab);
         if (np < 0 || np > c->max_seq) { rc = usage("--tokens: bad id, id out of range, or longer than max_seq"); goto out_tok; }
     } else if (prompt) {
-        np = ml_encode(&tok, prompt, 1, 0, ptoks, (int)strlen(prompt) + 3);
+        np = ml_encode(&tok, prompt, 1, 0, ptoks, (int)pcap);
+        if (np > c->max_seq) np = c->max_seq;
     }
-    if (np <= 0) { ptoks[0] = ML_TOK_BOS; np = 1; }
+    const int bos_id = have_tok && ml_tokenizer_bos(&tok) >= 0 ? ml_tokenizer_bos(&tok) : ML_TOK_BOS;
+    if (np <= 0) { ptoks[0] = bos_id; np = 1; }
 
     ml_state s;
     if ((st = ml_state_init(&s, &m, nthreads, kv_type)) != ML_OK) {
@@ -198,9 +203,11 @@ int ml_main(int argc, char **argv) {
         if (!logits) { fprintf(stderr, "error: token %d at position %d out of range\n", token, pos); rc = 1; break; }
         const int next = pos + 1 < np ? ptoks[pos + 1] : ml_sample(&smp, logits, c->vocab);
         pos++;
-        /* llama2.c tokenizers use ids 1/2 as BOS/EOS; other vocabularies (e.g.
-         * Llama 3) do not, so without -z only an explicit --eos stops early. */
-        const int stop = eos >= 0 ? next == eos : (have_tok && (next == ML_TOK_BOS || next == ML_TOK_EOS));
+        /* With -z the tokenizer's BOS/EOS stop generation (llama2.c: ids 1/2).
+         * Without it the ids are unknown (Llama 3 uses neither 1 nor 2), so
+         * only an explicit --eos stops early. */
+        const int stop = eos >= 0 ? next == eos
+                                  : (have_tok && (next == ml_tokenizer_bos(&tok) || next == ml_tokenizer_eos(&tok)));
         if (pos >= np && stop) break;
         if (have_tok) fputs(ml_decode(&tok, token, next), stdout);
         else printf("%d ", next);
