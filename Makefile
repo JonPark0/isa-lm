@@ -54,9 +54,12 @@ GUARD_OBJ := $(BUILD)/obj/app/main_guard.o
 TESTS := $(patsubst tests/%.c,%,$(wildcard tests/test_*.c))
 APPS  := ml_run ml_bench ml_tok
 
-.PHONY: all test clean guard-test e2e scalar-ref test-sve guard-test-arm bench test-all
+.PHONY: all test clean guard-test e2e scalar-ref test-sve guard-test-arm bench test-all apps print-build
 .SECONDARY:
 all: $(addprefix $(BUILD)/,$(TESTS) $(APPS))
+apps: $(addprefix $(BUILD)/,$(APPS))
+print-build:
+	@echo $(BUILD)
 
 $(BUILD)/obj/%.o: %.c
 	@mkdir -p $(dir $@)

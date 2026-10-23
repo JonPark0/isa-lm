@@ -37,6 +37,10 @@ the missing feature. It does not crash with SIGILL.
 
 ## Quick start
 
+Prebuilt binaries for Linux (x86-64, AArch64, ARMv7) and Windows (x86-64) are on the
+[releases page](https://github.com/JonPark0/isa-lm/releases); their `ml_run` wrapper starts the
+fastest build your CPU supports. To build from source:
+
 ```sh
 pip install numpy
 make ISA=avx2
