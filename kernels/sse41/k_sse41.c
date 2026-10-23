@@ -70,6 +70,7 @@ void ml_k_matvec_q8_pk_sse41(float *y, const ml_qtensor *W, const ml_qact *x, in
         const float *d = W->pd + (size_t)(row / PK) * nb * PK;
         __m128 acc = _mm_setzero_ps();
         for (int b = 0; b < nb; b++, p += 8 * PK * 4) {
+            ml_prefetch_ahead(p, 8 * PK * 4);
             const int32_t *xb = (const int32_t *)(x->q + b * QK);
             __m128i s = _mm_setzero_si128();
             for (int k = 0; k < 8; k++) {
@@ -95,6 +96,7 @@ void ml_k_matvec_q4_pk_sse41(float *y, const ml_qtensor *W, const ml_qact *x, in
         const float *d = W->pd + (size_t)(row / PK) * nb * PK;
         __m128 acc = _mm_setzero_ps();
         for (int b = 0; b < nb; b++, p += 4 * PK * 4) {
+            ml_prefetch_ahead(p, 4 * PK * 4);
             const int32_t *xb = (const int32_t *)(x->q + b * QK);
             __m128i s16 = _mm_setzero_si128();
             for (int v = 0; v < 4; v++) {

@@ -155,12 +155,24 @@ At this size Q8 is limited by memory bandwidth, so packing mostly helps Q4.
 When the matrix fits in cache (768×768), the packed kernels reach 92 GOPS on
 avx2 and 129–139 GOPS on avx512vnni.
 
-**Decoding**, dim-2048 model, avx512vnni (tok/s):
+**Decoding**, dim-2048 model (4 layers, hidden 5632, vocab 32000), packed
+weights, tok/s, without → with the software prefetch of the weight stream
+(`-DML_USE_PREFETCH=0` builds the former):
 
-| Format | `-t 1` row-major | `-t 1` packed | `-t 4` row-major | `-t 4` packed |
-|--------|-----------------:|--------------:|-----------------:|--------------:|
-| Q8 | 26 | 39 | 81 | 116 |
-| Q4 | 24 | 53 | 98 | 181 |
+| ISA | Q8 `-t 1` | Q4 `-t 1` | Q8 `-t 4` | Q4 `-t 4` |
+|-----|----------:|----------:|----------:|----------:|
+| sse2       | 22.6 → 42.3 | 38.2 → 56.4 | | |
+| sse41      | 23.3 → 49.3 | 40.9 → 81.7 | | |
+| avx2       | 29.3 → 52.2 | 54.9 → 122.4 | 125 → 242 | 369 → 451 |
+| avxvnni    | 34.6 → 53.3 | 56.1 → 141.6 | | |
+| avx512vnni | 46.3 → 58.0 | 73.6 → 140.1 | 192 → 254 | 482 → 503 |
+
+Decoding reads every weight once per token. The hardware prefetchers stop at
+4 KB page boundaries, so one core alone could not keep the stream going; the
+packed matvecs now request the weights 4 KB ahead. On the Arm runner
+(Neoverse) the same prefetch made NEON dotprod Q8 decoding 26% slower (470
+against 638 tok/s, interleaved best of 3) and left Q4 unchanged, so Arm builds
+leave it off.
 
 **Prompt prefill**, 64 tokens, dim-2048 model (4 layers, hidden 5632, vocab
 32000), packed weights, `-t 1` (tok/s):

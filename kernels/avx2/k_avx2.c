@@ -35,6 +35,7 @@ void ml_k_matvec_q8_pk_avx2(float *y, const ml_qtensor *W, const ml_qact *x, int
         const float *d = W->pd + (size_t)(row / PK) * nb * PK;
         __m256 acc = _mm256_setzero_ps();
         for (int b = 0; b < nb; b++, p += 8 * PK * 4) {
+            ml_prefetch_ahead(p, 8 * PK * 4);
             const int32_t *xb = (const int32_t *)(x->q + b * QK);
             __m256i s = _mm256_setzero_si256();
             for (int k = 0; k < 8; k++) {
@@ -61,6 +62,7 @@ void ml_k_matvec_q4_pk_avx2(float *y, const ml_qtensor *W, const ml_qact *x, int
         const float *d = W->pd + (size_t)(row / PK) * nb * PK;
         __m256 acc = _mm256_setzero_ps();
         for (int b = 0; b < nb; b++, p += 4 * PK * 4) {
+            ml_prefetch_ahead(p, 4 * PK * 4);
             const int32_t *xb = (const int32_t *)(x->q + b * QK);
             __m256i s16 = _mm256_setzero_si256();
             for (int v = 0; v < 4; v++) {

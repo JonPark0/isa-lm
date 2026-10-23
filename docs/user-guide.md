@@ -167,8 +167,8 @@ briefly, then sleeps, so consecutive operations within a token cost no system
 calls. Matrix-vector products smaller than 2^18 weights, and small attention
 steps, run on the calling thread only.
 
-On a 4-vCPU VM with the avx512vnni build, `-t 4` decodes a dim-2048 Q4 model at
-181 tok/s, against 53 tok/s for `-t 1`. Threading never changes the output:
+On a 4-vCPU VM with the avx512vnni build, `-t 4` decodes a 4-layer dim-2048 Q4 model at
+503 tok/s, against 140 tok/s for `-t 1`. Threading never changes the output:
 `-t N` produces logits bit-identical to `-t 1`.
 
 ### Performance notes

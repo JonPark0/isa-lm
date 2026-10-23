@@ -135,6 +135,7 @@ void ml_k_matvec_q8_pk_avx512vnni(float *y, const ml_qtensor *W, const ml_qact *
         const float *d = W->pd + (size_t)g * nb * PK;
         __m512 acc = _mm512_setzero_ps();
         for (int b = 0; b < nb; b++, p += 8 * PK * 4) {
+            ml_prefetch_ahead(p, 8 * PK * 4);
             const int32_t *xb = (const int32_t *)(x->q + b * QK);
             __m512i s = _mm512_setzero_si512();
             for (int k = 0; k < 8; k++)
@@ -157,6 +158,7 @@ void ml_k_matvec_q4_pk_avx512vnni(float *y, const ml_qtensor *W, const ml_qact *
         const float *d = W->pd + (size_t)g * nb * PK;
         __m512 acc = _mm512_setzero_ps();
         for (int b = 0; b < nb; b++, p += 4 * PK * 4) {
+            ml_prefetch_ahead(p, 4 * PK * 4);
             const int32_t *xb = (const int32_t *)(x->q + b * QK);
             __m512i s = _mm512_setzero_si512();
             for (int v = 0; v < 4; v++) {

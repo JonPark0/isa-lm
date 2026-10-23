@@ -75,8 +75,10 @@ void ml_k_matvec_q8_pk_neon_dotprod(float *y, const ml_qtensor *W, const ml_qact
         const int8_t *p = (const int8_t *)W->pq + (size_t)(row / PK) * nb * (8 * PK * 4);
         const float *d = W->pd + (size_t)(row / PK) * nb * PK;
         float32x4_t acc = vdupq_n_f32(0.0f);
-        for (int b = 0; b < nb; b++, p += 8 * PK * 4)
+        for (int b = 0; b < nb; b++, p += 8 * PK * 4) {
+            ml_prefetch_ahead(p, 8 * PK * 4);
             acc = vfmaq_f32(acc, vcvtq_f32_s32(q8_block(p, x->q + b * QK)), vmulq_n_f32(vld1q_f32(d + b * PK), x->d[b]));
+        }
         pk_store(y, acc, row, r1);
     }
 }
@@ -89,8 +91,10 @@ void ml_k_matvec_q4_pk_neon_dotprod(float *y, const ml_qtensor *W, const ml_qact
         const uint8_t *p = W->pq + (size_t)(row / PK) * nb * (4 * PK * 4);
         const float *d = W->pd + (size_t)(row / PK) * nb * PK;
         float32x4_t acc = vdupq_n_f32(0.0f);
-        for (int b = 0; b < nb; b++, p += 4 * PK * 4)
+        for (int b = 0; b < nb; b++, p += 4 * PK * 4) {
+            ml_prefetch_ahead(p, 4 * PK * 4);
             acc = vfmaq_f32(acc, vcvtq_f32_s32(q4_block(p, x->q + b * QK, xsum[b])), vmulq_n_f32(vld1q_f32(d + b * PK), x->d[b]));
+        }
         pk_store(y, acc, row, r1);
     }
 }
