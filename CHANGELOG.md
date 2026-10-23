@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Qwen2 / Qwen2.5 models: q/k/v projection biases (`.mlb` header flag at
+  offset 76), the Qwen2 tokenizer (NFC normalization, single-digit numbers;
+  MLT1 flags 8 and 16), and the `qwen` and `chatml` chat templates.
+  Qwen2.5 0.5B Instruct Q8: perplexity 19.05 against 19.00 for an F32
+  reference.
+- `tools/convert.py hf` reads Mistral checkpoints and caps the context of
+  sliding-window models at the window.
+
+### Changed
+
+- `tools/convert.py hf` refuses architectures it cannot run correctly
+  (`model_type` other than llama, mistral or qwen2; activations other than
+  SiLU; explicit `head_dim`; biases other than q/k/v) instead of writing a
+  wrong model.
+- `tools/perplexity.py` works with tokenizers that add no BOS.
+
 ## 0.1.0 — 2026-10-23
 
 First release.

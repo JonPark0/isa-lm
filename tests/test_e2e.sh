@@ -182,7 +182,7 @@ $RUN $B/ml_run $CHAT -i "hello world" > $T/chat1.txt 2>/dev/null \
     && cmp -s $T/chat1.txt $T/chat1s.txt && ok || bad "--chat -i differs from one stdin line"
 err=$(seq 1 40 | sed 's/^/tell me more /' | $RUN $B/ml_run $CHAT 2>&1 >/dev/null); rc=$?
 [ $rc -eq 0 ] && echo "$err" | grep -q "context full" && ok || bad "--chat past the context: rc=$rc $err"
-for bad_chat in "--chat chatml" "--system x"; do
+for bad_chat in "--chat vicuna" "--system x"; do
     $RUN $B/ml_run $M/chat_q8.mlb -z $M/bpe_tiny.mlt $bad_chat -i hi >/dev/null 2>&1
     [ $? -eq 2 ] && ok || bad "ml_run $bad_chat should exit 2"
 done

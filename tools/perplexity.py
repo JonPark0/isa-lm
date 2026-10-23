@@ -4,7 +4,8 @@
         --ml-tok build/avx2/ml_tok --ctx 512 --chunks 8 -t 4
 
 The text is encoded with ml_tok, cut into chunks of --ctx tokens (each led by
-BOS), and every chunk's tokens after the first are scored. Lower is better;
+BOS if the tokenizer adds one), and every chunk's tokens after the first are
+scored. Lower is better;
 compare models on the same text, tokenizer and --ctx.
 """
 import argparse
@@ -33,8 +34,9 @@ def main():
         text = f.read()
     enc = subprocess.run([a.ml_tok, a.tokenizer, "--no-bos"], input=text, capture_output=True, check=True)
     ids = [int(x) for x in enc.stdout.split()]
-    bos = int(subprocess.run([a.ml_tok, a.tokenizer], input=b"", capture_output=True, check=True).stdout.split()[0])
-    body = a.ctx - 1
+    lead = [int(x) for x in subprocess.run([a.ml_tok, a.tokenizer], input=b"", capture_output=True,
+                                           check=True).stdout.split()]   # [BOS], or [] (Qwen2)
+    body = a.ctx - len(lead)
     nll, count = 0.0, 0
     with tempfile.TemporaryDirectory() as tmp:
         out = os.path.join(tmp, "logits.f32")
@@ -42,7 +44,7 @@ def main():
             chunk = ids[c * body:(c + 1) * body]
             if len(chunk) < 2:
                 break
-            toks = [bos] + chunk
+            toks = lead + chunk
             cmd = [a.ml_run, a.model, "--tokens", ",".join(map(str, toks)), "--dump-logits", out, "-t", str(a.threads)]
             subprocess.run(cmd + a.extra.split(), check=True, capture_output=True)
             logits = np.fromfile(out, np.float32).reshape(len(toks), -1).astype(np.float64)
