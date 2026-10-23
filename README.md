@@ -74,6 +74,7 @@ Hi!<|eot_id|><|start_header_id|>assistant<|end_header_id|>
 | Performance | weights repacked into row-interleaved layouts for every SIMD build from SSE2 and ARMv7 NEON up (Q4 decoding up to 2.2× faster); prompts prefilled in batches of 32 (2–6× faster), on `smmla` with i8mm; software prefetch of the weight stream on x86 (decoding 1.3–2.5× faster on one core); attention 2.4× faster on long contexts, 3.4× with the optional Q8 KV cache (`--kv q8`); numbers in [Testing](docs/testing.md#benchmarking) |
 | Thread pool | bit-identical results for any thread count; ThreadSanitizer clean; a 4-layer dim-2048 Q4 model decodes at 140 tok/s with `-t 1` and 503 tok/s with `-t 4` (avx512vnni, 4 vCPUs) |
 | Windows | cross-compiles with MinGW in CI (not executed); MSVC is supported in CMake but not verified |
+| Quantization | Q8_0, Q4_0, and Q4 with chosen matrix classes in Q8 (`--q8 v,o,down`: Llama 3.2 1B perplexity 18.46 at 904 MB, against 17.30 for Q8 at 1326 MB and 20.46 for Q4 at 737 MB); `tools/perplexity.py` measures it |
 | Tokenizers | llama2.c `tokenizer.bin`; Hugging Face `tokenizer.json` for SentencePiece-style BPE (Llama 2, TinyLlama, Mistral) and Llama 3 byte-level BPE, converted by `tools/convert_tokenizer.py` and identical to the `tokenizers` library on every text tested. TinyLlama 1.1B and Llama 3.2 1B Instruct were run end to end from their Hugging Face files |
 | Not implemented | other tokenizers (WordPiece, Unigram, GPT-2/Qwen pre-tokenizers), RoPE scaling types other than llama3, non-Llama architectures |
 

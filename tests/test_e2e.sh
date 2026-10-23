@@ -18,6 +18,15 @@ for wt in q8 q4; do
         && ok || bad "ref $wt"
 done
 
+# mixed Q4/Q8 model (q8_mask): reference, packed and row-major, batched prefill
+$RUN $B/ml_run $M/mix_q4.mlb --tokens $TOKENS --dump-logits $T/mix.f32 \
+    && python3 tools/ref_forward.py $M/mix_q4.mlb --tokens $TOKENS --out $T/mix.ref.f32 \
+    && python3 tests/compare_logits.py $T/mix.f32 $T/mix.ref.f32 96 1e-3 >/dev/null \
+    && $RUN $B/ml_run $M/mix_q4.mlb --tokens $TOKENS --dump-logits $T/mix.np.f32 --no-pack \
+    && python3 tests/compare_logits.py $T/mix.np.f32 $T/mix.ref.f32 96 1e-3 >/dev/null \
+    && $RUN $B/ml_run $M/mix_q4.mlb --tokens $TOKENS --dump-logits $T/mix.b1.f32 --batch 1 \
+    && cmp -s $T/mix.f32 $T/mix.b1.f32 && ok || bad "mixed Q4/Q8 model"
+
 # Q8 KV cache (--kv q8) against the reference emulating it. K, V and q are
 # quantized from float results that differ in the last bits between C and numpy,
 # so a value near a rounding boundary can land one step away: compare

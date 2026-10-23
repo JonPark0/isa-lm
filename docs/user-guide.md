@@ -151,9 +151,30 @@ python3 tools/gen_random.py --out rand.mlb --wtype q4 --dim 256 --layers 4 --voc
 python3 tools/gen_tokenizer.py --vocab 512 --out tok.bin
 ```
 
-### Q8 or Q4?
+### Q8, Q4, or mixed?
 
-Choose **Q8_0** for accuracy and **Q4_0** for size.
+Choose **Q8_0** for accuracy and **Q4_0** for size. In between, `--q8`
+keeps some matrix classes of a Q4 model in Q8 (`emb`, `cls`, `qk`, `v`, `o`,
+`up`, `down`):
+
+```sh
+python3 tools/convert.py hf ./Llama-3.2-1B-Instruct llama.mlb --wtype q4 --q8 v,o,down
+```
+
+Llama 3.2 1B on wikitext-2 (2044 tokens, `tools/perplexity.py`; decode on
+4 vCPUs, avx512vnni):
+
+| Weights | Size | Perplexity | Decode `-t 4` |
+|---------|-----:|-----------:|--------------:|
+| Q8 | 1326 MB | 17.30 | 31.5 tok/s |
+| Q4 + Q8 `v,o,down` | 904 MB | 18.46 | 47.7 tok/s |
+| Q4 + Q8 `v,down` | 872 MB | 18.79 | |
+| Q4 | 737 MB | 20.46 | 61.3 tok/s |
+
+The down projection (`down`) and the value and output projections matter
+most. The Q8 KV cache costs nothing measurable here: `--kv q8` on the Q8
+model gives 17.27. The embedding and classifier (`emb`, `cls`) are large for a 128K
+vocabulary and help little (Q4 + `emb,cls`: 862 MB, 20.27).
 
 | Format | Bits per weight | Notes |
 |--------|-----------------|-------|

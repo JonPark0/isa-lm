@@ -37,6 +37,9 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--out", required=True)
     ap.add_argument("--wtype", choices=("q8", "q4"), default="q8")
+    ap.add_argument("--q8", default="", metavar="LIST",
+                    help="q4 only: matrix classes kept in Q8, comma-separated from "
+                         "emb, cls, qk, v, o, up, down (e.g. emb,cls,v,down)")
     ap.add_argument("--dim", type=int, default=64)
     ap.add_argument("--layers", type=int, default=2)
     ap.add_argument("--heads", type=int, default=4)
@@ -58,7 +61,7 @@ def main():
         cfg["rope_scaling"] = {"type": "llama3", "factor": float(f), "low_freq_factor": float(lo),
                                "high_freq_factor": float(hi), "original_max_position_embeddings": int(orig)}
     cfg, w = generate(cfg, a.seed)
-    mlb.write_mlb(a.out, cfg, w, a.wtype)
+    mlb.write_mlb(a.out, cfg, w, a.wtype, [c for c in a.q8.split(",") if c])
     if a.dump_emb_row is not None:
         _, t = mlb.read_mlb(a.out)
         row = mlb.dequant(t["tok_emb"])[a.dump_emb_row].astype(np.float32)

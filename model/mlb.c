@@ -52,6 +52,8 @@ static ml_status parse_header(ml_config *cfg, int *shared, const uint8_t *h) {
     cfg->wtype = (int)rd32(h + 44);
     *shared = rd32(h + 48) != 0;
     if (cfg->wtype != ML_Q8_0 && cfg->wtype != ML_Q4_0) return ML_E_FORMAT;
+    cfg->q8_mask = rd32(h + 72);
+    if ((cfg->q8_mask & ~(unsigned)ML_Q8M_ALL) || (cfg->wtype == ML_Q8_0 && cfg->q8_mask)) return ML_E_FORMAT;
     if (cfg->dim % QK || cfg->hidden_dim % QK) return ML_E_SHAPE;
     if (cfg->dim % cfg->n_heads || cfg->n_heads % cfg->n_kv_heads) return ML_E_SHAPE;
     cfg->head_dim = cfg->dim / cfg->n_heads;
@@ -84,27 +86,29 @@ ml_status ml_model_load(ml_model *m, const char *path) {
     if (s != ML_OK) { ml_model_free(m); return s; }
 
     const ml_config *c = &m->cfg;
-    const int wt = c->wtype;
+    /* storage type of a matrix class: Q8 if the model is, or if its bit is set */
+#define WT(bits) (c->wtype == ML_Q8_0 || (c->q8_mask & (bits)) ? ML_Q8_0 : ML_Q4_0)
     m->layers = calloc((size_t)c->n_layers, sizeof(ml_layer));
     if (!m->layers) { ml_model_free(m); return ML_E_NOMEM; }
 
     cursor cur = { m->file.data, ML_MLB_HEADER_SIZE, m->file.size, 1 };
     const size_t normsz = (size_t)c->dim * sizeof(float);
-    m->tok_emb = take_mat(&cur, c->vocab, c->dim, wt);
+    m->tok_emb = take_mat(&cur, c->vocab, c->dim, WT(ML_Q8M_EMB | (shared ? ML_Q8M_CLS : 0)));
     for (int l = 0; l < c->n_layers; l++) {
         ml_layer *L = &m->layers[l];
         L->attn_norm = take(&cur, normsz);
-        L->wq = take_mat(&cur, c->dim, c->dim, wt);
-        L->wk = take_mat(&cur, c->kv_dim, c->dim, wt);
-        L->wv = take_mat(&cur, c->kv_dim, c->dim, wt);
-        L->wo = take_mat(&cur, c->dim, c->dim, wt);
+        L->wq = take_mat(&cur, c->dim, c->dim, WT(ML_Q8M_QK));
+        L->wk = take_mat(&cur, c->kv_dim, c->dim, WT(ML_Q8M_QK));
+        L->wv = take_mat(&cur, c->kv_dim, c->dim, WT(ML_Q8M_V));
+        L->wo = take_mat(&cur, c->dim, c->dim, WT(ML_Q8M_O));
         L->ffn_norm = take(&cur, normsz);
-        L->w1 = take_mat(&cur, c->hidden_dim, c->dim, wt);
-        L->w2 = take_mat(&cur, c->dim, c->hidden_dim, wt);
-        L->w3 = take_mat(&cur, c->hidden_dim, c->dim, wt);
+        L->w1 = take_mat(&cur, c->hidden_dim, c->dim, WT(ML_Q8M_UP));
+        L->w2 = take_mat(&cur, c->dim, c->hidden_dim, WT(ML_Q8M_DOWN));
+        L->w3 = take_mat(&cur, c->hidden_dim, c->dim, WT(ML_Q8M_UP));
     }
     m->final_norm = take(&cur, normsz);
-    m->wcls = shared ? m->tok_emb : take_mat(&cur, c->vocab, c->dim, wt);
+    m->wcls = shared ? m->tok_emb : take_mat(&cur, c->vocab, c->dim, WT(ML_Q8M_CLS));
+#undef WT
     if (!cur.ok) { ml_model_free(m); return ML_E_FORMAT; }
     return ML_OK;
 }

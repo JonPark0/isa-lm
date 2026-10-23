@@ -13,11 +13,34 @@ TINY = np.float32(1e-30)   # blocks with max |x| below this quantize to zero (ML
 ALIGN = 64
 HEADER_SIZE = 256
 WTYPES = {"f32": 0, "q8": 1, "q4": 2}
-_HDR = struct.Struct("<4sIIIIIIIIffIIIfffI")   # magic .. rope scaling, 72 bytes
+_HDR = struct.Struct("<4sIIIIIIIIffIIIfffII")   # magic .. rope scaling, q8 mask: 76 bytes
 ROPE_TYPES = {None: 0, "llama3": 1}
 LAYER_KEYS = ("attn_norm", "wq", "wk", "wv", "wo", "ffn_norm", "w1", "w2", "w3")
 
 QT = namedtuple("QT", "type q d shape")   # quantized tensor as stored
+
+# Q4 models may keep these matrix classes in Q8 (header q8_mask, offset 72).
+Q8_CLASSES = {"emb": 1, "cls": 2, "qk": 4, "v": 8, "o": 16, "up": 32, "down": 64}
+_CLASS_OF = {"tok_emb": "emb", "wcls": "cls", "wq": "qk", "wk": "qk", "wv": "v", "wo": "o",
+             "w1": "up", "w3": "up", "w2": "down"}
+
+
+def q8_mask(classes):
+    """Names (e.g. ["emb", "v"]) -> header bitmask."""
+    m = 0
+    for c in classes:
+        if c not in Q8_CLASSES:
+            raise ValueError(f"unknown matrix class {c!r}; choose from {', '.join(Q8_CLASSES)}")
+        m |= Q8_CLASSES[c]
+    return m
+
+
+def matrix_type(key, wtype, mask, shared=False):
+    """Storage type (WTYPES value) of matrix `key` (tok_emb, wq, ..., wcls)."""
+    bits = Q8_CLASSES[_CLASS_OF[key]]
+    if shared and key == "tok_emb":
+        bits |= Q8_CLASSES["cls"]   # the shared table is also the classifier
+    return WTYPES["q8"] if wtype == WTYPES["q8"] or mask & bits else WTYPES["q4"]
 
 
 def rope_inv_freq(cfg):
@@ -98,15 +121,19 @@ def _check_cfg(cfg):
             raise ValueError(f"{k}={cfg[k]} must be a multiple of {QK}")
 
 
-def write_mlb(path, cfg, w, wtype):
-    """Writes the model; returns [(array name, offset, nbytes)] for every array."""
+def write_mlb(path, cfg, w, wtype, q8=()):
+    """Writes the model; returns [(array name, offset, nbytes)] for every array.
+    q8: matrix classes (Q8_CLASSES) kept in Q8 when wtype is q4."""
     _check_cfg(cfg)
+    mask = q8_mask(q8) if wtype == "q4" else 0
+    shared = bool(cfg.get("shared_classifier", 0))
     rs = cfg.get("rope_scaling") or {}
     hdr = _HDR.pack(b"MLB1", 1, cfg["dim"], cfg["n_layers"], cfg["n_heads"], cfg["n_kv_heads"],
                     cfg["hidden_dim"], cfg["vocab"], cfg["max_seq"], cfg["rope_theta"],
                     cfg["norm_eps"], WTYPES[wtype], int(cfg.get("shared_classifier", 0)),
                     ROPE_TYPES[rs.get("type")], rs.get("factor", 0.0), rs.get("low_freq_factor", 0.0),
-                    rs.get("high_freq_factor", 0.0), rs.get("original_max_position_embeddings", 0))
+                    rs.get("high_freq_factor", 0.0), rs.get("original_max_position_embeddings", 0),
+                    mask)
     layout = []
     with open(path, "wb") as f:
         f.write(hdr.ljust(HEADER_SIZE, b"\0"))
@@ -122,7 +149,9 @@ def write_mlb(path, cfg, w, wtype):
             if kind == "f":
                 put(name, arr)
                 continue
-            q, d = quantize_q8(arr) if wtype == "q8" else quantize_q4(arr)
+            key = name.split(".")[-1]
+            t = matrix_type(key, WTYPES[wtype], mask, shared)
+            q, d = quantize_q8(arr) if t == WTYPES["q8"] else quantize_q4(arr)
             put(name + ".q", q)
             put(name + ".d", d)
     return layout
@@ -137,7 +166,7 @@ def read_mlb(path):
     keys = ("version", "dim", "n_layers", "n_heads", "n_kv_heads", "hidden_dim", "vocab",
             "max_seq", "rope_theta", "norm_eps", "wtype", "shared_classifier")
     cfg = dict(zip(keys, f[1:13]))
-    rtype, rf, rlo, rhi, rorig = f[13:]
+    rtype, rf, rlo, rhi, rorig, cfg["q8_mask"] = f[13:]
     cfg["rope_scaling"] = None if rtype == 0 else {
         "type": {v: k for k, v in ROPE_TYPES.items()}[rtype], "factor": rf, "low_freq_factor": rlo,
         "high_freq_factor": rhi, "original_max_position_embeddings": rorig}
@@ -158,10 +187,11 @@ def read_mlb(path):
 
     def mat(key):
         r, c = shapes[key]
-        nq = r * c if cfg["wtype"] == 1 else r * c // 2
-        q = take(np.int8 if cfg["wtype"] == 1 else np.uint8, nq)
+        t = matrix_type(key, cfg["wtype"], cfg["q8_mask"], bool(cfg["shared_classifier"]))
+        nq = r * c if t == 1 else r * c // 2
+        q = take(np.int8 if t == 1 else np.uint8, nq)
         d = take(np.float32, r * c // QK).reshape(r, c // QK)
-        return QT(cfg["wtype"], q.reshape(r, -1), d, (r, c))
+        return QT(t, q.reshape(r, -1), d, (r, c))
 
     t = {"tok_emb": mat("tok_emb"), "layers": []}
     for _ in range(cfg["n_layers"]):

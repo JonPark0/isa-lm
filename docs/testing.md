@@ -232,6 +232,16 @@ activation bytes from a vector lane instead of broadcasting them. neon_i8mm
 decodes with the same kernels and prefills on `smmla`, 23–24% faster than
 `sdot`.
 
+## Perplexity
+
+`tools/perplexity.py` scores a text through `ml_run --dump-logits`, for
+comparing weight formats or KV cache types on a real model:
+
+```sh
+python3 tools/perplexity.py build/avx2/ml_run llama.mlb llama.mlt wikitext-2-test.txt \
+    --ml-tok build/avx2/ml_tok --ctx 512 --chunks 4 -t 4
+```
+
 ## Wiki
 
 The GitHub wiki is generated from `README.md` and `docs/`; edit those, never
