@@ -19,6 +19,9 @@ static const char USAGE[] =
     "  -n N             positions to run, prompt included (default 64, max: model max_seq)\n"
     "  -T F             temperature, 0 = greedy (default 0)\n"
     "  -p F             top-p in [0, 1] (default 0.9)\n"
+    "  --top-k N        sample only from the N most likely tokens (default 0: off)\n"
+    "  --repeat-penalty F  > 1 discourages tokens among the last --repeat-last-n (default 1: off)\n"
+    "  --repeat-last-n N   tokens the repetition penalty looks back on (default 64)\n"
     "  -s N             random seed (default 1)\n"
     "  -t N             threads (default 1)\n"
     "  --eos ID         stop when ID is generated (default: the tokenizer's BOS/EOS with -z,\n"
@@ -85,7 +88,8 @@ int ml_main(int argc, char **argv) {
     const char *model_path = NULL, *tok_path = NULL, *prompt = NULL, *tokens_arg = NULL, *dump = NULL;
     int profile = 0, no_pack = 0, kv_type = ML_F32;
     int steps = 64, nthreads = 1, eos = -1, batch = ML_BATCH_MAX;
-    float temp = 0.0f, topp = 0.9f;
+    float temp = 0.0f, topp = 0.9f, rep_pen = 1.0f;
+    int topk = 0, rep_last = 64;
     unsigned long long seed = 1;
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
@@ -106,6 +110,9 @@ int ml_main(int argc, char **argv) {
         else if (!strcmp(a, "-T")) ok = parse_float(v, &temp);
         else if (!strcmp(a, "-p")) ok = parse_float(v, &topp);
         else if (!strcmp(a, "-s")) ok = parse_u64(v, &seed);
+        else if (!strcmp(a, "--top-k")) ok = parse_int(v, 0, 1 << 24, &topk);
+        else if (!strcmp(a, "--repeat-penalty")) ok = parse_float(v, &rep_pen) && rep_pen > 0.0f && rep_pen <= 1e3f;
+        else if (!strcmp(a, "--repeat-last-n")) ok = parse_int(v, 0, 1 << 24, &rep_last);
         else if (!strcmp(a, "-t")) ok = parse_int(v, 1, 64, &nthreads);
         else if (!strcmp(a, "--eos")) ok = parse_int(v, 0, 1 << 24, &eos);
         else if (!strcmp(a, "--batch")) ok = parse_int(v, 1, ML_BATCH_MAX, &batch);
@@ -180,7 +187,9 @@ int ml_main(int argc, char **argv) {
     }
 
     ml_sampler smp;
-    if (ml_sampler_init(&smp, c->vocab, temp, topp, seed) != ML_OK) { rc = 1; goto out_state; }
+    const ml_sampler_opts so = { temp, topp, topk, rep_pen, rep_last, seed };
+    if (ml_sampler_init(&smp, c->vocab, &so) != ML_OK) { rc = 1; goto out_state; }
+    for (int i = 0; i < np; i++) ml_sampler_accept(&smp, ptoks[i]);
     if (steps > c->max_seq) steps = c->max_seq;
     /* Prompt: all but the last token go through batched prefill (no logits
      * needed); generation then continues token by token. */
@@ -201,7 +210,9 @@ int ml_main(int argc, char **argv) {
     while (pos < steps) {
         float *logits = ml_forward(&s, token, pos);
         if (!logits) { fprintf(stderr, "error: token %d at position %d out of range\n", token, pos); rc = 1; break; }
-        const int next = pos + 1 < np ? ptoks[pos + 1] : ml_sample(&smp, logits, c->vocab);
+        const int sampled = pos + 1 >= np;
+        const int next = sampled ? ml_sample(&smp, logits, c->vocab) : ptoks[pos + 1];
+        if (sampled) ml_sampler_accept(&smp, next);
         pos++;
         /* With -z the tokenizer's BOS/EOS stop generation (llama2.c: ids 1/2).
          * Without it the ids are unknown (Llama 3 uses neither 1 nor 2), so

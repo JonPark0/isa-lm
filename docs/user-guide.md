@@ -176,6 +176,9 @@ build/avx2/ml_run model.mlb --tokens 1,450,3681 --dump-logits l.f32
 | `-n N` | Positions to run, prompt included. Default 64; capped at the model's `max_seq`. |
 | `-T F` | Temperature. `0` means greedy decoding (ties go to the lowest id). Default 0. |
 | `-p F` | Top-p in [0, 1]. Values of 0 or 1 sample from the full distribution. Default 0.9. |
+| `--top-k N` | Sample only from the `N` most likely tokens, then apply top-p among them. `0` (default) turns it off; `1` is greedy at any temperature. |
+| `--repeat-penalty F` | Repetition penalty: divide the positive logit of each token seen in the last `--repeat-last-n` tokens by `F` and multiply a negative one, as Hugging Face does. Applies to greedy decoding too. `1` (default) turns it off; 1.1–1.3 is typical. |
+| `--repeat-last-n N` | How many recent tokens, prompt included, the penalty looks at. Default 64. |
 | `-s N` | Seed for the xorshift64* RNG. Default 1. |
 | `-t N` | Threads, 1 to 64. Only builds made with `THREADS=pthread` use more than one. |
 | `--dump-logits F` | Write float32 logits `[n_tokens][vocab]` for every `--tokens` position, then exit. |

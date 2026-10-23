@@ -82,6 +82,15 @@ $RUN $B/ml_run $M/rand_q8.mlb -z $TOK -i "ab" -n 20 -T 0.9 -p 0.9 -s 42 > $T/sam
     && $SCALAR $M/rand_q8.mlb -z $TOK -i "ab" -n 20 -T 0.9 -p 0.9 -s 42 > $T/samp.ref.txt 2>/dev/null \
     && cmp -s $T/samp.txt $T/samp.ref.txt && ok || bad "sampled text differs from scalar"
 
+# --top-k 1 is greedy at any temperature; a repetition penalty changes the text
+$RUN $B/ml_run $M/rand_q8.mlb -z $TOK -i "ab" -n 16 -T 1.3 --top-k 1 -s 5 > $T/topk1.txt 2>/dev/null \
+    && cmp -s $T/topk1.txt $T/greedy.txt && ok || bad "--top-k 1 should give the greedy text"
+$RUN $B/ml_run $M/rand_q8.mlb -z $TOK -i "ab" -n 24 -T 0 > $T/greedy24.txt 2>/dev/null
+$RUN $B/ml_run $M/rand_q8.mlb -z $TOK -i "ab" -n 24 -T 0 --repeat-penalty 1.5 > $T/pen.txt 2>/dev/null \
+    && $SCALAR $M/rand_q8.mlb -z $TOK -i "ab" -n 24 -T 0 --repeat-penalty 1.5 > $T/pen.ref.txt 2>/dev/null \
+    && cmp -s $T/pen.txt $T/pen.ref.txt && ! cmp -s $T/pen.txt $T/greedy24.txt && ok \
+    || bad "--repeat-penalty: should match scalar and differ from plain greedy"
+
 # overflow: steps beyond max_seq (32) stop at max_seq
 err=$($RUN $B/ml_run $M/rand_q8.mlb --tokens 1,2 -n 1000 -T 0 2>&1 >/dev/null); rc=$?
 pos=$(echo "$err" | sed -n 's/^positions: \([0-9]*\).*/\1/p')
@@ -135,7 +144,7 @@ err=$($RUN $B/ml_run 2>&1); rc=$?
 $RUN $B/ml_run $M/rand_q8.mlb --tokens 1,500 -n 4 >/dev/null 2>&1
 [ $? -eq 2 ] && ok || bad "out-of-range token id should exit 2"
 
-for bad_opt in "-T nan" "-T inf" "-T -1" "-p nan" "-p 1.5" "-p -0.1"; do
+for bad_opt in "-T nan" "-T inf" "-T -1" "-p nan" "-p 1.5" "-p -0.1" "--top-k -1" "--repeat-penalty 0" "--repeat-penalty nan" "--repeat-last-n -2"; do
     $RUN $B/ml_run $M/rand_q8.mlb --tokens 1 -n 4 $bad_opt >/dev/null 2>&1
     [ $? -eq 2 ] && ok || bad "ml_run $bad_opt should exit 2"
 done
