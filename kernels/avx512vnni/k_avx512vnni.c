@@ -310,19 +310,61 @@ void ml_k_add_avx512vnni(float *y, const float *x, int n) {
     }
 }
 
-float ml_k_dot_f32_avx512vnni(const float *a, const float *b, int n) {
-    __m512 acc = _mm512_setzero_ps();
-    for (int i = 0; i < n; i += 16) {
-        const __mmask16 m = n - i >= 16 ? 0xFFFF : (__mmask16)((1u << (n - i)) - 1);
-        acc = _mm512_fmadd_ps(_mm512_maskz_loadu_ps(m, a + i), _mm512_maskz_loadu_ps(m, b + i), acc);
+/* Scores of 4 rows per pass: each row has its own accumulator, so the
+ * arithmetic per row is the same in the 4-row and the 1-row loop. */
+void ml_k_dot_f32_avx512vnni(float *s, const float *q, const float *k, size_t ldk, int rows, int n, float scale) {
+    int t = 0;
+    for (; t + 4 <= rows; t += 4) {
+        const float *k0 = k + (size_t)t * ldk, *k1 = k0 + ldk, *k2 = k1 + ldk, *k3 = k2 + ldk;
+        __m512 a0 = _mm512_setzero_ps(), a1 = _mm512_setzero_ps(), a2 = _mm512_setzero_ps(), a3 = _mm512_setzero_ps();
+        int i = 0;
+        for (; i + 16 <= n; i += 16) {
+            const __m512 qv = _mm512_loadu_ps(q + i);
+            a0 = _mm512_fmadd_ps(qv, _mm512_loadu_ps(k0 + i), a0);
+            a1 = _mm512_fmadd_ps(qv, _mm512_loadu_ps(k1 + i), a1);
+            a2 = _mm512_fmadd_ps(qv, _mm512_loadu_ps(k2 + i), a2);
+            a3 = _mm512_fmadd_ps(qv, _mm512_loadu_ps(k3 + i), a3);
+        }
+        float r0 = _mm512_reduce_add_ps(a0), r1 = _mm512_reduce_add_ps(a1), r2 = _mm512_reduce_add_ps(a2), r3 = _mm512_reduce_add_ps(a3);
+        for (; i < n; i++) { r0 += q[i] * k0[i]; r1 += q[i] * k1[i]; r2 += q[i] * k2[i]; r3 += q[i] * k3[i]; }
+        s[t] = r0 * scale; s[t + 1] = r1 * scale; s[t + 2] = r2 * scale; s[t + 3] = r3 * scale;
     }
-    return _mm512_reduce_add_ps(acc);
+    for (; t < rows; t++) {
+        const float *k0 = k + (size_t)t * ldk;
+        __m512 a0 = _mm512_setzero_ps();
+        int i = 0;
+        for (; i + 16 <= n; i += 16) a0 = _mm512_fmadd_ps(_mm512_loadu_ps(q + i), _mm512_loadu_ps(k0 + i), a0);
+        float r0 = _mm512_reduce_add_ps(a0);
+        for (; i < n; i++) r0 += q[i] * k0[i];
+        s[t] = r0 * scale;
+    }
 }
 
-void ml_k_axpy_f32_avx512vnni(float *y, float a, const float *x, int n) {
-    const __m512 va = _mm512_set1_ps(a);
-    for (int i = 0; i < n; i += 16) {
-        const __mmask16 m = n - i >= 16 ? 0xFFFF : (__mmask16)((1u << (n - i)) - 1);
-        _mm512_mask_storeu_ps(y + i, m, _mm512_fmadd_ps(va, _mm512_maskz_loadu_ps(m, x + i), _mm512_maskz_loadu_ps(m, y + i)));
+/* y += sum_t a[t] * x_t, 64 outputs at a time held in registers across all
+ * rows. Each output adds its terms in row order, whatever the chunk. */
+void ml_k_axpy_f32_avx512vnni(float *y, const float *a, const float *x, size_t ldx, int rows, int n) {
+    int i = 0;
+    for (; i + 64 <= n; i += 64) {
+        __m512 y0 = _mm512_loadu_ps(y + i), y1 = _mm512_loadu_ps(y + i + 16), y2 = _mm512_loadu_ps(y + i + 32), y3 = _mm512_loadu_ps(y + i + 48);
+        const float *xt = x + i;
+        for (int t = 0; t < rows; t++, xt += ldx) {
+            const __m512 av = _mm512_set1_ps(a[t]);
+            y0 = _mm512_fmadd_ps(av, _mm512_loadu_ps(xt), y0);
+            y1 = _mm512_fmadd_ps(av, _mm512_loadu_ps(xt + 16), y1);
+            y2 = _mm512_fmadd_ps(av, _mm512_loadu_ps(xt + 32), y2);
+            y3 = _mm512_fmadd_ps(av, _mm512_loadu_ps(xt + 48), y3);
+        }
+        _mm512_storeu_ps(y + i, y0); _mm512_storeu_ps(y + i + 16, y1); _mm512_storeu_ps(y + i + 32, y2); _mm512_storeu_ps(y + i + 48, y3);
+    }
+    for (; i + 16 <= n; i += 16) {
+        __m512 y0 = _mm512_loadu_ps(y + i);
+        const float *xt = x + i;
+        for (int t = 0; t < rows; t++, xt += ldx) y0 = _mm512_fmadd_ps(_mm512_set1_ps(a[t]), _mm512_loadu_ps(xt), y0);
+        _mm512_storeu_ps(y + i, y0);
+    }
+    for (; i < n; i++) {
+        float v = y[i];
+        for (int t = 0; t < rows; t++) v += a[t] * x[(size_t)t * ldx + i];
+        y[i] = v;
     }
 }

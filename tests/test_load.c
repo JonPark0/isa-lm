@@ -160,7 +160,7 @@ static void test_state_huge_kv(void) {
     ml_model m;
     TT_EQ_INT(ml_model_load(&m, wrap_path), ML_OK);
     ml_state s;
-    ml_status st = ml_state_init(&s, &m, 1);
+    ml_status st = ml_state_init(&s, &m, 1, ML_F32);
     TT_ASSERT(st == ML_OK || st == ML_E_NOMEM);
     if (st == ML_OK) {
         const float *l0 = ml_forward(&s, 1, 0);

@@ -20,7 +20,7 @@ only `core/ml.h` and their own intrinsics headers.
 
 ## Compile-time kernel selection
 
-There are ten kernels. Every ISA implements the same C ABI, named
+There are twelve kernels. Every ISA implements the same C ABI, named
 `ml_k_<op>_<isa>`:
 
 | Kernel | Purpose |
@@ -28,7 +28,8 @@ There are ten kernels. Every ISA implements the same C ABI, named
 | `matvec_q8`, `matvec_q4` | `y[r0..r1) = W · x` for Q8/Q4 weights and Q8 activations |
 | `quantize_q8` | float activations → Q8_0 |
 | `rmsnorm`, `softmax`, `silu_mul`, `add`, `rope` | element-wise and normalization ops |
-| `dot_f32`, `axpy_f32` | attention scores and the weighted sum over V |
+| `dot_f32`, `axpy_f32` | attention over an F32 KV cache: scores of one query against many strided K rows, and the weighted sum of V rows |
+| `dot_q8`, `axpy_q8` | the same over a Q8 KV cache: integer dot products, one scale per row |
 
 `make ISA=X` passes `-DML_ISA_X`, plus `-DML_ENABLE_<I>` for every ISA in X's
 fallback chain:
@@ -83,7 +84,7 @@ instruction can execute on an unsupported CPU, not even in a function prologue.
 x = dequant(tok_emb[token])
 for each layer:
     h  = rmsnorm(x) ; qa = quantize_q8(h)
-    q, k, v = matvec(Wq|Wk|Wv, qa) ; rope(q, k)       k, v written straight into the KV cache
+    q, k, v = matvec(Wq|Wk|Wv, qa) ; rope(q, k)       k, v go into the KV cache (F32, or quantized for Q8)
     o  = attention(q, K[0..pos], V[0..pos])           per head, GQA head h → kv head h / (n_heads / n_kv_heads)
     x += matvec(Wo, quantize_q8(o))
     h  = rmsnorm(x) ; qa = quantize_q8(h)
@@ -162,6 +163,29 @@ the kernel compute-bound.
 - **Fallback:** builds without packed kernels, or with `--no-pack`, still batch
   the prefill but use the matvec per token.
 
+## Attention
+
+For each position, every query head scores all cached positions, takes a
+softmax, and sums the V rows. On long contexts this dominates: a head reads
+`pos × head_dim` K values and as many V values per token.
+
+- **Whole rows per call:** `dot_f32` and `axpy_f32` take a block of cached
+  positions at once (strided rows of the cache), so the SIMD loops run over
+  positions instead of paying a call and a horizontal sum per position.
+  `axpy` keeps its outputs in registers across the rows.
+- **GQA blocks:** heads that share a KV head walk the cache together in blocks
+  of 64 positions. Each block of K (and later V) is loaded into L1 once and
+  used by every head of the group.
+- **Q8 cache (`--kv q8`):** each position's K and V are stored per KV head as
+  int8 with one float scale, using the activations' quantization rule, and
+  each query head is quantized the same way. Scores are integer dot products;
+  the V sum converts int8 to float on the fly. The cache shrinks by about
+  3.8× (`head_dim` 64: 68 bytes per head instead of 256). The logits change
+  slightly, so F32 stays the default.
+
+Per head, the arithmetic does not depend on the block size or the thread
+count, so results stay bit-identical across `-t` and `--batch`.
+
 ## Memory
 
 - **Weights:** memory-mapped read-only (`mmap` on POSIX, `CreateFileMapping` on
@@ -169,7 +193,8 @@ the kernel compute-bound.
 - **Runtime buffers:** carved from **one** 64-byte-aligned arena, sized from the
   header. These are the activations (one token, plus 32-token prefill
   batches), the Q8 activation buffers, the KV cache `[layer][max_seq][kv_dim]`
-  in F32, the RoPE tables and the logits.
+  (F32, or int8 plus one scale per position and KV head with `--kv q8`), the
+  RoPE tables and the logits.
 - **Packed weights:** one allocation the size of the matrices. The originals'
   pages are released after packing.
 - **Size checks:** every size product is overflow-checked, so on a 32-bit target

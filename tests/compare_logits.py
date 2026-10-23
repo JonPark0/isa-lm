@@ -1,6 +1,8 @@
-"""compare_logits.py A B VOCAB [RTOL] [--kl MAX]: raw float32 logits files [n, VOCAB].
+"""compare_logits.py A B VOCAB [RTOL] [--kl MAX] [--any-argmax]: raw float32 logits files [n, VOCAB].
 
 Default (random test models): per position max|a-b| <= RTOL * max|b| and argmax equal.
+--any-argmax drops the argmax check, for long runs on flat random models where
+rounding differences make near-tied tokens swap places.
 --kl MAX (real models, where an activation sitting on a rounding tie can flip
 one quantization step between two valid implementations): per position the
 argmax is equal, at least 4 of the top 5 tokens agree, and KL(softmax(b) ||
@@ -10,6 +12,7 @@ import sys
 import numpy as np
 
 args = [a for a in sys.argv[1:] if not a.startswith("--")]
+check_argmax = "--any-argmax" not in sys.argv
 kl_max = float(sys.argv[sys.argv.index("--kl") + 1]) if "--kl" in sys.argv else None
 if kl_max is not None:
     args.remove(sys.argv[sys.argv.index("--kl") + 1])
@@ -23,7 +26,7 @@ a, b = a.reshape(-1, vocab).astype(np.float64), b.reshape(-1, vocab).astype(np.f
 
 if kl_max is None:
     err = np.abs(a - b).max(axis=1) / np.abs(b).max(axis=1)
-    bad = np.nonzero((err > rtol) | (a.argmax(1) != b.argmax(1)))[0]
+    bad = np.nonzero((err > rtol) | ((a.argmax(1) != b.argmax(1)) & check_argmax))[0]
     print(f"max rel err {err.max():.2e} over {len(a)} positions")
 else:
     def softmax(x):

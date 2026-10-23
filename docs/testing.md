@@ -49,12 +49,22 @@ The first lines of the output name the kernel each op resolved to, for example
   `--help`), and `--no-pack` also matches the reference.
 - **Batched prefill:** `--batch 1`, `--batch 5` and the default produce
   byte-identical logits, and generated text is the same with and without
-  batching.
+  batching. This also holds with `--kv q8`, and so does `-t 3` against `-t 1`.
+- **Q8 KV cache:** `--kv q8` logits match `tools/ref_forward.py --kv q8`, which
+  emulates the quantized cache, by the `--kl` criterion below.
+- **Long context:** a 160-position model runs 150 positions, so attention
+  crosses its 64-position blocks. The host scalar build must match the
+  reference within 1e-3 (F32 cache) and 5% (Q8). The build under test is held
+  to 5% without the argmax check (`compare_logits.py --any-argmax`): builds
+  with FMA round some activations differently and drift by up to 2% over 150
+  positions, while a wrong block offset or stride garbles the logits (85%
+  error).
 - **Real model (`make test-all`, needs network):** stories15M logits from the
   scalar and avx2 builds, packed and `--no-pack`, are compared with the numpy
   reference using `compare_logits.py --kl 1e-2`. That mode checks that the
   argmax matches, at least 4 of the top 5 tokens agree, and the KL divergence is
-  small. A real model can have an activation sitting exactly on a quantization
+  small. The avx2 build with `--kv q8` is held to the same bound against
+  the F32 reference (KL about 1e-3). A real model can have an activation sitting exactly on a quantization
   rounding tie. Two valid implementations can then round it differently, which
   moves logits by up to about 2% while the distribution stays the same (KL
   ~1e-3). The random-model tests keep the strict 1e-3 relative bound.
@@ -170,6 +180,15 @@ The batched kernels run each tile through a body instantiated for a constant
 token count (`PK_TILES`, `ML_UNROLL`), so the per-token accumulators stay in
 registers. Before that, GCC kept them on the stack, and batched prefill was
 1.2–1.6× slower (avx2 Q4 292, avxvnni Q8 197, avx512vnni Q4 384 tok/s).
+
+**Long context**, dim-2048 Q4 model (4 layers, 32 heads, 8 KV heads, hidden
+5632), avx2, `-t 1`, 4096 positions decoded from a 1-token prompt:
+
+| Attention version | attention time | share of forward | tok/s over 4096 positions |
+|-------------------|---------------:|-----------------:|--------------------------:|
+| one call per position (before) | 45.2 s | 35% | 31.7 |
+| row blocks, GQA-shared (`--kv f32`) | 19.0 s | 19% | 40.9 |
+| Q8 cache (`--kv q8`) | 13.4 s | 14% | 43.8 |
 
 **Arm, single thread** (GitHub `ubuntu-24.04-arm` runner, Neoverse-class
 cores). These numbers come from the CI benchmark step, which publishes them as

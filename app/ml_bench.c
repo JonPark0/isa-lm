@@ -68,13 +68,15 @@ static void bench_quantize(int k, int iters) {
 
 int ml_main(int argc, char **argv) {
     const char *model = NULL;
-    int nthreads = 1, tokens = 64, no_pack = 0;
+    int nthreads = 1, tokens = 64, no_pack = 0, kv_type = ML_F32;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "-t") && i + 1 < argc) nthreads = atoi(argv[++i]);
         else if (!strcmp(argv[i], "-n") && i + 1 < argc) tokens = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--no-pack")) no_pack = 1;
+        else if (!strcmp(argv[i], "--kv") && i + 1 < argc && !strcmp(argv[i + 1], "q8")) { kv_type = ML_Q8_0; i++; }
+        else if (!strcmp(argv[i], "--kv") && i + 1 < argc && !strcmp(argv[i + 1], "f32")) { kv_type = ML_F32; i++; }
         else if (argv[i][0] != '-') model = argv[i];
-        else { fprintf(stderr, "usage: ml_bench [MODEL.mlb] [-t threads] [-n tokens] [--no-pack]\n"); return 2; }
+        else { fprintf(stderr, "usage: ml_bench [MODEL.mlb] [-t threads] [-n tokens] [--no-pack] [--kv f32|q8]\n"); return 2; }
     }
     printf("ISA: %s  (matvec_q8 -> %s, matvec_q4 -> %s, quantize_q8 -> %s)\n", ML_ISA_NAME,
            ML_STR(ml_k_matvec_q8), ML_STR(ml_k_matvec_q4), ML_STR(ml_k_quantize_q8));
@@ -90,7 +92,7 @@ int ml_main(int argc, char **argv) {
     ml_status st = ml_model_load(&m, model);
     if (st != ML_OK) { fprintf(stderr, "error: %s: %s\n", model, ml_status_str(st)); return 1; }
     ml_state s;
-    if ((st = ml_state_init(&s, &m, nthreads)) != ML_OK || (!no_pack && (st = ml_model_pack(&m, s.pool)) != ML_OK)) {
+    if ((st = ml_state_init(&s, &m, nthreads, kv_type)) != ML_OK || (!no_pack && (st = ml_model_pack(&m, s.pool)) != ML_OK)) {
         fprintf(stderr, "error: %s\n", ml_status_str(st));
         ml_model_free(&m);
         return 1;

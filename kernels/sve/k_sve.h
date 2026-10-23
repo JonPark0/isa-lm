@@ -17,7 +17,7 @@ void ml_k_matvec_q4_sve(float *y, const ml_qtensor *W, const ml_qact *x, int r0,
 void ml_k_quantize_q8_sve(ml_qact *out, const float *x, int k);
 void ml_k_rmsnorm_sve(float *o, const float *x, const float *w, int n, float eps);
 void ml_k_add_sve(float *y, const float *x, int n);
-float ml_k_dot_f32_sve(const float *a, const float *b, int n);
-void ml_k_axpy_f32_sve(float *y, float a, const float *x, int n);
+void ml_k_dot_f32_sve(float *s, const float *q, const float *k, size_t ldk, int rows, int n, float scale);
+void ml_k_axpy_f32_sve(float *y, const float *a, const float *x, size_t ldx, int rows, int n);
 
 #endif

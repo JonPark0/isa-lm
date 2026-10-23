@@ -143,24 +143,134 @@ void ml_k_add_neon(float *y, const float *x, int n) {
     for (; i < n; i++) y[i] += x[i];
 }
 
-float ml_k_dot_f32_neon(const float *a, const float *b, int n) {
-    float32x4_t a0 = vdupq_n_f32(0.0f), a1 = vdupq_n_f32(0.0f);
-    int i = 0;
-    for (; i + 8 <= n; i += 8) {
-        a0 = mla_f32(a0, vld1q_f32(a + i), vld1q_f32(b + i));
-        a1 = mla_f32(a1, vld1q_f32(a + i + 4), vld1q_f32(b + i + 4));
+/* Scores of 4 rows per pass: each row has its own accumulator, so the
+ * arithmetic per row is the same in the 4-row and the 1-row loop. */
+void ml_k_dot_f32_neon(float *s, const float *q, const float *k, size_t ldk, int rows, int n, float scale) {
+    int t = 0;
+    for (; t + 4 <= rows; t += 4) {
+        const float *k0 = k + (size_t)t * ldk, *k1 = k0 + ldk, *k2 = k1 + ldk, *k3 = k2 + ldk;
+        float32x4_t a0 = vdupq_n_f32(0.0f), a1 = vdupq_n_f32(0.0f), a2 = vdupq_n_f32(0.0f), a3 = vdupq_n_f32(0.0f);
+        int i = 0;
+        for (; i + 4 <= n; i += 4) {
+            const float32x4_t qv = vld1q_f32(q + i);
+            a0 = mla_f32(a0, qv, vld1q_f32(k0 + i));
+            a1 = mla_f32(a1, qv, vld1q_f32(k1 + i));
+            a2 = mla_f32(a2, qv, vld1q_f32(k2 + i));
+            a3 = mla_f32(a3, qv, vld1q_f32(k3 + i));
+        }
+        float r0 = hsum_f32x4(a0), r1 = hsum_f32x4(a1), r2 = hsum_f32x4(a2), r3 = hsum_f32x4(a3);
+        for (; i < n; i++) { r0 += q[i] * k0[i]; r1 += q[i] * k1[i]; r2 += q[i] * k2[i]; r3 += q[i] * k3[i]; }
+        s[t] = r0 * scale; s[t + 1] = r1 * scale; s[t + 2] = r2 * scale; s[t + 3] = r3 * scale;
     }
-    for (; i + 4 <= n; i += 4) a0 = mla_f32(a0, vld1q_f32(a + i), vld1q_f32(b + i));
-    float s = hsum_f32x4(vaddq_f32(a0, a1));
-    for (; i < n; i++) s += a[i] * b[i];
-    return s;
+    for (; t < rows; t++) {
+        const float *k0 = k + (size_t)t * ldk;
+        float32x4_t a0 = vdupq_n_f32(0.0f);
+        int i = 0;
+        for (; i + 4 <= n; i += 4) a0 = mla_f32(a0, vld1q_f32(q + i), vld1q_f32(k0 + i));
+        float r0 = hsum_f32x4(a0);
+        for (; i < n; i++) r0 += q[i] * k0[i];
+        s[t] = r0 * scale;
+    }
 }
 
-void ml_k_axpy_f32_neon(float *y, float a, const float *x, int n) {
-    const float32x4_t va = vdupq_n_f32(a);
+/* y += sum_t a[t] * x_t, 16 outputs at a time held in registers across all
+ * rows. Each output adds its terms in row order, whatever the chunk. */
+void ml_k_axpy_f32_neon(float *y, const float *a, const float *x, size_t ldx, int rows, int n) {
     int i = 0;
-    for (; i + 4 <= n; i += 4) vst1q_f32(y + i, mla_f32(vld1q_f32(y + i), va, vld1q_f32(x + i)));
-    for (; i < n; i++) y[i] += a * x[i];
+    for (; i + 16 <= n; i += 16) {
+        float32x4_t y0 = vld1q_f32(y + i), y1 = vld1q_f32(y + i + 4), y2 = vld1q_f32(y + i + 8), y3 = vld1q_f32(y + i + 12);
+        const float *xt = x + i;
+        for (int t = 0; t < rows; t++, xt += ldx) {
+            const float32x4_t av = vdupq_n_f32(a[t]);
+            y0 = mla_f32(y0, av, vld1q_f32(xt));
+            y1 = mla_f32(y1, av, vld1q_f32(xt + 4));
+            y2 = mla_f32(y2, av, vld1q_f32(xt + 8));
+            y3 = mla_f32(y3, av, vld1q_f32(xt + 12));
+        }
+        vst1q_f32(y + i, y0); vst1q_f32(y + i + 4, y1); vst1q_f32(y + i + 8, y2); vst1q_f32(y + i + 12, y3);
+    }
+    for (; i + 4 <= n; i += 4) {
+        float32x4_t y0 = vld1q_f32(y + i);
+        const float *xt = x + i;
+        for (int t = 0; t < rows; t++, xt += ldx) y0 = mla_f32(y0, vdupq_n_f32(a[t]), vld1q_f32(xt));
+        vst1q_f32(y + i, y0);
+    }
+    for (; i < n; i++) {
+        float v = y[i];
+        for (int t = 0; t < rows; t++) v += a[t] * x[(size_t)t * ldx + i];
+        y[i] = v;
+    }
+}
+
+/* Q8 KV cache kernels: vmull_s8 + vpadalq_s16 dot products (ARMv7 and
+ * AArch64), 4 rows per pass sharing the query chunk. */
+static inline int32_t hsum_s32x4(int32x4_t v) {
+#if defined(__aarch64__)
+    return vaddvq_s32(v);
+#else
+    const int32x2_t s = vadd_s32(vget_low_s32(v), vget_high_s32(v));
+    return vget_lane_s32(vpadd_s32(s, s), 0);
+#endif
+}
+
+static inline int32x4_t dot16_s8(int32x4_t acc, int8x16_t a, int8x16_t b) {
+    acc = vpadalq_s16(acc, vmull_s8(vget_low_s8(a), vget_low_s8(b)));
+    return vpadalq_s16(acc, vmull_s8(vget_high_s8(a), vget_high_s8(b)));
+}
+
+void ml_k_dot_q8_neon(float *s, const int8_t *q, float dq, const int8_t *k, const float *dk, size_t ldk, size_t lddk, int rows, int n, float scale) {
+    const float c = dq * scale;
+    int t = 0;
+    for (; t + 4 <= rows; t += 4) {
+        const int8_t *k0 = k + (size_t)t * ldk, *k1 = k0 + ldk, *k2 = k1 + ldk, *k3 = k2 + ldk;
+        int32x4_t a0 = vdupq_n_s32(0), a1 = a0, a2 = a0, a3 = a0;
+        int i = 0;
+        for (; i + 16 <= n; i += 16) {
+            const int8x16_t qv = vld1q_s8(q + i);
+            a0 = dot16_s8(a0, qv, vld1q_s8(k0 + i));
+            a1 = dot16_s8(a1, qv, vld1q_s8(k1 + i));
+            a2 = dot16_s8(a2, qv, vld1q_s8(k2 + i));
+            a3 = dot16_s8(a3, qv, vld1q_s8(k3 + i));
+        }
+        int32_t r0 = hsum_s32x4(a0), r1 = hsum_s32x4(a1), r2 = hsum_s32x4(a2), r3 = hsum_s32x4(a3);
+        for (; i < n; i++) { r0 += q[i] * k0[i]; r1 += q[i] * k1[i]; r2 += q[i] * k2[i]; r3 += q[i] * k3[i]; }
+        s[t] = (float)r0 * c * dk[(size_t)t * lddk];
+        s[t + 1] = (float)r1 * c * dk[(size_t)(t + 1) * lddk];
+        s[t + 2] = (float)r2 * c * dk[(size_t)(t + 2) * lddk];
+        s[t + 3] = (float)r3 * c * dk[(size_t)(t + 3) * lddk];
+    }
+    for (; t < rows; t++) {
+        const int8_t *kt = k + (size_t)t * ldk;
+        int32x4_t a0 = vdupq_n_s32(0);
+        int i = 0;
+        for (; i + 16 <= n; i += 16) a0 = dot16_s8(a0, vld1q_s8(q + i), vld1q_s8(kt + i));
+        int32_t sum = hsum_s32x4(a0);
+        for (; i < n; i++) sum += q[i] * kt[i];
+        s[t] = (float)sum * c * dk[(size_t)t * lddk];
+    }
+}
+
+/* 16 outputs at a time held in registers across all rows. */
+void ml_k_axpy_q8_neon(float *y, const float *a, const int8_t *x, const float *dx, size_t ldx, size_t lddx, int rows, int n) {
+    int i = 0;
+    for (; i + 16 <= n; i += 16) {
+        float32x4_t y0 = vld1q_f32(y + i), y1 = vld1q_f32(y + i + 4), y2 = vld1q_f32(y + i + 8), y3 = vld1q_f32(y + i + 12);
+        for (int t = 0; t < rows; t++) {
+            const float32x4_t w = vdupq_n_f32(a[t] * dx[(size_t)t * lddx]);
+            const int8x16_t v = vld1q_s8(x + (size_t)t * ldx + i);
+            const int16x8_t lo = vmovl_s8(vget_low_s8(v)), hi = vmovl_s8(vget_high_s8(v));
+            y0 = mla_f32(y0, w, vcvtq_f32_s32(vmovl_s16(vget_low_s16(lo))));
+            y1 = mla_f32(y1, w, vcvtq_f32_s32(vmovl_s16(vget_high_s16(lo))));
+            y2 = mla_f32(y2, w, vcvtq_f32_s32(vmovl_s16(vget_low_s16(hi))));
+            y3 = mla_f32(y3, w, vcvtq_f32_s32(vmovl_s16(vget_high_s16(hi))));
+        }
+        vst1q_f32(y + i, y0); vst1q_f32(y + i + 4, y1); vst1q_f32(y + i + 8, y2); vst1q_f32(y + i + 12, y3);
+    }
+    for (; i < n; i++) {
+        float v = y[i];
+        for (int t = 0; t < rows; t++) v += (a[t] * dx[(size_t)t * lddx]) * (float)x[(size_t)t * ldx + i];
+        y[i] = v;
+    }
 }
 
 /* Packed kernels without dot-product instructions (ARMv7, ARMv8.0: Cortex-A7,

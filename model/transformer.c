@@ -27,22 +27,29 @@ const char *const ml_prof_names[ML_PROF_COUNT] = { "qkv", "attention", "wo", "ff
         if (s->profile) { const double t0_ = ml_now(); stmt; s->prof[cat] += ml_now() - t0_; } \
         else { stmt; } } while (0)
 
-ml_status ml_state_init(ml_state *s, ml_model *m, int nthreads) {
+ml_status ml_state_init(ml_state *s, ml_model *m, int nthreads, int kv_type) {
     memset(s, 0, sizeof *s);
     s->m = m;
+    if (kv_type != ML_F32 && kv_type != ML_Q8_0) return ML_E_SHAPE;
+    s->kv_type = kv_type;
+    const int q8 = kv_type == ML_Q8_0;
     const ml_config *c = &m->cfg;
     const size_t f = sizeof(float);
-    size_t lkv, kv, half, need = 0;
+    size_t lkv, kv, half, lks, ks, need = 0;
     /* Sizes are products of header fields: check them, a 32-bit size_t wraps. */
     if (!ml_mul_size((size_t)c->n_layers, (size_t)c->kv_dim, &lkv) ||
         !ml_mul_size(lkv, (size_t)c->max_seq, &kv) || kv > (size_t)-1 / f ||
+        !ml_mul_size((size_t)c->n_layers, (size_t)c->n_kv_heads, &lks) ||
+        !ml_mul_size(lks, (size_t)c->max_seq, &ks) || ks > (size_t)-1 / f ||
         !ml_mul_size((size_t)c->max_seq, (size_t)(c->head_dim / 2), &half) || half > (size_t)-1 / f)
         return ML_E_NOMEM;
     /* {count, bytes}: every runtime buffer; each entry is at most 4 arrays,
      * each padded to ML_ALIGN by the arena. */
     const size_t parts[][2] = {
         { 4, f * c->dim }, { 2, f * c->hidden_dim }, { 1, f * c->vocab },
-        { (size_t)c->n_heads, f * c->max_seq }, { 2, f * kv }, { 2, f * half },
+        { (size_t)c->n_heads, f * c->max_seq }, { 2, q8 ? kv : f * kv }, { 2, q8 ? f * ks : 0 },
+        { 2, q8 ? f * ML_BATCH_MAX * c->kv_dim : 0 }, { 1, q8 ? (size_t)c->dim : 0 }, { 1, q8 ? f * c->n_heads : 0 },
+        { 2, f * half },
         { 1, (size_t)c->dim }, { 1, f * c->dim / QK }, { 1, (size_t)c->hidden_dim }, { 1, f * c->hidden_dim / QK },
         { 4, f * ML_BATCH_MAX * c->dim }, { 2, f * ML_BATCH_MAX * c->hidden_dim },
         { 1, (size_t)ML_BATCH_MAX * c->dim }, { 1, f * ML_BATCH_MAX * (c->dim / QK) },
@@ -65,8 +72,19 @@ ml_status ml_state_init(ml_state *s, ml_model *m, int nthreads) {
     s->q = ml_arena_alloc(a, f * c->dim);
     s->att = ml_arena_alloc(a, f * c->n_heads * c->max_seq);
     s->logits = ml_arena_alloc(a, f * c->vocab);
-    s->kcache = ml_arena_alloc(a, f * kv);
-    s->vcache = ml_arena_alloc(a, f * kv);
+    if (q8) {
+        s->kq = ml_arena_alloc(a, kv);
+        s->vq = ml_arena_alloc(a, kv);
+        s->kd = ml_arena_alloc(a, f * ks);
+        s->vd = ml_arena_alloc(a, f * ks);
+        s->kbuf = ml_arena_alloc(a, f * ML_BATCH_MAX * c->kv_dim);
+        s->vbuf = ml_arena_alloc(a, f * ML_BATCH_MAX * c->kv_dim);
+        s->qq = ml_arena_alloc(a, (size_t)c->dim);
+        s->qd = ml_arena_alloc(a, f * c->n_heads);
+    } else {
+        s->kcache = ml_arena_alloc(a, f * kv);
+        s->vcache = ml_arena_alloc(a, f * kv);
+    }
     s->rope_cos = ml_arena_alloc(a, f * half);
     s->rope_sin = ml_arena_alloc(a, f * half);
     s->qa_dim = (ml_qact){ ml_arena_alloc(a, c->dim), ml_arena_alloc(a, f * c->dim / QK), c->dim };
@@ -99,6 +117,29 @@ ml_status ml_state_init(ml_state *s, ml_model *m, int nthreads) {
     return st;
 }
 
+/* This layer's view of the KV cache. */
+static ml_kv_layer kv_layer(const ml_state *s, int l) {
+    const ml_config *c = &s->m->cfg;
+    const size_t rows = (size_t)l * c->max_seq;
+    if (s->kv_type == ML_F32)
+        return (ml_kv_layer){ s->kcache + rows * c->kv_dim, s->vcache + rows * c->kv_dim, NULL, NULL, NULL, NULL };
+    return (ml_kv_layer){ NULL, NULL, s->kq + rows * c->kv_dim, s->vq + rows * c->kv_dim,
+                          s->kd + rows * c->n_kv_heads, s->vd + rows * c->n_kv_heads };
+}
+
+/* Q8 cache: quantizes position pos's K and V, per KV head, into layer l.
+ * The F32 cache is written in place by the projections. */
+static void store_kv(ml_state *s, int l, int pos, const float *k, const float *v) {
+    if (s->kv_type == ML_F32) return;
+    const ml_config *c = &s->m->cfg;
+    const size_t row = (size_t)l * c->max_seq + pos;
+    for (int h = 0; h < c->n_kv_heads; h++) {
+        const size_t o = (size_t)h * c->head_dim;
+        ml_quantize_row(s->kq + row * c->kv_dim + o, s->kd + row * c->n_kv_heads + h, k + o, c->head_dim);
+        ml_quantize_row(s->vq + row * c->kv_dim + o, s->vd + row * c->n_kv_heads + h, v + o, c->head_dim);
+    }
+}
+
 float *ml_forward(ml_state *s, int token, int pos) {
     const ml_model *m = s->m;
     const ml_config *c = &m->cfg;
@@ -109,18 +150,19 @@ float *ml_forward(ml_state *s, int token, int pos) {
     PROF(ML_PROF_OTHER, ml_dequant_row(s->x, &m->tok_emb, token));
     for (int l = 0; l < c->n_layers; l++) {
         const ml_layer *L = &m->layers[l];
-        float *kc = s->kcache + (size_t)l * c->max_seq * c->kv_dim;
-        float *vc = s->vcache + (size_t)l * c->max_seq * c->kv_dim;
-        float *k = kc + (size_t)pos * c->kv_dim, *v = vc + (size_t)pos * c->kv_dim;
+        const ml_kv_layer kv = kv_layer(s, l);
+        float *k = s->kbuf ? s->kbuf : s->kcache + ((size_t)l * c->max_seq + pos) * c->kv_dim;
+        float *v = s->vbuf ? s->vbuf : s->vcache + ((size_t)l * c->max_seq + pos) * c->kv_dim;
 
         PROF(ML_PROF_OTHER, ml_k_rmsnorm(s->xb, s->x, L->attn_norm, c->dim, c->norm_eps);
                             ml_k_quantize_q8(&s->qa_dim, s->xb, c->dim));
         PROF(ML_PROF_QKV, ml_matvec(s->pool, s->q, &L->wq, &s->qa_dim);
                           ml_matvec(s->pool, k, &L->wk, &s->qa_dim);
                           ml_matvec(s->pool, v, &L->wv, &s->qa_dim));
-        PROF(ML_PROF_OTHER, ml_k_rope(s->q, k, cs, sn, c->head_dim, c->n_heads, c->n_kv_heads));
+        PROF(ML_PROF_OTHER, ml_k_rope(s->q, k, cs, sn, c->head_dim, c->n_heads, c->n_kv_heads);
+                            store_kv(s, l, pos, k, v));
 
-        PROF(ML_PROF_ATTN, ml_attention(s->pool, s->xb, s->q, kc, vc, s->att, c, pos));
+        PROF(ML_PROF_ATTN, ml_attention(s->pool, s->xb, s->q, &kv, s->att, s->qq, s->qd, c, pos));
         PROF(ML_PROF_OTHER, ml_k_quantize_q8(&s->qa_dim, s->xb, c->dim));
         PROF(ML_PROF_WO, ml_matvec(s->pool, s->xb2, &L->wo, &s->qa_dim));
         PROF(ML_PROF_OTHER, ml_k_add(s->x, s->xb2, c->dim);
@@ -158,20 +200,25 @@ static void prefill_step(ml_state *s, const int *tok, int n, int pos0, float *lo
     PROF(ML_PROF_OTHER, for (int t = 0; t < n; t++) ml_dequant_row(s->bx + (size_t)t * D, &m->tok_emb, tok[t]));
     for (int l = 0; l < c->n_layers; l++) {
         const ml_layer *L = &m->layers[l];
-        float *kc = s->kcache + (size_t)l * c->max_seq * KV;
-        float *vc = s->vcache + (size_t)l * c->max_seq * KV;
+        const ml_kv_layer kv = kv_layer(s, l);
+        /* F32: K and V go straight into the cache rows; Q8: into kbuf/vbuf first */
+        float *kc = s->kbuf ? s->kbuf : s->kcache + ((size_t)l * c->max_seq + pos0) * KV;
+        float *vc = s->vbuf ? s->vbuf : s->vcache + ((size_t)l * c->max_seq + pos0) * KV;
         PROF(ML_PROF_OTHER, for (int t = 0; t < n; t++)
                                 ml_k_rmsnorm(s->bxb + (size_t)t * D, s->bx + (size_t)t * D, L->attn_norm, D, c->norm_eps);
                             quantize_rows(&s->qb_dim, s->bxb, n));
         PROF(ML_PROF_QKV, ml_matmul(s->pool, s->bq, D, &L->wq, &s->qb_dim);
-                          ml_matmul(s->pool, kc + (size_t)pos0 * KV, KV, &L->wk, &s->qb_dim);
-                          ml_matmul(s->pool, vc + (size_t)pos0 * KV, KV, &L->wv, &s->qb_dim));
-        PROF(ML_PROF_OTHER, for (int t = 0; t < n; t++)
-                                ml_k_rope(s->bq + (size_t)t * D, kc + (size_t)(pos0 + t) * KV,
+                          ml_matmul(s->pool, kc, KV, &L->wk, &s->qb_dim);
+                          ml_matmul(s->pool, vc, KV, &L->wv, &s->qb_dim));
+        PROF(ML_PROF_OTHER, for (int t = 0; t < n; t++) {
+                                ml_k_rope(s->bq + (size_t)t * D, kc + (size_t)t * KV,
                                           s->rope_cos + (size_t)(pos0 + t) * h2, s->rope_sin + (size_t)(pos0 + t) * h2,
-                                          c->head_dim, c->n_heads, c->n_kv_heads));
+                                          c->head_dim, c->n_heads, c->n_kv_heads);
+                                store_kv(s, l, pos0 + t, kc + (size_t)t * KV, vc + (size_t)t * KV);
+                            });
         PROF(ML_PROF_ATTN, for (int t = 0; t < n; t++)
-                               ml_attention(s->pool, s->bxb + (size_t)t * D, s->bq + (size_t)t * D, kc, vc, s->att, c, pos0 + t));
+                               ml_attention(s->pool, s->bxb + (size_t)t * D, s->bq + (size_t)t * D, &kv, s->att,
+                                            s->qq, s->qd, c, pos0 + t));
         PROF(ML_PROF_OTHER, quantize_rows(&s->qb_dim, s->bxb, n));
         PROF(ML_PROF_WO, ml_matmul(s->pool, s->bxb2, D, &L->wo, &s->qb_dim));
         PROF(ML_PROF_OTHER, for (int t = 0; t < n; t++) {

@@ -67,6 +67,8 @@ if [ -f $M/stories15M.mlb ] && [ -f $M/tokenizer.bin ]; then
     for b in scalar avx2; do for p in "" --no-pack; do
         row "stories15M logits $b ${p:-packed}" "build/$b/ml_run $M/stories15M.mlb --tokens $S --dump-logits $LOG/s.f32 $p && python3 tests/compare_logits.py $LOG/s.f32 $LOG/s_ref.f32 32000 --kl 1e-2"
     done; done
+    # Q8 KV cache against the F32 reference: the quantized cache must keep the distribution
+    row "stories15M logits avx2 --kv q8" "build/avx2/ml_run $M/stories15M.mlb --tokens $S --dump-logits $LOG/s.f32 --kv q8 && python3 tests/compare_logits.py $LOG/s.f32 $LOG/s_ref.f32 32000 --kl 1e-2"
 else skip "stories15M generate" "download blocked"; rm -f $M/stories15M.bin; fi
 
 echo; echo "== summary =="; printf "$rows"
