@@ -45,6 +45,12 @@ jobs:
         run: |
           r=$(cat build/test-all/tok_*.log 2>/dev/null | grep -h -E "texts match|skip" | tr '\n' ' ')
           echo "::notice title=tokenizers vs the tokenizers library::${r:-not run}"
+      - name: Failure details
+        if: failure()
+        run: |
+          # one annotation per failing check, readable without the logs
+          grep -h -E "FAIL|Error|error:|assert|out of tolerance" build/test-all/*.log 2>/dev/null |
+            grep -v -E "^make: |passed$" | head -n 9 | while IFS= read -r line; do echo "::error title=test-all::$line"; done
       - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v4
