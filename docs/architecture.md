@@ -3,16 +3,18 @@
 ## Layers
 
 ```
-app/       ml_run (generation CLI), ml_bench (benchmarks), main_guard.c (process entry)
+app/       ml_run (generation CLI), ml_bench (benchmarks), ml_tok (encode/decode text),
+           main_guard.c (process entry)
 model/     mlb.c (loader), transformer.c (forward pass, KV cache, RoPE tables),
-           sampler.c, tokenizer.c
+           sampler.c, tokenizer.c (llama2.c format), bpe.c + unicode.c (tokenizer.json BPE)
 ops/       ops.c — matvec and attention, split across the worker pool
 kernels/   scalar/ sse2/ sse41/ avx2/ avxvnni/ avx512vnni/ neon/ neon_dotprod/ neon_i8mm/ sve/
            x86_common.h, x86_avx.h, arm_common.h — shared SIMD helpers
 core/      ml.h (types, status codes), arena.c, file.c (mmap), quant_ref.c,
            threads.c, isa_check.c
 config/    ml_config.h — compile-time kernel binding
-tools/     mlb.py, gen_random.py, gen_tokenizer.py, ref_forward.py, convert.py
+tools/     mlb.py, gen_random.py, gen_tokenizer.py, ref_forward.py, convert.py,
+           convert_tokenizer.py, gen_unicode.py
 ```
 
 Dependencies point down only: `app → model → ops → kernels → core`. Kernels see
@@ -195,6 +197,25 @@ softmax, and sums the V rows. On long contexts this dominates: a head reads
 
 Per head, the arithmetic does not depend on the block size or the thread
 count, so results stay bit-identical across `-t` and `--batch`.
+
+## Tokenizers
+
+`model/bpe.c` implements the two `tokenizer.json` kinds the converter accepts
+(`.mlt` format in [File format](file-format.md#mlt-tokenizer-format)):
+
+1. **Added tokens** (`<s>`, `<|eot_id|>`) are cut out of the text first.
+2. **Pieces between them:**
+   - SentencePiece-style: spaces become `▁`, a `▁` is prepended, and each
+     character starts as one symbol (or as byte tokens if it is not in the
+     vocabulary).
+   - Byte-level: the Llama 3 regex splits the text, matched by hand on code
+     points with letter and number tables generated from Unicode
+     (`tools/gen_unicode.py`); each chunk starts as one symbol per byte, unless
+     the whole chunk is a token.
+3. **Merges:** the lowest-ranked merge among adjacent symbols is applied, the
+   leftmost first, until none applies. Symbols form a linked list and candidate
+   pairs sit in a heap, so a piece of n symbols takes O(n log n): 48 KB of text
+   encodes in 30 ms.
 
 ## Memory
 

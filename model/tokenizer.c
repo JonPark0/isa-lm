@@ -12,6 +12,15 @@ ml_status ml_tokenizer_load(ml_tokenizer *t, const char *path, int vocab) {
     for (int i = 0; i < 256; i++) t->byte_pieces[i * 2] = (unsigned char)i;
     FILE *f = fopen(path, "rb");
     if (!f) return ML_E_IO;
+    char magic[4];
+    if (fread(magic, 1, 4, f) == 4 && !memcmp(magic, "MLT1", 4)) {
+        ml_status s = ml_bpe_load(t, f, vocab);
+        fclose(f);
+        if (s != ML_OK) ml_tokenizer_free(t);
+        return s;
+    }
+    rewind(f);
+    if (vocab <= 0) { fclose(f); return ML_E_SHAPE; }
     t->vocab_size = vocab;
     t->vocab = calloc((size_t)vocab, sizeof(char *));
     t->scores = calloc((size_t)vocab, sizeof(float));
@@ -39,6 +48,11 @@ ml_status ml_tokenizer_load(ml_tokenizer *t, const char *path, int vocab) {
 }
 
 void ml_tokenizer_free(ml_tokenizer *t) {
+    if (t->kind != ML_TOK_LLAMA2C) {
+        ml_bpe_free(t);
+        memset(t, 0, sizeof *t);
+        return;
+    }
     if (t->vocab)
         for (int i = 0; i < t->vocab_size; i++) free(t->vocab[i]);
     free(t->vocab);
@@ -54,6 +68,7 @@ static int lookup(const ml_tokenizer *t, const char *s) {
 }
 
 int ml_encode(ml_tokenizer *t, const char *text, int bos, int eos, int *out, int max) {
+    if (t->kind != ML_TOK_LLAMA2C) return ml_bpe_encode(t, text, bos, eos, out, max);
     const size_t cap = t->max_len * 2 + 3;
     char *buf = malloc(cap > 16 ? cap : 16);
     if (!buf) return -1;
@@ -107,8 +122,17 @@ int ml_encode(ml_tokenizer *t, const char *text, int bos, int eos, int *out, int
     return n;
 }
 
+int ml_tokenizer_bos(const ml_tokenizer *t) { return t->kind == ML_TOK_LLAMA2C ? ML_TOK_BOS : t->bos; }
+int ml_tokenizer_eos(const ml_tokenizer *t) { return t->kind == ML_TOK_LLAMA2C ? ML_TOK_EOS : t->eos; }
+
 const char *ml_decode(ml_tokenizer *t, int prev, int tok) {
     if (tok < 0 || tok >= t->vocab_size) return "";
+    if (t->kind != ML_TOK_LLAMA2C) {
+        const char *p = t->text[tok];
+        /* SentencePiece drops the space it prepended to the text */
+        if (t->kind == ML_TOK_SPM && (prev < 0 || prev == t->bos) && p[0] == ' ') p++;
+        return p;
+    }
     const char *p = t->vocab[tok];
     if (prev == ML_TOK_BOS && p[0] == ' ') p++;
     unsigned int byte;

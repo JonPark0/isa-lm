@@ -130,7 +130,7 @@ static void check_matvec_pk(int type, int unit) {
  * 8288 columns cross the 8192-column chunk of the sse2 kernels. */
 static void check_matmul_pk_cols(int type, int unit, int cols) {
 #if ML_PACK_G
-    static const int ns[] = { 1, 3, 4, 5, 9 };
+    static const int ns[] = { 1, 3, 4, 5, 9, 17 };
     const int rows = 3 * ML_PACK_G + 5, r0 = ML_PACK_G;
     wbuf w = make_w(rows, cols, type, unit);
     ml_qtensor P = w.W;
@@ -138,7 +138,7 @@ static void check_matmul_pk_cols(int type, int unit, int cols) {
     float *pd = xalloc(ml_pack_scale_bytes(&w.W, ML_PACK_G));
     ml_pack(&w.W, pq, pd, ML_PACK_G, ML_PACK_Q8_OFFSET);
     P.pq = pq; P.pd = pd;
-    for (int ni = 0; ni < 5; ni++) {
+    for (int ni = 0; ni < 6; ni++) {
         const int n = ns[ni], ldy = rows + 3;
         ml_qbatch X = { xalloc(n * cols), xalloc(sizeof(float) * n * cols / QK), n, cols };
         for (int t = 0; t < n; t++) {

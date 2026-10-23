@@ -52,7 +52,7 @@ LIB_OBJ := $(LIB_SRC:%.c=$(BUILD)/obj/%.o) $(ASM_SRC:%.S=$(BUILD)/obj/%.o)
 GUARD_OBJ := $(BUILD)/obj/app/main_guard.o
 
 TESTS := $(patsubst tests/%.c,%,$(wildcard tests/test_*.c))
-APPS  := ml_run ml_bench
+APPS  := ml_run ml_bench ml_tok
 
 .PHONY: all test clean guard-test e2e scalar-ref test-sve guard-test-arm bench test-all
 .SECONDARY:
@@ -86,6 +86,12 @@ build/models/wrap32.mlb: tools/gen_random.py tools/mlb.py
 
 TESTARGS_test_load := $(MODELS) build/models/wrap32.mlb
 TOKENIZER := build/models/tok96.bin
+# tokenizers converted from the tiny tokenizer.json files in tests/data
+TOKS := build/models/spm_tiny.mlt build/models/bpe_tiny.mlt
+build/models/%.mlt: tests/data/%.json tools/convert_tokenizer.py
+	@mkdir -p $(dir $@)
+	@$(PYTHON) tools/convert_tokenizer.py $< $@ >/dev/null
+TESTARGS_test_tokenizer := $(TOKS) $(TOKENIZER)
 $(TOKENIZER): tools/gen_tokenizer.py
 	@mkdir -p $(dir $@)
 	@$(PYTHON) tools/gen_tokenizer.py --vocab 96 --out $@
@@ -97,10 +103,10 @@ $(BUILD)/ml_%: $(BUILD)/obj/app/ml_%.o $(GUARD_OBJ) $(LIB_OBJ)
 scalar-ref:
 	@$(MAKE) -s ISA=scalar CROSS= THREADS=1 ASM=0 DEBUG=0 EXTRA_CFLAGS= RUN= build/scalar/ml_run
 
-e2e: $(BUILD)/ml_run $(MODELS) $(TOKENIZER) scalar-ref
+e2e: $(BUILD)/ml_run $(BUILD)/ml_tok $(MODELS) $(TOKENIZER) $(TOKS) scalar-ref
 	@sh tests/test_e2e.sh $(ISA) $(BUILD) "$(RUN)"
 
-test: $(addprefix $(BUILD)/,$(TESTS)) $(MODELS) build/models/wrap32.mlb
+test: $(addprefix $(BUILD)/,$(TESTS)) $(MODELS) build/models/wrap32.mlb $(TOKS) $(TOKENIZER)
 	@set -e; $(foreach t,$(TESTS),$(RUN) $(BUILD)/$(t) $(TESTARGS_$(t));)
 
 clean:
