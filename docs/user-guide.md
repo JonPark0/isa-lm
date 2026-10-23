@@ -134,15 +134,34 @@ encode differently.
   pass it with `--eos`, for example `--eos 128009` (`<|eot_id|>`) for
   Llama 3 Instruct.
 
-A Llama 3.2 Instruct prompt, for example:
+### Chat
+
+`--chat TEMPLATE` wraps each message in the model's chat template, keeps the
+conversation in the KV cache, and stops each reply at the template's end
+token:
 
 ```sh
-build/avx2/ml_run llama3.mlb -z llama3.mlt --eos 128009 -T 0 -n 200 -i "<|start_header_id|>user<|end_header_id|>
-
-What is the capital of France?<|eot_id|><|start_header_id|>assistant<|end_header_id|>
-
-"
+build/avx2/ml_run llama3.mlb -z llama3.mlt --chat llama3 --system "You are a helpful assistant." -t 4
+> What is the capital of France?
+The capital of France is Paris.
+> And of Germany?
+The capital of Germany is Berlin.
 ```
+
+| Template | Models | Reply ends at |
+|----------|--------|---------------|
+| `llama3` | Llama 3, 3.1, 3.2 Instruct | `<|eot_id|>` |
+| `zephyr` | TinyLlama Chat, Zephyr | `</s>` |
+| `llama2` | Llama 2 Chat, Mistral Instruct (without `--system`) | `</s>` |
+
+- **Input:** one turn per line on stdin (a `> ` prompt appears on a terminal),
+  or a single turn with `-i`. End with Ctrl-D.
+- **Length:** `-n` caps each reply; without it a reply may use the rest of the
+  context. The conversation ends with a message when the context is full.
+- **Sampling:** `-T`, `-p`, `--top-k` and `--repeat-penalty` apply as usual.
+
+Without `--chat`, write the template yourself with `-i` and stop with `--eos`
+(`128009` is `<|eot_id|>` in Llama 3).
 
 ### A random test model
 
@@ -207,6 +226,8 @@ build/avx2/ml_run model.mlb --tokens 1,450,3681 --dump-logits l.f32
 | `--kv TYPE` | KV cache type: `f32` (default) or `q8`. `q8` stores K and V as int8 with one scale per position and KV head: about 3.8× less memory and faster attention on long contexts, with slightly different logits. |
 | `--no-pack` | Keep weights row-major instead of repacking them for the packed kernels. Uses less memory during load, but runs slower. |
 | `--profile` | Print the share of forward-pass time per stage (qkv, attention, wo, ffn, classifier, other). |
+| `--chat TEMPLATE` | Chat with the model: `llama3`, `zephyr` or `llama2`, see [Chat](#chat). Needs `-z`. |
+| `--system TEXT` | System prompt for `--chat`. |
 | `--eos ID` | Stop as soon as `ID` is generated. Without it, a run with `-z` stops at the tokenizer's BOS or EOS, and a run without `-z` uses every `-n` position. |
 
 When it finishes, `ml_run` prints two lines to stderr:

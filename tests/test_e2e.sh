@@ -147,6 +147,24 @@ printf 'x' | $RUN $B/ml_tok $M/bpe_tiny.mlt --bogus >/dev/null 2>&1
 printf '99999' | $RUN $B/ml_tok $M/bpe_tiny.mlt --decode >/dev/null 2>&1
 [ $? -eq 2 ] && ok || bad "ml_tok --decode with an id out of range should exit 2"
 
+# --chat: deterministic replies (same as the scalar build), -i equals a
+# one-line stdin, the conversation stops cleanly when the context is full
+CHAT="$M/chat_q8.mlb -z $M/bpe_tiny.mlt --chat llama3 -T 0 -n 6"
+printf 'hello world\nwhat now\n' | $RUN $B/ml_run $CHAT --system "be brief" > $T/chat.txt 2>/dev/null \
+    && printf 'hello world\nwhat now\n' | $SCALAR $CHAT --system "be brief" > $T/chat.ref.txt 2>/dev/null \
+    && [ -s $T/chat.txt ] && cmp -s $T/chat.txt $T/chat.ref.txt && ok || bad "--chat differs from scalar"
+$RUN $B/ml_run $CHAT -i "hello world" > $T/chat1.txt 2>/dev/null \
+    && printf 'hello world\n' | $RUN $B/ml_run $CHAT > $T/chat1s.txt 2>/dev/null \
+    && cmp -s $T/chat1.txt $T/chat1s.txt && ok || bad "--chat -i differs from one stdin line"
+err=$(seq 1 40 | sed 's/^/tell me more /' | $RUN $B/ml_run $CHAT 2>&1 >/dev/null); rc=$?
+[ $rc -eq 0 ] && echo "$err" | grep -q "context full" && ok || bad "--chat past the context: rc=$rc $err"
+for bad_chat in "--chat chatml" "--system x"; do
+    $RUN $B/ml_run $M/chat_q8.mlb -z $M/bpe_tiny.mlt $bad_chat -i hi >/dev/null 2>&1
+    [ $? -eq 2 ] && ok || bad "ml_run $bad_chat should exit 2"
+done
+$RUN $B/ml_run $M/chat_q8.mlb --chat llama3 -i hi >/dev/null 2>&1
+[ $? -eq 2 ] && ok || bad "--chat without -z should exit 2"
+
 # usage
 err=$($RUN $B/ml_run 2>&1); rc=$?
 [ $rc -eq 2 ] && echo "$err" | grep -q "usage:" && ok || bad "usage rc=$rc"

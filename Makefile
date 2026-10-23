@@ -69,7 +69,8 @@ $(BUILD)/obj/%.o: %.S
 $(BUILD)/test_%: $(BUILD)/obj/tests/test_%.o $(GUARD_OBJ) $(LIB_OBJ)
 	@$(CC) $(LDFLAGS) $^ -o $@ $(LDLIBS)
 
-MODELS := build/models/rand_q8.mlb build/models/rand_q4.mlb build/models/ctx_q4.mlb build/models/mix_q4.mlb
+MODELS := build/models/rand_q8.mlb build/models/rand_q4.mlb build/models/ctx_q4.mlb build/models/mix_q4.mlb \
+          build/models/chat_q8.mlb
 build/models/rand_%.mlb: tools/gen_random.py tools/mlb.py
 	@mkdir -p $(dir $@)
 	@$(PYTHON) tools/gen_random.py --out $@ --wtype $* --dump-emb-row 5
@@ -78,6 +79,11 @@ build/models/rand_%.mlb: tools/gen_random.py tools/mlb.py
 build/models/mix_q4.mlb: tools/gen_random.py tools/mlb.py
 	@mkdir -p $(dir $@)
 	@$(PYTHON) tools/gen_random.py --out $@ --wtype q4 --q8 emb,v,o,down --seed 3
+
+# vocabulary of tests/data/bpe_tiny.json (335 tokens) for --chat; 128 positions
+build/models/chat_q8.mlb: tools/gen_random.py tools/mlb.py
+	@mkdir -p $(dir $@)
+	@$(PYTHON) tools/gen_random.py --out $@ --vocab 336 --max-seq 128 --seed 5
 
 # 160 positions, head_dim 32: attention runs over several 64-position blocks.
 build/models/ctx_q4.mlb: tools/gen_random.py tools/mlb.py

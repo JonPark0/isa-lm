@@ -1,9 +1,17 @@
 /* ml_run: load a .mlb model and generate tokens. */
 #include <errno.h>
+#ifdef _WIN32
+#include <io.h>
+#define isatty _isatty
+#define fileno _fileno
+#else
+#include <unistd.h>
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "config/ml_config.h"
+#include "model/chat.h"
 #include "model/pack_model.h"
 #include "model/sampler.h"
 #include "model/tokenizer.h"
@@ -31,6 +39,9 @@ static const char USAGE[] =
     "  --no-pack        keep weights row-major (no repacking at load: less memory, slower)\n"
     "  --kv TYPE        KV cache type: f32 (default) or q8 (3.8x smaller, faster on long contexts)\n"
     "  --profile        print time spent per stage (qkv, attention, wo, ffn, classifier, other)\n"
+    "  --chat TEMPLATE  chat with the model: llama3, zephyr (TinyLlama) or llama2 (also Mistral);\n"
+    "                   one turn per stdin line, or the single turn -i; -n caps each reply\n"
+    "  --system TEXT    system prompt for --chat\n"
     "  -h, --help       show this help\n";
 
 static int usage(const char *msg) {
@@ -84,8 +95,76 @@ static int parse_tokens(const char *s, int *out, int max, int vocab) {
     }
 }
 
+/* --chat: a conversation. Each turn renders the template, prefills it after
+ * the previous reply in the same KV cache, and samples a reply up to the
+ * template's stop token, the tokenizer's EOS, --eos, or max_reply tokens.
+ * The token that ended a reply is fed at the start of the next turn. */
+static int run_chat(ml_state *s, ml_tokenizer *tok, ml_sampler *smp, int tpl, const char *system,
+                    const char *once, int max_reply, int eos_opt) {
+    const ml_config *c = &s->m->cfg;
+    const int stop_id = ml_tokenizer_find(tok, ml_chat_stop(tpl)), eos_id = ml_tokenizer_eos(tok);
+    const int interactive = !once && isatty(fileno(stdin));
+    int pos = 0, first = 1, pending[2] = { -1, -1 }, npend = 0, rc = 0;
+    static char line[1 << 16];
+    for (;;) {
+        const char *user = once;
+        if (once && !first) break;
+        if (!once) {
+            if (interactive) fputs("> ", stderr);
+            if (!fgets(line, sizeof line, stdin)) break;
+            line[strcspn(line, "\r\n")] = '\0';
+            if (!line[0]) continue;
+            user = line;
+        }
+        char *text = ml_chat_render(tpl, system, user, first);
+        const size_t cap = text ? 3 * strlen(text) + 16 : 0;
+        int *toks = text ? malloc(sizeof(int) * cap) : NULL;
+        if (!toks) { free(text); rc = 1; break; }
+        int n = 0;
+        for (int i = 0; i < npend; i++) toks[n++] = pending[i];
+        const int k = ml_encode(tok, text, first || ml_chat_bos_each_turn(tpl), 0, toks + n, (int)cap - n);
+        free(text);
+        if (k < 0) { free(toks); rc = 1; break; }
+        n += k;
+        if (pos + n + 1 > c->max_seq) {
+            fprintf(stderr, "context full: %d of %d positions used\n", pos, c->max_seq);
+            free(toks);
+            break;
+        }
+        for (int i = 0; i < n; i++) ml_sampler_accept(smp, toks[i]);
+        ml_prefill(s, toks, n - 1, pos, NULL);
+        pos += n - 1;
+        int token = toks[n - 1], prev = -1, reply = 0;
+        free(toks);
+        npend = 0;
+        while (pos < c->max_seq) {
+            float *logits = ml_forward(s, token, pos++);
+            if (!logits) { rc = 1; break; }
+            const int next = ml_sample(smp, logits, c->vocab);
+            ml_sampler_accept(smp, next);
+            if (next == stop_id || next == eos_id || next == eos_opt) { pending[npend++] = next; break; }
+            fputs(ml_decode(tok, prev, next), stdout);
+            fflush(stdout);
+            prev = token = next;
+            if (++reply >= max_reply) {   /* cut short: close the reply as the model would */
+                pending[npend++] = next;
+                if (stop_id >= 0) pending[npend++] = stop_id;
+                break;
+            }
+        }
+        putchar('\n');
+        fflush(stdout);
+        first = 0;
+        if (rc || pos >= c->max_seq) break;
+    }
+    fprintf(stderr, "positions: %d of %d\n", pos, c->max_seq);
+    return rc;
+}
+
 int ml_main(int argc, char **argv) {
     const char *model_path = NULL, *tok_path = NULL, *prompt = NULL, *tokens_arg = NULL, *dump = NULL;
+    const char *chat = NULL, *system = NULL;
+    int steps_given = 0;
     int profile = 0, no_pack = 0, kv_type = ML_F32;
     int steps = 64, nthreads = 1, eos = -1, batch = ML_BATCH_MAX;
     float temp = 0.0f, topp = 0.9f, rep_pen = 1.0f;
@@ -106,7 +185,9 @@ int ml_main(int argc, char **argv) {
         if (!strcmp(a, "-z")) tok_path = v;
         else if (!strcmp(a, "-i")) prompt = v;
         else if (!strcmp(a, "--tokens")) tokens_arg = v;
-        else if (!strcmp(a, "-n")) ok = parse_int(v, 1, 1 << 24, &steps);
+        else if (!strcmp(a, "-n")) ok = steps_given = parse_int(v, 1, 1 << 24, &steps);
+        else if (!strcmp(a, "--chat")) ok = ml_chat_template(chat = v) >= 0;
+        else if (!strcmp(a, "--system")) system = v;
         else if (!strcmp(a, "-T")) ok = parse_float(v, &temp);
         else if (!strcmp(a, "-p")) ok = parse_float(v, &topp);
         else if (!strcmp(a, "-s")) ok = parse_u64(v, &seed);
@@ -129,6 +210,9 @@ int ml_main(int argc, char **argv) {
     if (prompt && !tok_path) return usage("-i needs -z tokenizer");
     if (prompt && tokens_arg) return usage("give -i or --tokens, not both");
     if (dump && !tokens_arg) return usage("--dump-logits needs --tokens");
+    if (chat && !tok_path) return usage("--chat needs -z tokenizer");
+    if (chat && (tokens_arg || dump)) return usage("--chat takes -i or stdin, not --tokens or --dump-logits");
+    if (system && !chat) return usage("--system needs --chat");
     if (!(temp >= 0.0f && temp <= 1e30f)) return usage("-T must be a finite number >= 0");
     if (!(topp >= 0.0f && topp <= 1.0f)) return usage("-p must be in [0, 1]");
 
@@ -153,7 +237,7 @@ int ml_main(int argc, char **argv) {
     if (tokens_arg) {
         np = parse_tokens(tokens_arg, ptoks, maxp, c->vocab);
         if (np < 0 || np > c->max_seq) { rc = usage("--tokens: bad id, id out of range, or longer than max_seq"); goto out_tok; }
-    } else if (prompt) {
+    } else if (prompt && !chat) {
         np = ml_encode(&tok, prompt, 1, 0, ptoks, (int)pcap);
         if (np > c->max_seq) np = c->max_seq;
     }
@@ -189,6 +273,11 @@ int ml_main(int argc, char **argv) {
     ml_sampler smp;
     const ml_sampler_opts so = { temp, topp, topk, rep_pen, rep_last, seed };
     if (ml_sampler_init(&smp, c->vocab, &so) != ML_OK) { rc = 1; goto out_state; }
+    if (chat) {
+        rc = run_chat(&s, &tok, &smp, ml_chat_template(chat), system, prompt, steps_given ? steps : c->max_seq, eos);
+        ml_sampler_free(&smp);
+        goto out_state;
+    }
     for (int i = 0; i < np; i++) ml_sampler_accept(&smp, ptoks[i]);
     if (steps > c->max_seq) steps = c->max_seq;
     /* Prompt: all but the last token go through batched prefill (no logits

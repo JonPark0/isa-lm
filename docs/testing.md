@@ -69,6 +69,8 @@ The first lines of the output name the kernel each op resolved to, for example
   rounding tie. Two valid implementations can then round it differently, which
   moves logits by up to about 2% while the distribution stays the same (KL
   ~1e-3). The random-model tests keep the strict 1e-3 relative bound.
+- **Chat:** `--chat` replies match the scalar build, `-i` equals one line of
+  stdin, and a conversation that outgrows the context stops with a message.
 - **Bad input:** malformed options (`-n 5x`, ids out of range, NaN
   temperature, …) exit with code 2, and `--help` exits with code 0.
 

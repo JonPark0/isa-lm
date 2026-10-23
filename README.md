@@ -43,13 +43,9 @@ python3 tools/convert.py llama2c stories15M.bin stories15M.mlb --wtype q8
 build/avx2/ml_run stories15M.mlb -z tokenizer.bin -i "Once upon a time" -n 128 -T 0.8
 
 # Hugging Face Llama (safetensors), including Llama 3 RoPE scaling, and its tokenizer.json
-python3 tools/convert.py hf ./Llama-3.2-1B-Instruct llama.mlb --wtype q4 --max-seq 4096
+python3 tools/convert.py hf ./Llama-3.2-1B-Instruct llama.mlb --wtype q4 --q8 v,o,down --max-seq 4096
 python3 tools/convert_tokenizer.py ./Llama-3.2-1B-Instruct/tokenizer.json llama.mlt
-build/avx2/ml_run llama.mlb -z llama.mlt --eos 128009 -n 64 -i "<|start_header_id|>user<|end_header_id|>
-
-Hi!<|eot_id|><|start_header_id|>assistant<|end_header_id|>
-
-"
+build/avx2/ml_run llama.mlb -z llama.mlt --chat llama3 -t 4     # one message per line
 ```
 
 ## Documentation

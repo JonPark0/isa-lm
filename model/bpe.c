@@ -155,6 +155,10 @@ ml_status ml_bpe_load(ml_tokenizer *t, FILE *f, int vocab) {
     return ML_OK;
 }
 
+int ml_bpe_find(const ml_tokenizer *t, const char *text) {
+    return find_piece(t, (const unsigned char *)text, (int)strlen(text));
+}
+
 void ml_bpe_free(ml_tokenizer *t) {
     for (int i = 0; t->vocab && i < t->vocab_size; i++) {
         if (t->text && t->text[i] != t->vocab[i]) free(t->text[i]);
