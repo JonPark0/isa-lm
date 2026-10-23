@@ -157,7 +157,8 @@ static void check_render(int tpl, const char *sys, const char *user, int first, 
 
 static void test_chat_templates(void) {
     TT_EQ_INT(ml_chat_template("llama3"), ML_CHAT_LLAMA3);
-    TT_EQ_INT(ml_chat_template("chatml"), -1);
+    TT_EQ_INT(ml_chat_template("qwen"), ML_CHAT_QWEN);
+    TT_EQ_INT(ml_chat_template("vicuna"), -1);
     check_render(ML_CHAT_LLAMA3, "Be brief.", "Hi", 1,
                  "<|start_header_id|>system<|end_header_id|>\n\nBe brief.<|eot_id|>"
                  "<|start_header_id|>user<|end_header_id|>\n\nHi<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n");
@@ -167,6 +168,11 @@ static void test_chat_templates(void) {
     check_render(ML_CHAT_ZEPHYR, NULL, "More", 0, "\n<|user|>\nMore</s>\n<|assistant|>\n");
     check_render(ML_CHAT_LLAMA2, "Be kind.", "Hi", 1, "[INST] <<SYS>>\nBe kind.\n<</SYS>>\n\nHi [/INST]");
     check_render(ML_CHAT_LLAMA2, NULL, "More", 0, "[INST] More [/INST]");
+    check_render(ML_CHAT_CHATML, NULL, "Hi", 1, "<|im_start|>user\nHi<|im_end|>\n<|im_start|>assistant\n");
+    check_render(ML_CHAT_QWEN, NULL, "Hi", 1,
+                 "<|im_start|>system\nYou are Qwen, created by Alibaba Cloud. You are a helpful assistant.<|im_end|>\n"
+                 "<|im_start|>user\nHi<|im_end|>\n<|im_start|>assistant\n");
+    check_render(ML_CHAT_QWEN, "Be kind.", "More", 0, "\n<|im_start|>user\nMore<|im_end|>\n<|im_start|>assistant\n");
     char longmsg[600];
     memset(longmsg, 'x', sizeof longmsg - 1);
     longmsg[sizeof longmsg - 1] = '\0';

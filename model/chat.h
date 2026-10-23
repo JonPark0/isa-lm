@@ -3,9 +3,10 @@
 #ifndef ML_CHAT_H
 #define ML_CHAT_H
 
-enum { ML_CHAT_LLAMA3 = 0, ML_CHAT_ZEPHYR = 1, ML_CHAT_LLAMA2 = 2 };
+enum { ML_CHAT_LLAMA3 = 0, ML_CHAT_ZEPHYR = 1, ML_CHAT_LLAMA2 = 2, ML_CHAT_CHATML = 3, ML_CHAT_QWEN = 4 };
 
-/* Template id for a name ("llama3", "zephyr", "llama2"), or -1. */
+/* Template id for a name ("llama3", "zephyr", "llama2", "chatml", "qwen"), or
+ * -1. "qwen" is ChatML with Qwen2.5's default system prompt. */
 int ml_chat_template(const char *name);
 /* The user turn `user` (the system prompt too on the first turn, if any)
  * followed by the assistant header; malloc'd, NULL if out of memory. */

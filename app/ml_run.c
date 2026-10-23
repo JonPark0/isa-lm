@@ -40,7 +40,8 @@ static const char USAGE[] =
     "  --pack-cache     keep the packed weights in MODEL.pk<G> and map them from there next time\n"
     "  --kv TYPE        KV cache type: f32 (default) or q8 (3.8x smaller, faster on long contexts)\n"
     "  --profile        print time spent per stage (qkv, attention, wo, ffn, classifier, other)\n"
-    "  --chat TEMPLATE  chat with the model: llama3, zephyr (TinyLlama) or llama2 (also Mistral);\n"
+    "  --chat TEMPLATE  chat with the model: llama3, zephyr (TinyLlama), llama2 (also Mistral),\n"
+    "                   chatml, or qwen (ChatML with Qwen2.5's default system prompt);\n"
     "                   one turn per stdin line, or the single turn -i; -n caps each reply\n"
     "  --system TEXT    system prompt for --chat\n"
     "  -h, --help       show this help\n";
