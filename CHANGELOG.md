@@ -9,6 +9,10 @@
   MLT1 flags 8 and 16), and the `qwen` and `chatml` chat templates.
   Qwen2.5 0.5B Instruct Q8: perplexity 19.05 against 19.00 for an F32
   reference.
+- `scripts/compare_llamacpp.sh` and [the comparison with llama.cpp](docs/benchmarks.md):
+  decode is 1.1–1.4× faster than llama.cpp with AVX-512 VNNI, about 2× with
+  AVX2 and 1.7–7× on SSE builds; llama.cpp prefills faster with AVX-512.
+- `tools/perplexity.py --llama-cpp` chunks and scores as `llama-perplexity`.
 - `tools/convert.py hf` reads Mistral checkpoints and caps the context of
   sliding-window models at the window.
 
@@ -19,6 +23,10 @@
   SiLU; explicit `head_dim`; biases other than q/k/v) instead of writing a
   wrong model.
 - `tools/perplexity.py` works with tokenizers that add no BOS.
+- Q4 scales are fitted per block (weighted least squares over candidate
+  mappings, all 16 levels) instead of `amax / 7`: Llama 3.2 1B Q4 perplexity
+  20.46 → 19.91, Qwen2.5 0.5B 23.58 → 21.73. The format is unchanged;
+  convert again to benefit.
 
 ## 0.1.0 — 2026-10-23
 
