@@ -100,3 +100,13 @@ jobs:
             echo "$out"
             echo "::notice title=bench $isa::$out"
           done
+          # software prefetch on Arm: the same build without it (-DML_NO_PREFETCH)
+          make -s ISA=neon_dotprod EXTRA_CFLAGS=-DML_NO_PREFETCH
+          b=$(ls -td build/neon_dotprod-x* | head -1)
+          out=""
+          for m in q8 q4; do
+            r=$($b/ml_bench build/models/bench_$m.mlb -n 64 | tail -1 | sed 's/^model [^:]*: //; s/ (64 tokens.*//')
+            out="$out $m packed, no prefetch: $r;"
+          done
+          echo "$out"
+          echo "::notice title=bench neon_dotprod no-prefetch::$out"

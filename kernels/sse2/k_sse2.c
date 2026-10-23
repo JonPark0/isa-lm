@@ -391,6 +391,7 @@ static inline void pk_acc_store(float *y, float *tail, int row, int r1, __m128 a
             const float *d = W->pd + (size_t)(row / PK) * nb * PK;                \
             __m128 acc = b0 ? pk_acc_load(y, tail, row, r1) : _mm_setzero_ps();   \
             for (int b = b0; b < b1; b++, p += STEPS * PK * 4) {                  \
+                ml_prefetch_ahead(p, STEPS * PK * 4);                             \
                 const __m128i s = _mm_sub_epi32(BLOCK(p, xe + (b - b0) * 16), _mm_set1_epi32(xsum[b])); \
                 acc = _mm_add_ps(acc, _mm_mul_ps(_mm_cvtepi32_ps(s), _mm_mul_ps(_mm_loadu_ps(d + b * PK), _mm_set1_ps(x->d[b])))); \
             }                                                                     \

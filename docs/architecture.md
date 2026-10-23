@@ -140,6 +140,14 @@ packed kernels.
   `vmull_s8`/`vpadalq_s16` on the same 4-row groups.
 - **sve** builds use the NEON dotprod packed kernels.
 
+### Prefetch
+
+Decoding reads every weight once per token, a long sequential stream per
+thread. Hardware prefetchers stop at 4 KB page boundaries, so the packed
+matvecs request the weights `ML_PREFETCH_DIST` (4 KB) ahead of the block they
+work on (`ml_prefetch_ahead` in `core/ml.h`). On the benchmark VM this made
+single-thread decoding 1.3–2.5× faster; `-DML_NO_PREFETCH` turns it off.
+
 ## Batched prompt prefill
 
 Decoding one token reads every weight once, so on large models it is bound by
