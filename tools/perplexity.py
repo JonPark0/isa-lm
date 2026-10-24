@@ -7,6 +7,10 @@ The text is encoded with ml_tok, cut into chunks of --ctx tokens (each led by
 BOS if the tokenizer adds one), and every chunk's tokens after the first are
 scored. Lower is better;
 compare models on the same text, tokenizer and --ctx.
+
+--llama-cpp scores as llama.cpp's llama-perplexity does, so that the two are
+comparable: chunks of --ctx tokens of the text (the first replaced by BOS if
+the tokenizer adds one), and only the second half of each chunk is scored.
 """
 import argparse
 import math
@@ -29,6 +33,7 @@ def main():
     ap.add_argument("--chunks", type=int, default=4, help="chunks to score (from the start of the text)")
     ap.add_argument("-t", "--threads", type=int, default=1)
     ap.add_argument("--extra", default="", help="extra ml_run options, e.g. '--kv q8'")
+    ap.add_argument("--llama-cpp", action="store_true", help="chunk and score as llama-perplexity does")
     a = ap.parse_args()
     with open(a.text, "rb") as f:
         text = f.read()
@@ -36,22 +41,23 @@ def main():
     ids = [int(x) for x in enc.stdout.split()]
     lead = [int(x) for x in subprocess.run([a.ml_tok, a.tokenizer], input=b"", capture_output=True,
                                            check=True).stdout.split()]   # [BOS], or [] (Qwen2)
-    body = a.ctx - len(lead)
+    body = a.ctx if a.llama_cpp else a.ctx - len(lead)
+    first = a.ctx // 2 if a.llama_cpp else 0   # logits before this position are not scored
     nll, count = 0.0, 0
     with tempfile.TemporaryDirectory() as tmp:
         out = os.path.join(tmp, "logits.f32")
         for c in range(a.chunks):
             chunk = ids[c * body:(c + 1) * body]
-            if len(chunk) < 2:
+            if len(chunk) < (a.ctx if a.llama_cpp else 2):
                 break
-            toks = lead + chunk
+            toks = lead + chunk[len(lead):] if a.llama_cpp else lead + chunk
             cmd = [a.ml_run, a.model, "--tokens", ",".join(map(str, toks)), "--dump-logits", out, "-t", str(a.threads)]
             subprocess.run(cmd + a.extra.split(), check=True, capture_output=True)
             logits = np.fromfile(out, np.float32).reshape(len(toks), -1).astype(np.float64)
             logits -= logits.max(axis=1, keepdims=True)
             logp = logits - np.log(np.exp(logits).sum(axis=1, keepdims=True))
-            tgt = np.array(toks[1:])
-            nll -= logp[np.arange(len(tgt)), tgt].sum()
+            tgt = np.array(toks[first + 1:])
+            nll -= logp[np.arange(first, first + len(tgt)), tgt].sum()
             count += len(tgt)
     print(f"{os.path.basename(a.model)}: perplexity {math.exp(nll / count):.4f} over {count} tokens")
 

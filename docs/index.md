@@ -35,6 +35,7 @@ build/avx2/ml_run llama.mlb -z llama.mlt --chat llama3 -t 4
 
 [User guide](user-guide.md) · [Architecture](architecture.md) · [File formats](file-format.md) ·
 [Writing kernels](kernels.md) · [Testing and benchmarks](testing.md) ·
+[Comparison with llama.cpp](benchmarks.md) ·
 [Design spec](design/2026-10-22-legacy-isa-ml-runtime-design.md)
 
 ## Citing

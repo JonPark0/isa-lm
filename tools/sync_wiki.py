@@ -20,6 +20,7 @@ PAGES = {   # source file -> wiki page name
     "docs/file-format.md": "File-Format",
     "docs/kernels.md": "Writing-Kernels",
     "docs/testing.md": "Testing",
+    "docs/benchmarks.md": "Comparison-with-llama-cpp",
 }
 
 SIDEBAR = """**isa-lm**
@@ -30,6 +31,7 @@ SIDEBAR = """**isa-lm**
 - [[File Format|File-Format]]
 - [[Writing Kernels|Writing-Kernels]]
 - [[Testing]]
+- [[Comparison with llama.cpp|Comparison-with-llama-cpp]]
 """
 
 LINK = re.compile(r"\]\(([^)\s]+)\)")

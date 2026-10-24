@@ -27,7 +27,9 @@ static wbuf make_w(int rows, int cols, int type, int unit_scale) {
     b.d = xalloc(sizeof(float) * rows * cols / QK);
     for (size_t i = 0; i < nq; i++)
         b.q[i] = type == ML_Q4_0 ? (int8_t)(urand() & 0xFF) : (int8_t)((int)(urand() % 255) - 127);
-    for (int i = 0; i < rows * cols / QK; i++) b.d[i] = unit_scale ? 1.0f : frand(0.001f, 0.05f);
+    /* weight scales of either sign: tools/mlb.py may store negative Q4 scales */
+    for (int i = 0; i < rows * cols / QK; i++)
+        b.d[i] = unit_scale ? 1.0f : frand(0.001f, 0.05f) * (urand() & 1 ? 1.0f : -1.0f);
     b.W = (ml_qtensor){ b.q, b.d, rows, cols, (uint8_t)type, NULL, NULL };
     return b;
 }
