@@ -15,6 +15,9 @@
 - `tools/perplexity.py --llama-cpp` chunks and scores as `llama-perplexity`.
 - `tools/convert.py hf` reads Mistral checkpoints and caps the context of
   sliding-window models at the window.
+- Importance matrix: `ml_run --imatrix FILE` sums the squares of every matrix
+  input per channel (over runs), and `tools/convert.py --imatrix FILE`
+  weights the Q4 fits by it.
 
 ### Changed
 

@@ -1,5 +1,6 @@
 /* ml_run: load a .mlb model and generate tokens. */
 #include <errno.h>
+#include <stdint.h>
 #ifdef _WIN32
 #include <io.h>
 #define isatty _isatty
@@ -40,6 +41,8 @@ static const char USAGE[] =
     "  --pack-cache     keep the packed weights in MODEL.pk<G> and map them from there next time\n"
     "  --kv TYPE        KV cache type: f32 (default) or q8 (3.8x smaller, faster on long contexts)\n"
     "  --profile        print time spent per stage (qkv, attention, wo, ffn, classifier, other)\n"
+    "  --imatrix FILE   add the squares of every matrix input, per channel, to FILE (created if\n"
+    "                   missing) for tools/convert.py --imatrix; run on text like the model's use\n"
     "  --chat TEMPLATE  chat with the model: llama3, zephyr (TinyLlama), llama2 (also Mistral),\n"
     "                   chatml, or qwen (ChatML with Qwen2.5's default system prompt);\n"
     "                   one turn per stdin line, or the single turn -i; -n caps each reply\n"
@@ -95,6 +98,44 @@ static int parse_tokens(const char *s, int *out, int max, int vocab) {
         if (*end != ',') return -1;
         s = end + 1;
     }
+}
+
+/* --imatrix file: 40-byte header "MLI1", version 1, n_layers, dim, hidden_dim,
+ * 0 (u32 each), tokens and classifier tokens (u64), then the float64 sums in
+ * ml_state.imat order. Adds this run's sums to the file's. */
+static int imatrix_save(const char *path, const ml_state *s) {
+    const ml_config *c = &s->m->cfg;
+    const size_t n = ml_imatrix_size(c);
+    uint32_t h[6] = { 0, 1, (uint32_t)c->n_layers, (uint32_t)c->dim, (uint32_t)c->hidden_dim, 0 };
+    uint64_t cnt[2] = { s->imat_tokens, s->imat_cls_tokens };
+    memcpy(h, "MLI1", 4);
+    double *sum = malloc(sizeof(double) * n), *old = malloc(sizeof(double) * n);
+    int ok = sum && old;
+    FILE *f = ok ? fopen(path, "rb") : NULL;
+    if (ok) memcpy(sum, s->imat, sizeof(double) * n);
+    if (f) {
+        uint32_t fh[6];
+        uint64_t fc[2];
+        ok = fread(fh, sizeof fh, 1, f) == 1 && !memcmp(fh, h, sizeof fh) &&
+             fread(fc, sizeof fc, 1, f) == 1 && fread(old, sizeof(double), n, f) == n;
+        fclose(f);
+        if (!ok) fprintf(stderr, "error: %s is not an importance matrix for this model\n", path);
+        if (ok) {
+            for (size_t i = 0; i < n; i++) sum[i] += old[i];
+            cnt[0] += fc[0];
+            cnt[1] += fc[1];
+        }
+    }
+    if (ok) {
+        f = fopen(path, "wb");
+        ok = f && fwrite(h, sizeof h, 1, f) == 1 && fwrite(cnt, sizeof cnt, 1, f) == 1 &&
+             fwrite(sum, sizeof(double), n, f) == n;
+        if (f && fclose(f) != 0) ok = 0;
+        if (!ok) fprintf(stderr, "error: cannot write %s\n", path);
+    }
+    free(sum);
+    free(old);
+    return ok;
 }
 
 /* --chat: a conversation. Each turn renders the template, prefills it after
@@ -165,7 +206,7 @@ static int run_chat(ml_state *s, ml_tokenizer *tok, ml_sampler *smp, int tpl, co
 
 int ml_main(int argc, char **argv) {
     const char *model_path = NULL, *tok_path = NULL, *prompt = NULL, *tokens_arg = NULL, *dump = NULL;
-    const char *chat = NULL, *system = NULL;
+    const char *chat = NULL, *system = NULL, *imat = NULL;
     int steps_given = 0;
     int profile = 0, no_pack = 0, pack_cache = 0, kv_type = ML_F32;
     int steps = 64, nthreads = 1, eos = -1, batch = ML_BATCH_MAX;
@@ -201,6 +242,7 @@ int ml_main(int argc, char **argv) {
         else if (!strcmp(a, "--eos")) ok = parse_int(v, 0, 1 << 24, &eos);
         else if (!strcmp(a, "--batch")) ok = parse_int(v, 1, ML_BATCH_MAX, &batch);
         else if (!strcmp(a, "--dump-logits")) dump = v;
+        else if (!strcmp(a, "--imatrix")) imat = v;
         else if (!strcmp(a, "--kv")) {
             if (!strcmp(v, "f32")) kv_type = ML_F32;
             else if (!strcmp(v, "q8")) kv_type = ML_Q8_0;
@@ -272,6 +314,7 @@ int ml_main(int argc, char **argv) {
 
     s.batch = batch;
     s.profile = profile;
+    if (imat && ml_imatrix_enable(&s) != ML_OK) { fprintf(stderr, "error: out of memory\n"); rc = 1; goto out_state; }
     if (dump) {
         FILE *f = fopen(dump, "wb");
         float *all = malloc(sizeof(float) * (size_t)np * c->vocab);
@@ -343,6 +386,7 @@ int ml_main(int argc, char **argv) {
     }
     ml_sampler_free(&smp);
 out_state:
+    if (imat && s.imat && rc == 0 && !imatrix_save(imat, &s)) rc = 1;
     ml_state_free(&s);
 out_tok:
     free(ptoks);

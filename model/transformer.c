@@ -1,4 +1,5 @@
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
 #include "config/ml_config.h"
 #include "core/clock.h"
@@ -140,6 +141,30 @@ static void store_kv(ml_state *s, int l, int pos, const float *k, const float *v
     }
 }
 
+size_t ml_imatrix_size(const ml_config *c) {
+    return (size_t)c->n_layers * (3 * (size_t)c->dim + c->hidden_dim) + c->dim;
+}
+
+ml_status ml_imatrix_enable(ml_state *s) {
+    free(s->imat);
+    s->imat = calloc(ml_imatrix_size(&s->m->cfg), sizeof(double));
+    s->imat_tokens = s->imat_cls_tokens = 0;
+    return s->imat ? ML_OK : ML_E_NOMEM;
+}
+
+/* Input `which` of layer l (n_layers: the classifier) in the importance matrix. */
+static double *imat_at(const ml_state *s, int l, int which) {
+    const ml_config *c = &s->m->cfg;
+    return s->imat + (size_t)l * (3 * (size_t)c->dim + c->hidden_dim) + (size_t)which * c->dim;
+}
+
+/* Adds the squares of rows [0, n) of x (each k floats) to acc. */
+static void imat_add(double *acc, const float *x, int n, int k) {
+    for (int t = 0; t < n; t++)
+        for (int i = 0; i < k; i++) acc[i] += (double)x[(size_t)t * k + i] * x[(size_t)t * k + i];
+}
+#define IMAT(l, which, x, n, k) do { if (s->imat) imat_add(imat_at(s, l, which), x, n, k); } while (0)
+
 float *ml_forward(ml_state *s, int token, int pos) {
     const ml_model *m = s->m;
     const ml_config *c = &m->cfg;
@@ -156,6 +181,7 @@ float *ml_forward(ml_state *s, int token, int pos) {
 
         PROF(ML_PROF_OTHER, ml_k_rmsnorm(s->xb, s->x, L->attn_norm, c->dim, c->norm_eps);
                             ml_k_quantize_q8(&s->qa_dim, s->xb, c->dim));
+        IMAT(l, ML_IMAT_QKV, s->xb, 1, c->dim);
         PROF(ML_PROF_QKV, ml_matvec(s->pool, s->q, &L->wq, &s->qa_dim);
                           ml_matvec(s->pool, k, &L->wk, &s->qa_dim);
                           ml_matvec(s->pool, v, &L->wv, &s->qa_dim));
@@ -166,19 +192,24 @@ float *ml_forward(ml_state *s, int token, int pos) {
 
         PROF(ML_PROF_ATTN, ml_attention(s->pool, s->xb, s->q, &kv, s->att, s->qq, s->qd, c, pos));
         PROF(ML_PROF_OTHER, ml_k_quantize_q8(&s->qa_dim, s->xb, c->dim));
+        IMAT(l, ML_IMAT_WO, s->xb, 1, c->dim);
         PROF(ML_PROF_WO, ml_matvec(s->pool, s->xb2, &L->wo, &s->qa_dim));
         PROF(ML_PROF_OTHER, ml_k_add(s->x, s->xb2, c->dim);
                             ml_k_rmsnorm(s->xb, s->x, L->ffn_norm, c->dim, c->norm_eps);
                             ml_k_quantize_q8(&s->qa_dim, s->xb, c->dim));
+        IMAT(l, ML_IMAT_FFN, s->xb, 1, c->dim);
         PROF(ML_PROF_FFN, ml_matvec(s->pool, s->hb, &L->w1, &s->qa_dim);
                           ml_matvec(s->pool, s->hb2, &L->w3, &s->qa_dim));
         PROF(ML_PROF_OTHER, ml_k_silu_mul(s->hb, s->hb2, c->hidden_dim);
                             ml_k_quantize_q8(&s->qa_hidden, s->hb, c->hidden_dim));
+        IMAT(l, ML_IMAT_DOWN, s->hb, 1, c->hidden_dim);
         PROF(ML_PROF_FFN, ml_matvec(s->pool, s->xb2, &L->w2, &s->qa_hidden));
         PROF(ML_PROF_OTHER, ml_k_add(s->x, s->xb2, c->dim));
     }
     PROF(ML_PROF_OTHER, ml_k_rmsnorm(s->xb, s->x, m->final_norm, c->dim, c->norm_eps);
                         ml_k_quantize_q8(&s->qa_dim, s->xb, c->dim));
+    IMAT(c->n_layers, 0, s->xb, 1, c->dim);
+    if (s->imat) { s->imat_tokens++; s->imat_cls_tokens++; }
     PROF(ML_PROF_CLS, ml_matvec(s->pool, s->logits, &m->wcls, &s->qa_dim));
     return s->logits;
 }
@@ -209,6 +240,7 @@ static void prefill_step(ml_state *s, const int *tok, int n, int pos0, float *lo
         PROF(ML_PROF_OTHER, for (int t = 0; t < n; t++)
                                 ml_k_rmsnorm(s->bxb + (size_t)t * D, s->bx + (size_t)t * D, L->attn_norm, D, c->norm_eps);
                             quantize_rows(&s->qb_dim, s->bxb, n));
+        IMAT(l, ML_IMAT_QKV, s->bxb, n, D);
         PROF(ML_PROF_QKV, ml_matmul(s->pool, s->bq, D, &L->wq, &s->qb_dim);
                           ml_matmul(s->pool, kc, KV, &L->wk, &s->qb_dim);
                           ml_matmul(s->pool, vc, KV, &L->wv, &s->qb_dim));
@@ -227,24 +259,30 @@ static void prefill_step(ml_state *s, const int *tok, int n, int pos0, float *lo
                                ml_attention(s->pool, s->bxb + (size_t)t * D, s->bq + (size_t)t * D, &kv, s->att,
                                             s->qq, s->qd, c, pos0 + t));
         PROF(ML_PROF_OTHER, quantize_rows(&s->qb_dim, s->bxb, n));
+        IMAT(l, ML_IMAT_WO, s->bxb, n, D);
         PROF(ML_PROF_WO, ml_matmul(s->pool, s->bxb2, D, &L->wo, &s->qb_dim));
         PROF(ML_PROF_OTHER, for (int t = 0; t < n; t++) {
                                 ml_k_add(s->bx + (size_t)t * D, s->bxb2 + (size_t)t * D, D);
                                 ml_k_rmsnorm(s->bxb + (size_t)t * D, s->bx + (size_t)t * D, L->ffn_norm, D, c->norm_eps);
                             }
                             quantize_rows(&s->qb_dim, s->bxb, n));
+        IMAT(l, ML_IMAT_FFN, s->bxb, n, D);
         PROF(ML_PROF_FFN, ml_matmul(s->pool, s->bhb, H, &L->w1, &s->qb_dim);
                           ml_matmul(s->pool, s->bhb2, H, &L->w3, &s->qb_dim));
         PROF(ML_PROF_OTHER, for (int t = 0; t < n; t++)
                                 ml_k_silu_mul(s->bhb + (size_t)t * H, s->bhb2 + (size_t)t * H, H);
                             quantize_rows(&s->qb_hidden, s->bhb, n));
+        IMAT(l, ML_IMAT_DOWN, s->bhb, n, H);
         PROF(ML_PROF_FFN, ml_matmul(s->pool, s->bxb2, D, &L->w2, &s->qb_hidden));
         PROF(ML_PROF_OTHER, for (int t = 0; t < n; t++) ml_k_add(s->bx + (size_t)t * D, s->bxb2 + (size_t)t * D, D));
     }
+    if (s->imat) s->imat_tokens += n;
     if (!logits) return;
     PROF(ML_PROF_OTHER, for (int t = 0; t < n; t++)
                             ml_k_rmsnorm(s->bxb + (size_t)t * D, s->bx + (size_t)t * D, m->final_norm, D, c->norm_eps);
                         quantize_rows(&s->qb_dim, s->bxb, n));
+    IMAT(c->n_layers, 0, s->bxb, n, D);
+    if (s->imat) s->imat_cls_tokens += n;
     PROF(ML_PROF_CLS, ml_matmul(s->pool, logits, c->vocab, &m->wcls, &s->qb_dim));
 }
 
@@ -264,5 +302,7 @@ ml_status ml_prefill(ml_state *s, const int *tokens, int n, int pos0, float *log
 void ml_state_free(ml_state *s) {
     if (s->pool) ml_pool_destroy(s->pool);
     ml_arena_free(&s->arena);
+    free(s->imat);
     s->pool = NULL;
+    s->imat = NULL;
 }

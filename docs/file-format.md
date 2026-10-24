@@ -114,6 +114,20 @@ levels with each element weighted by x², and the candidate with the least
 weighted error is kept. `d` can be negative. Any `d` and nibbles are valid
 input to the runtime.
 
+With `tools/convert.py --imatrix`, each element's weight is x² times the
+importance of its input channel: the channel's mean squared input
+(`ml_run --imatrix`) divided by its matrix's mean over channels, and at least
+0.001.
+
+### Importance matrix file
+
+`ml_run --imatrix FILE` writes, little-endian: `"MLI1"`, then `u32` version
+(1), `n_layers`, `dim`, `hidden_dim`, `0`; `u64` tokens summed into the layers
+and tokens summed into the classifier (prompt tokens prefilled without logits
+skip it); then `float64` sums of squares, per channel: for each layer the
+input of `wq`/`wk`/`wv` (`dim`), of `wo` (`dim`), of `w1`/`w3` (`dim`) and of
+`w2` (`hidden_dim`), then the classifier input (`dim`).
+
 ## RoPE
 
 Rotary embeddings act on interleaved pairs `(2i, 2i+1)` of each head. Pair `i`

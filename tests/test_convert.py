@@ -461,3 +461,72 @@ def test_mixed_q4_q8_classes(tmp_path):
         assert False
     except ValueError:
         pass
+
+
+def test_quantize_q4_imatrix():
+    """Uniform importance changes nothing; skewed importance lowers the error
+    where it is weighted."""
+    rng = np.random.default_rng(5)
+    x = rng.standard_normal((64, 256)).astype(np.float32)
+    plain = mlb.quantize_q4(x)
+    same = mlb.quantize_q4(x, np.full(256, 3.0))
+    assert (plain[0] == same[0]).all() and (plain[1] == same[1]).all()
+    imp = np.where(np.arange(256) % 32 < 4, 50.0, 1.0)   # 4 channels of every block matter
+    ip, idq = mlb.quantize_q4(x, imp)
+
+    def werr(p, d):
+        return ((mlb.dequant(mlb.QT(mlb.WTYPES["q4"], p, d, x.shape)) - x) ** 2 * x ** 2 * imp).sum()
+    assert werr(ip, idq) < 0.9 * werr(*plain)
+    z = mlb.quantize_q4(x, np.zeros(256))   # nothing recorded: plain fit
+    assert (z[0] == plain[0]).all()
+
+
+def test_imatrix_from_c(tmp_path):
+    exe = os.path.join(ROOT, "build", "scalar", "ml_run")
+    if not os.path.exists(exe):
+        import pytest
+        pytest.skip("build/scalar/ml_run not built")
+    path, cfg, w, _ = _gen(tmp_path, "q8", seed=2)
+    toks = [1, 5, 9, 13, 17, 21, 25, 29, 33, 37]
+    run = [exe, path, "--tokens", ",".join(map(str, toks)), "--dump-logits", str(tmp_path / "l.f32")]
+    a, b = str(tmp_path / "a.imat"), str(tmp_path / "b.imat")
+    subprocess.run(run + ["--imatrix", a], check=True)
+    subprocess.run(run + ["--imatrix", b, "--batch", "1"], check=True)
+    assert open(a, "rb").read() == open(b, "rb").read()   # batched prefill sums the same values
+    ia = mlb.read_imatrix(a, cfg)
+    assert ia["tokens"] == len(toks)
+    # layer 0's q/k/v input is the normed embedding
+    rcfg, t = mlb.read_mlb(path)
+    x = mlb.dequant(t["tok_emb"])[toks]
+    h = np.array([ref_forward.rmsnorm(r, t["layers"][0]["attn_norm"], float(rcfg["norm_eps"])) for r in x])
+    np.testing.assert_allclose(ia["layers"][0]["qkv"], (h.astype(np.float64) ** 2).mean(0), rtol=1e-5)
+    for L in ia["layers"]:
+        assert all((v > 0).all() for v in L.values())
+    assert (ia["cls"] > 0).all()
+    subprocess.run(run + ["--imatrix", a], check=True)   # a second run adds to the file
+    ia2 = mlb.read_imatrix(a, cfg)
+    assert ia2["tokens"] == 2 * len(toks)
+    np.testing.assert_array_equal(ia2["layers"][1]["down"], ia["layers"][1]["down"])
+    # generation: the prompt is prefilled without the classifier
+    g = str(tmp_path / "g.imat")
+    subprocess.run([exe, path, "--tokens", "1,5,9", "-n", "6", "--imatrix", g], check=True, capture_output=True)
+    hdr = mlb._IMAT.unpack_from(open(g, "rb").read())
+    assert hdr[6:] == (6, 4)
+    # another model's file is refused and left as it was
+    cfg2, w2 = gen_random.generate(dict(SMALL, dim=96), 3)
+    p2 = str(tmp_path / "other.mlb")
+    mlb.write_mlb(p2, cfg2, w2, "q8")
+    before = open(a, "rb").read()
+    r = subprocess.run([exe, p2, "--tokens", "1,2", "--dump-logits", str(tmp_path / "o.f32"), "--imatrix", a],
+                       capture_output=True)
+    assert r.returncode != 0 and open(a, "rb").read() == before
+    # a Q4 model fitted with it runs and matches the reference
+    q4 = str(tmp_path / "imat_q4.mlb")
+    mlb.write_mlb(q4, cfg, w, "q4", imatrix=ia2)
+    subprocess.run([exe, q4, "--tokens", "1,7,3", "--dump-logits", str(tmp_path / "c.f32")], check=True)
+    got = np.fromfile(tmp_path / "c.f32", np.float32).reshape(3, -1)
+    rcfg, t = mlb.read_mlb(q4)
+    _assert_close_to_ref(got, ref_forward.forward(rcfg, t, [1, 7, 3]))
+    plain = str(tmp_path / "plain_q4.mlb")
+    mlb.write_mlb(plain, cfg, w, "q4")
+    assert open(q4, "rb").read() != open(plain, "rb").read()

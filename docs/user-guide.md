@@ -242,6 +242,21 @@ file format and the kernels are unchanged, so older Q4 files still load;
 convert again to get the better scales. See
 [the quantization rule](file-format.md#quantization-rule).
 
+An importance matrix weights that fit by how large each input channel's
+activations are on sample text, so that the weights meeting large activations
+are kept closer. Collect it with a Q8 conversion of the same model (each run
+adds to the file), then convert to Q4 with it:
+
+```sh
+python3 tools/convert.py hf ./Qwen2.5-0.5B-Instruct q8.mlb --wtype q8
+python3 tools/perplexity.py build/avx2/ml_run q8.mlb tok.mlt sample.txt --ml-tok build/avx2/ml_tok \
+    --ctx 512 --chunks 32 --extra "--imatrix qwen.imat"
+python3 tools/convert.py hf ./Qwen2.5-0.5B-Instruct q4.mlb --wtype q4 --imatrix qwen.imat
+```
+
+Use text unlike the one you measure perplexity on. The embedding is a lookup
+and keeps the plain fit; Q8 matrices ignore the importance matrix.
+
 | Format | Bits per weight | Notes |
 |--------|-----------------|-------|
 | `Q8_0` | 9 | close to FP32 quality; best throughput on VNNI and dotprod CPUs |

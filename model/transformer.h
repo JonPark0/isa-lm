@@ -29,7 +29,16 @@ typedef struct {
     ml_qbatch qb_dim, qb_hidden;
     int profile;                   /* set to time each stage of ml_forward */
     double prof[ML_PROF_COUNT];
+    /* importance matrix (ml_imatrix_enable): per channel, the sum of squares
+     * of each matrix input over the tokens run, see ML_IMAT_* */
+    double *imat;
+    unsigned long long imat_tokens, imat_cls_tokens;   /* tokens summed into the layers, the classifier */
 } ml_state;
+
+/* imat layout: per layer [dim] wq/wk/wv input, [dim] wo, [dim] w1/w3,
+ * [hidden_dim] w2; then [dim] classifier input. */
+enum { ML_IMAT_QKV, ML_IMAT_WO, ML_IMAT_FFN, ML_IMAT_DOWN };
+size_t ml_imatrix_size(const ml_config *c);
 
 #define ML_BATCH_MAX 32
 
@@ -43,6 +52,8 @@ ml_status ml_state_init(ml_state *s, ml_model *m, int nthreads, int kv_type);
 ml_status ml_prefill(ml_state *s, const int *tokens, int n, int pos0, float *logits);
 /* Logits for `token` at position `pos`; NULL if pos or token is out of range. */
 float *ml_forward(ml_state *s, int token, int pos);
+/* Starts summing the importance matrix (zeroed) from the next token on. */
+ml_status ml_imatrix_enable(ml_state *s);
 void ml_state_free(ml_state *s);
 
 #endif
