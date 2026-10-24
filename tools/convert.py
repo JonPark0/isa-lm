@@ -3,6 +3,8 @@
   convert.py llama2c IN.bin OUT.mlb [--wtype q8|q4] [--q8 LIST]   llama2.c legacy (v0) export
   convert.py hf DIR OUT.mlb [--wtype q8|q4] [--q8 LIST] [--max-seq N]
                                                       HF Llama, Mistral, Qwen2: config.json + *.safetensors
+  --imatrix FILE (q4): weight the Q4 fits by an importance matrix from
+                       ml_run --imatrix, run on a Q8 conversion of the same model
 """
 import argparse
 import glob
@@ -172,12 +174,18 @@ def main(argv=None):
                     help="q4 only: matrix classes kept in Q8, comma-separated from "
                          "emb, cls, qk, v, o, up, down (e.g. emb,cls,v,down)")
     ap.add_argument("--max-seq", type=int, default=None, help="hf: cap the context length (KV cache size)")
+    ap.add_argument("--imatrix", metavar="FILE", help="q4 only: importance matrix from ml_run --imatrix")
     a = ap.parse_args(argv)
+    if a.imatrix and a.wtype != "q4":
+        ap.error("--imatrix needs --wtype q4")
     cfg, w = load_llama2c(a.src) if a.kind == "llama2c" else load_hf(a.src, a.max_seq)
-    mlb.write_mlb(a.out, cfg, w, a.wtype, [c for c in a.q8.split(",") if c])
+    imat = mlb.read_imatrix(a.imatrix, cfg) if a.imatrix else None
+    mlb.write_mlb(a.out, cfg, w, a.wtype, [c for c in a.q8.split(",") if c], imat)
     print(f"wrote {a.out}: dim={cfg['dim']} layers={cfg['n_layers']} vocab={cfg['vocab']} "
           f"max_seq={cfg['max_seq']} wtype={a.wtype}{' (q8: ' + a.q8 + ')' if a.q8 and a.wtype == 'q4' else ''} "
           f"shared_classifier={cfg['shared_classifier']}")
+    if imat:
+        print(f"imatrix {a.imatrix}: {imat['tokens']} tokens")
 
 
 if __name__ == "__main__":

@@ -105,6 +105,16 @@ $RUN $B/ml_run $M/rand_q8.mlb -z $TOK -i "abcdefghij" -n 24 -T 0 --batch 1 > $T/
     && $RUN $B/ml_run $M/rand_q8.mlb -z $TOK -i "abcdefghij" -n 24 -T 0 > $T/gb.txt 2>/dev/null \
     && cmp -s $T/gb1.txt $T/gb.txt && ok || bad "generation with batched prefill differs from --batch 1"
 
+# --imatrix: batched prefill sums the same activations as token-by-token;
+# a second run adds to the file
+rm -f $T/im.a $T/im.b
+$RUN $B/ml_run $M/rand_q8.mlb --tokens $TOKENS --dump-logits $T/im.f32 --imatrix $T/im.a \
+    && $RUN $B/ml_run $M/rand_q8.mlb --tokens $TOKENS --dump-logits $T/im.f32 --imatrix $T/im.b --batch 1 \
+    && cmp -s $T/im.a $T/im.b \
+    && $RUN $B/ml_run $M/rand_q8.mlb --tokens $TOKENS --dump-logits $T/im.f32 --imatrix $T/im.a \
+    && python3 -c "import struct,sys; h=struct.unpack_from('<4sIIIIIQQ', open(sys.argv[1],'rb').read()); sys.exit(h[6:] != (32, 32))" $T/im.a \
+    && ok || bad "--imatrix"
+
 # greedy: same text as the host scalar build
 $RUN $B/ml_run $M/rand_q8.mlb -z $TOK -i "ab" -n 16 -T 0 > $T/greedy.txt 2>/dev/null \
     && $SCALAR $M/rand_q8.mlb -z $TOK -i "ab" -n 16 -T 0 > $T/greedy.ref.txt 2>/dev/null \

@@ -3,6 +3,7 @@
 Quantization mirrors the C kernels bit for bit (float32 arithmetic, round half
 away from zero), so files written here dequantize identically in C.
 """
+import math
 import os
 import struct
 from collections import namedtuple
@@ -100,12 +101,13 @@ def _sum32(a):
     return a[..., 0]
 
 
-def _q4_search(b):
-    """Blocks b[n, 32] -> (levels, scales) minimizing the x^2-weighted error."""
+def _q4_search(b, imp=None):
+    """Blocks b[n, 32] -> (levels, scales) minimizing the x^2-weighted error,
+    times imp[n, 32] (channel importance) when given."""
     mx = np.take_along_axis(b, np.abs(b).argmax(axis=-1)[:, None], axis=-1)[:, 0]
     zero = np.abs(mx) < TINY
     y = b * (np.float32(1) / np.where(zero, np.float32(1), mx))[:, None]   # largest element at 1
-    w = b * b
+    w = b * b if imp is None else b * b * imp
     wb = w * b
     best = step = None
     for s in Q4_STEPS:
@@ -124,7 +126,20 @@ def _q4_search(b):
     return np.where(zero[:, None], 0, lv), np.where(zero, 0, d).astype(np.float32)
 
 
-def quantize_q4(x):
+IMP_FLOOR = np.float32(1e-3)   # least channel importance, relative to the matrix mean
+
+
+def _importance(imp):
+    """Mean squared inputs [K] -> float32 weights with mean 1, or None if all zero.
+    The mean is summed exactly: the result must not depend on the machine."""
+    imp = np.asarray(imp, np.float64)
+    mean = math.fsum(imp.tolist()) / len(imp)
+    if not mean > 0:
+        return None
+    return np.maximum((imp / mean).astype(np.float32), IMP_FLOOR)
+
+
+def quantize_q4(x, imp=None):
     """x[..., K] float32 -> (packed uint8[..., K/2], d float32[..., K/32]).
     Byte j of a block holds element j (low nibble) and j+16 (high nibble).
 
@@ -133,12 +148,24 @@ def quantize_q4(x):
     squares weighted by x^2, and the fit with the least weighted error is
     kept. Against amax/7 rounding this uses all 16 levels and lowers the error
     of the large weights (Qwen2.5 0.5B Q4 perplexity 23.58 -> 21.73). Chunks
-    of blocks run on a thread pool (numpy releases the GIL)."""
+    of blocks run on a thread pool (numpy releases the GIL).
+
+    imp[K]: importance of each input channel, the mean square of the matrix
+    input over sample text (read_imatrix). The error is then weighted by
+    x^2 * imp, so that weights meeting large activations are kept closer."""
     x = np.asarray(x, np.float32)
     b = x.reshape(-1, QK)
-    chunks = [b[i:i + 4096] for i in range(0, len(b), 4096)]
+    imp = None if imp is None else _importance(imp)
+    nb = x.shape[-1] // QK
+
+    def search(i):
+        c = b[i:i + 4096]
+        if imp is None:
+            return _q4_search(c)
+        return _q4_search(c, imp.reshape(nb, QK)[np.arange(i, i + len(c)) % nb])
+
     with ThreadPoolExecutor(os.cpu_count() or 1) as ex:
-        parts = list(ex.map(_q4_search, chunks))
+        parts = list(ex.map(search, range(0, len(b), 4096)))
     lv = np.concatenate([p[0] for p in parts]).reshape(*x.shape[:-1], -1, QK)
     d = np.concatenate([p[1] for p in parts]).reshape(*x.shape[:-1], -1)
     return _pack_q4(lv), d
@@ -176,9 +203,10 @@ def _check_cfg(cfg):
             raise ValueError(f"{k}={cfg[k]} must be a multiple of {QK}")
 
 
-def write_mlb(path, cfg, w, wtype, q8=()):
+def write_mlb(path, cfg, w, wtype, q8=(), imatrix=None):
     """Writes the model; returns [(array name, offset, nbytes)] for every array.
-    q8: matrix classes (Q8_CLASSES) kept in Q8 when wtype is q4."""
+    q8: matrix classes (Q8_CLASSES) kept in Q8 when wtype is q4.
+    imatrix: read_imatrix's result, weighting the Q4 fits."""
     _check_cfg(cfg)
     mask = q8_mask(q8) if wtype == "q4" else 0
     shared = bool(cfg.get("shared_classifier", 0))
@@ -206,10 +234,47 @@ def write_mlb(path, cfg, w, wtype, q8=()):
                 continue
             key = name.split(".")[-1]
             t = matrix_type(key, WTYPES[wtype], mask, shared)
-            q, d = quantize_q8(arr) if t == WTYPES["q8"] else quantize_q4(arr)
+            imp = imatrix_for(imatrix, name) if imatrix else None
+            q, d = quantize_q8(arr) if t == WTYPES["q8"] else quantize_q4(arr, imp)
             put(name + ".q", q)
             put(name + ".d", d)
     return layout
+
+
+_IMAT = struct.Struct("<4sIIIIIQQ")   # magic, version, n_layers, dim, hidden_dim, 0, tokens, classifier tokens
+_IMAT_INPUT = {"wq": "qkv", "wk": "qkv", "wv": "qkv", "wo": "wo", "w1": "ffn", "w3": "ffn", "w2": "down"}
+
+
+def read_imatrix(path, cfg):
+    """ml_run --imatrix file -> {"layers": [{input: mean square [K]}], "cls": [dim]},
+    inputs qkv, wo, ffn (dim) and down (hidden_dim)."""
+    data = open(path, "rb").read()
+    magic, ver, nl, dim, hid, _, ntok, ncls = _IMAT.unpack_from(data)
+    if magic != b"MLI1" or ver != 1:
+        raise ValueError(f"{path}: not an importance matrix")
+    if (nl, dim, hid) != (cfg["n_layers"], cfg["dim"], cfg["hidden_dim"]):
+        raise ValueError(f"{path}: for a model with {nl} layers, dim {dim}, hidden_dim {hid}")
+    if not ntok:
+        raise ValueError(f"{path}: no tokens")
+    s = np.frombuffer(data, np.float64, offset=_IMAT.size)
+    if len(s) != nl * (3 * dim + hid) + dim:
+        raise ValueError(f"{path}: truncated")
+    layers = []
+    for i in range(nl):
+        o = i * (3 * dim + hid)
+        layers.append({"qkv": s[o:o + dim] / ntok, "wo": s[o + dim:o + 2 * dim] / ntok,
+                       "ffn": s[o + 2 * dim:o + 3 * dim] / ntok, "down": s[o + 3 * dim:o + 3 * dim + hid] / ntok})
+    return {"layers": layers, "cls": s[-dim:] / ncls if ncls else None, "tokens": ntok}
+
+
+def imatrix_for(imatrix, name):
+    """Importance of the input channels of matrix `name` (write_mlb's names), or None."""
+    if name == "wcls":
+        return imatrix["cls"]
+    parts = name.split(".")
+    if parts[0] == "layers":
+        return imatrix["layers"][int(parts[1])][_IMAT_INPUT[parts[2]]]
+    return None   # the embedding is a lookup, not a product
 
 
 def read_mlb(path):
