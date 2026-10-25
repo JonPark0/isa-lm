@@ -113,37 +113,44 @@ typedef struct {
  * are independent per position, and the mix adds positions in order. */
 #define ATT_BLOCK 64
 
+/* Query heads [g0, g1), all of KV head kvh, at position pos; att holds
+ * max_seq floats per head from g0 on. */
+static void attend(const ml_config *cfg, const ml_kv_layer *kv, float *out, const float *q, const int8_t *qq,
+                   const float *qd, float *att, int g0, int g1, int pos) {
+    const int hd = cfg->head_dim, kvh = g0 / (cfg->n_heads / cfg->n_kv_heads), n = pos + 1;
+    const size_t ld = (size_t)cfg->kv_dim, ldd = (size_t)cfg->n_kv_heads, ldatt = (size_t)cfg->max_seq;
+    const size_t off = (size_t)kvh * hd;
+    const float scale = 1.0f / sqrtf((float)hd);
+    for (int t0 = 0; t0 < n; t0 += ATT_BLOCK) {
+        const int m = n - t0 < ATT_BLOCK ? n - t0 : ATT_BLOCK;
+        for (int h = g0; h < g1; h++) {
+            float *s = att + (h - g0) * ldatt + t0;
+            if (kv->k) ml_k_dot_f32(s, q + h * hd, kv->k + t0 * ld + off, ld, m, hd, scale);
+            else ml_k_dot_q8(s, qq + h * hd, qd[h], kv->kq + t0 * ld + off, kv->kd + t0 * ldd + kvh, ld, ldd, m, hd, scale);
+        }
+    }
+    for (int h = g0; h < g1; h++) {
+        ml_k_softmax(att + (h - g0) * ldatt, n);
+        memset(out + h * hd, 0, sizeof(float) * hd);
+    }
+    for (int t0 = 0; t0 < n; t0 += ATT_BLOCK) {
+        const int m = n - t0 < ATT_BLOCK ? n - t0 : ATT_BLOCK;
+        for (int h = g0; h < g1; h++) {
+            const float *a = att + (h - g0) * ldatt + t0;
+            if (kv->v) ml_k_axpy_f32(out + h * hd, a, kv->v + t0 * ld + off, ld, m, hd);
+            else ml_k_axpy_q8(out + h * hd, a, kv->vq + t0 * ld + off, kv->vd + t0 * ldd + kvh, ld, ldd, m, hd);
+        }
+    }
+}
+
 static void attention_task(void *p, int tid, int nt) {
     const attn_ctx *c = p;
     const ml_config *cfg = c->cfg;
-    const ml_kv_layer *kv = c->kv;
-    const int hd = cfg->head_dim, group = cfg->n_heads / cfg->n_kv_heads, n = c->pos + 1;
-    const size_t ld = (size_t)cfg->kv_dim, ldd = (size_t)cfg->n_kv_heads, ldatt = (size_t)cfg->max_seq;
-    const float scale = 1.0f / sqrtf((float)hd);
+    const int group = cfg->n_heads / cfg->n_kv_heads;
     const int h0 = (int)((long long)cfg->n_heads * tid / nt), h1 = (int)((long long)cfg->n_heads * (tid + 1) / nt);
     for (int g0 = h0; g0 < h1;) {
-        const int kvh = g0 / group, gend = (kvh + 1) * group, g1 = gend < h1 ? gend : h1;   /* heads [g0, g1) share KV head kvh */
-        const size_t off = (size_t)kvh * hd;
-        for (int t0 = 0; t0 < n; t0 += ATT_BLOCK) {
-            const int m = n - t0 < ATT_BLOCK ? n - t0 : ATT_BLOCK;
-            for (int h = g0; h < g1; h++) {
-                float *s = c->att + h * ldatt + t0;
-                if (kv->k) ml_k_dot_f32(s, c->q + h * hd, kv->k + t0 * ld + off, ld, m, hd, scale);
-                else ml_k_dot_q8(s, c->qq + h * hd, c->qd[h], kv->kq + t0 * ld + off, kv->kd + t0 * ldd + kvh, ld, ldd, m, hd, scale);
-            }
-        }
-        for (int h = g0; h < g1; h++) {
-            ml_k_softmax(c->att + h * ldatt, n);
-            memset(c->out + h * hd, 0, sizeof(float) * hd);
-        }
-        for (int t0 = 0; t0 < n; t0 += ATT_BLOCK) {
-            const int m = n - t0 < ATT_BLOCK ? n - t0 : ATT_BLOCK;
-            for (int h = g0; h < g1; h++) {
-                const float *a = c->att + h * ldatt + t0;
-                if (kv->v) ml_k_axpy_f32(c->out + h * hd, a, kv->v + t0 * ld + off, ld, m, hd);
-                else ml_k_axpy_q8(c->out + h * hd, a, kv->vq + t0 * ld + off, kv->vd + t0 * ldd + kvh, ld, ldd, m, hd);
-            }
-        }
+        const int gend = (g0 / group + 1) * group, g1 = gend < h1 ? gend : h1;   /* heads [g0, g1) share a KV head */
+        attend(cfg, c->kv, c->out, c->q, c->qq, c->qd, c->att + (size_t)g0 * cfg->max_seq, g0, g1, c->pos);
         g0 = g1;
     }
 }
@@ -159,4 +166,39 @@ void ml_attention(ml_pool *pool, float *out, const float *q, const ml_kv_layer *
         attention_task(&c, 0, 1);
     else
         ml_pool_run(pool, attention_task, &c);
+}
+
+typedef struct {
+    attn_ctx a;   /* pos: the first position */
+    int n;
+} attn_batch_ctx;
+
+/* Work items are (position, KV head) pairs, dealt round-robin: later
+ * positions cost more, and neighbours land on different threads. */
+static void attention_batch_task(void *p, int tid, int nt) {
+    const attn_batch_ctx *c = p;
+    const ml_config *cfg = c->a.cfg;
+    const int group = cfg->n_heads / cfg->n_kv_heads, dim = cfg->dim;
+    float *att = c->a.att + (size_t)tid * group * cfg->max_seq;
+    for (int i = tid; i < c->n * cfg->n_kv_heads; i += nt) {
+        const int t = i / cfg->n_kv_heads, g0 = i % cfg->n_kv_heads * group;
+        attend(cfg, c->a.kv, c->a.out + (size_t)t * dim, c->a.q + (size_t)t * dim,
+               c->a.qq ? c->a.qq + (size_t)t * dim : NULL, c->a.qd ? c->a.qd + (size_t)t * cfg->n_heads : NULL,
+               att, g0, g0 + group, c->a.pos + t);
+    }
+}
+
+void ml_attention_batch(ml_pool *pool, float *out, const float *q, const ml_kv_layer *kv, float *att_scratch,
+                        int8_t *qq, float *qd, const ml_config *cfg, int pos0, int n) {
+    if (!kv->k)
+        for (int t = 0; t < n; t++)
+            for (int h = 0; h < cfg->n_heads; h++)
+                ml_quantize_row(qq + (size_t)t * cfg->dim + h * cfg->head_dim, qd + (size_t)t * cfg->n_heads + h,
+                                q + (size_t)t * cfg->dim + h * cfg->head_dim, cfg->head_dim);
+    attn_batch_ctx c = { { out, q, kv, att_scratch, kv->k ? NULL : qq, kv->k ? NULL : qd, cfg, pos0 }, n };
+    const size_t positions = (size_t)n * pos0 + (size_t)n * (n + 1) / 2;
+    if ((size_t)cfg->n_heads * positions * (size_t)cfg->head_dim * 2 < PARALLEL_MIN_WEIGHTS)
+        attention_batch_task(&c, 0, 1);
+    else
+        ml_pool_run(pool, attention_batch_task, &c);
 }

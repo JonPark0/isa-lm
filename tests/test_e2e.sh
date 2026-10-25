@@ -151,6 +151,13 @@ for t in 3 4 7; do
 done
 $RUN $B/ml_run $M/ctx_q4.mlb --tokens $CTX --dump-logits $T/ctx.q8.t3.f32 --kv q8 -t 3 \
     && cmp -s $T/ctx.q8.f32 $T/ctx.q8.t3.f32 && ok || bad "logits with --kv q8 -t 3 differ from -t 1"
+# batched attention splits (position, KV head) pairs across threads
+for kv in f32 q8; do
+    $RUN $B/ml_run $M/ctx_q4.mlb --tokens $CTX --dump-logits $T/ctx.$kv.t4.f32 --kv $kv -t 4 \
+        && $RUN $B/ml_run $M/ctx_q4.mlb --tokens $CTX --dump-logits $T/ctx.$kv.t4b1.f32 --kv $kv -t 4 --batch 1 \
+        && cmp -s $T/ctx.$kv.f32 $T/ctx.$kv.t4.f32 && cmp -s $T/ctx.$kv.f32 $T/ctx.$kv.t4b1.f32 \
+        && ok || bad "150-position logits with --kv $kv -t 4 differ from -t 1"
+done
 err=$($RUN $B/ml_run $M/rand_q4.mlb --tokens 1,2 -n 8 -t 4 2>&1 >/dev/null)
 echo "$err" | grep -q "threads: $NT," && ok || bad "expected 'threads: $NT' in: $err"
 

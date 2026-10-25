@@ -66,9 +66,10 @@ static void *worker(void *p) {
     }
 }
 
+int ml_pool_threads(int n) { return n < 1 ? 1 : n > ML_MAX_THREADS ? ML_MAX_THREADS : n; }
+
 ml_status ml_pool_create(ml_pool **out, int n) {
-    if (n < 1) n = 1;
-    if (n > ML_MAX_THREADS) n = ML_MAX_THREADS;
+    n = ml_pool_threads(n);
     ml_pool *p = calloc(1, sizeof *p);
     if (!p) return ML_E_NOMEM;
     p->n = n;
@@ -131,6 +132,8 @@ void ml_pool_destroy(ml_pool *p) {
 struct ml_pool {
     int n;
 };
+
+int ml_pool_threads(int n) { (void)n; return 1; }
 
 ml_status ml_pool_create(ml_pool **p, int n) {
     (void)n;

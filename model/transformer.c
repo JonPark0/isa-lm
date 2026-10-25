@@ -36,6 +36,10 @@ ml_status ml_state_init(ml_state *s, ml_model *m, int nthreads, int kv_type) {
     const int q8 = kv_type == ML_Q8_0;
     const ml_config *c = &m->cfg;
     const size_t f = sizeof(float);
+    /* attention scores: n_heads rows for one position, or a KV head's worth
+     * of rows per thread for a batch (ml_attention_batch) */
+    const int group = c->n_heads / c->n_kv_heads, nthr = ml_pool_threads(nthreads);
+    const size_t att_rows = (size_t)nthr * group > (size_t)c->n_heads ? (size_t)nthr * group : (size_t)c->n_heads;
     size_t lkv, kv, half, lks, ks, need = 0;
     /* Sizes are products of header fields: check them, a 32-bit size_t wraps. */
     if (!ml_mul_size((size_t)c->n_layers, (size_t)c->kv_dim, &lkv) ||
@@ -48,8 +52,9 @@ ml_status ml_state_init(ml_state *s, ml_model *m, int nthreads, int kv_type) {
      * each padded to ML_ALIGN by the arena. */
     const size_t parts[][2] = {
         { 4, f * c->dim }, { 2, f * c->hidden_dim }, { 1, f * c->vocab },
-        { (size_t)c->n_heads, f * c->max_seq }, { 2, q8 ? kv : f * kv }, { 2, q8 ? f * ks : 0 },
-        { 2, q8 ? f * ML_BATCH_MAX * c->kv_dim : 0 }, { 1, q8 ? (size_t)c->dim : 0 }, { 1, q8 ? f * c->n_heads : 0 },
+        { att_rows, f * c->max_seq }, { 2, q8 ? kv : f * kv }, { 2, q8 ? f * ks : 0 },
+        { 2, q8 ? f * ML_BATCH_MAX * c->kv_dim : 0 }, { 1, q8 ? (size_t)ML_BATCH_MAX * c->dim : 0 },
+        { 1, q8 ? f * ML_BATCH_MAX * c->n_heads : 0 },
         { 2, f * half },
         { 1, (size_t)c->dim }, { 1, f * c->dim / QK }, { 1, (size_t)c->hidden_dim }, { 1, f * c->hidden_dim / QK },
         { 4, f * ML_BATCH_MAX * c->dim }, { 2, f * ML_BATCH_MAX * c->hidden_dim },
@@ -71,7 +76,7 @@ ml_status ml_state_init(ml_state *s, ml_model *m, int nthreads, int kv_type) {
     s->hb = ml_arena_alloc(a, f * c->hidden_dim);
     s->hb2 = ml_arena_alloc(a, f * c->hidden_dim);
     s->q = ml_arena_alloc(a, f * c->dim);
-    s->att = ml_arena_alloc(a, f * c->n_heads * c->max_seq);
+    s->att = ml_arena_alloc(a, f * att_rows * c->max_seq);
     s->logits = ml_arena_alloc(a, f * c->vocab);
     if (q8) {
         s->kq = ml_arena_alloc(a, kv);
@@ -80,8 +85,8 @@ ml_status ml_state_init(ml_state *s, ml_model *m, int nthreads, int kv_type) {
         s->vd = ml_arena_alloc(a, f * ks);
         s->kbuf = ml_arena_alloc(a, f * ML_BATCH_MAX * c->kv_dim);
         s->vbuf = ml_arena_alloc(a, f * ML_BATCH_MAX * c->kv_dim);
-        s->qq = ml_arena_alloc(a, (size_t)c->dim);
-        s->qd = ml_arena_alloc(a, f * c->n_heads);
+        s->qq = ml_arena_alloc(a, (size_t)ML_BATCH_MAX * c->dim);
+        s->qd = ml_arena_alloc(a, f * ML_BATCH_MAX * c->n_heads);
     } else {
         s->kcache = ml_arena_alloc(a, f * kv);
         s->vcache = ml_arena_alloc(a, f * kv);
@@ -255,9 +260,7 @@ static void prefill_step(ml_state *s, const int *tok, int n, int pos0, float *lo
                                           c->head_dim, c->n_heads, c->n_kv_heads);
                                 store_kv(s, l, pos0 + t, kc + (size_t)t * KV, vc + (size_t)t * KV);
                             });
-        PROF(ML_PROF_ATTN, for (int t = 0; t < n; t++)
-                               ml_attention(s->pool, s->bxb + (size_t)t * D, s->bq + (size_t)t * D, &kv, s->att,
-                                            s->qq, s->qd, c, pos0 + t));
+        PROF(ML_PROF_ATTN, ml_attention_batch(s->pool, s->bxb, s->bq, &kv, s->att, s->qq, s->qd, c, pos0, n));
         PROF(ML_PROF_OTHER, quantize_rows(&s->qb_dim, s->bxb, n));
         IMAT(l, ML_IMAT_WO, s->bxb, n, D);
         PROF(ML_PROF_WO, ml_matmul(s->pool, s->bxb2, D, &L->wo, &s->qb_dim));
