@@ -200,18 +200,20 @@ ML_INLINE void matmul_q8_tile(float *Y, int ldy, const ml_qtensor *W, const ml_q
         __m512 acc[TILE];
         ML_UNROLL(4) for (int t = 0; t < TILE; t++) acc[t] = _mm512_setzero_ps();
         for (int b = 0; b < nb; b++, p += 8 * PK * 4) {
-            __m512i s[TILE];
-            ML_UNROLL(4) for (int t = 0; t < TILE; t++) s[t] = _mm512_setzero_si512();
-            for (int k = 0; k < 8; k++) {
+            __m512i s[TILE], s2[TILE];
+            ML_UNROLL(4) for (int t = 0; t < TILE; t++) s[t] = s2[t] = _mm512_setzero_si512();
+            for (int k = 0; k < 8; k += 2) {
                 const __m512i w = _mm512_loadu_si512((const void *)(p + k * PK * 4));
+                const __m512i w2 = _mm512_loadu_si512((const void *)(p + (k + 1) * PK * 4));
                 ML_UNROLL(4) for (int t = 0; t < T; t++) {
                     const int32_t *xb = (const int32_t *)(X->q + (size_t)(t0 + t) * X->k + b * QK);
                     s[t] = _mm512_dpbusd_epi32(s[t], w, _mm512_set1_epi32(xb[k]));
+                    s2[t] = _mm512_dpbusd_epi32(s2[t], w2, _mm512_set1_epi32(xb[k + 1]));
                 }
             }
             const __m512 dv = _mm512_loadu_ps(d + b * PK);
             ML_UNROLL(4) for (int t = 0; t < T; t++) {
-                s[t] = _mm512_sub_epi32(s[t], _mm512_set1_epi32(xsum[t][b]));
+                s[t] = _mm512_sub_epi32(_mm512_add_epi32(s[t], s2[t]), _mm512_set1_epi32(xsum[t][b]));
                 acc[t] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(s[t]),
                                          _mm512_mul_ps(dv, _mm512_set1_ps(X->d[(size_t)(t0 + t) * nb + b])), acc[t]);
             }
@@ -235,20 +237,20 @@ ML_INLINE void matmul_q4_tile(float *Y, int ldy, const ml_qtensor *W, const ml_q
         __m512 acc[TILE];
         ML_UNROLL(4) for (int t = 0; t < TILE; t++) acc[t] = _mm512_setzero_ps();
         for (int b = 0; b < nb; b++, p += 4 * PK * 4) {
-            __m512i s[TILE];
-            ML_UNROLL(4) for (int t = 0; t < TILE; t++) s[t] = _mm512_setzero_si512();
+            __m512i s[TILE], s2[TILE];
+            ML_UNROLL(4) for (int t = 0; t < TILE; t++) s[t] = s2[t] = _mm512_setzero_si512();
             for (int v = 0; v < 4; v++) {
                 const __m512i w = _mm512_loadu_si512((const void *)(p + v * PK * 4));
                 const __m512i lo = _mm512_and_si512(w, m4), hi = _mm512_and_si512(_mm512_srli_epi16(w, 4), m4);
                 ML_UNROLL(4) for (int t = 0; t < T; t++) {
                     const int32_t *xb = (const int32_t *)(X->q + (size_t)(t0 + t) * X->k + b * QK);
                     s[t] = _mm512_dpbusd_epi32(s[t], lo, _mm512_set1_epi32(xb[v]));
-                    s[t] = _mm512_dpbusd_epi32(s[t], hi, _mm512_set1_epi32(xb[v + 4]));
+                    s2[t] = _mm512_dpbusd_epi32(s2[t], hi, _mm512_set1_epi32(xb[v + 4]));
                 }
             }
             const __m512 dv = _mm512_loadu_ps(d + b * PK);
             ML_UNROLL(4) for (int t = 0; t < T; t++) {
-                s[t] = _mm512_sub_epi32(s[t], _mm512_set1_epi32(xsum[t][b]));
+                s[t] = _mm512_sub_epi32(_mm512_add_epi32(s[t], s2[t]), _mm512_set1_epi32(xsum[t][b]));
                 acc[t] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(s[t]),
                                          _mm512_mul_ps(dv, _mm512_set1_ps(X->d[(size_t)(t0 + t) * nb + b])), acc[t]);
             }

@@ -24,16 +24,33 @@ static inline void pk_block_sums_batch(int (*xsum)[PK_MAX_BLOCKS], const ml_qbat
     }
 }
 
+/* Rows of W per pass over the tokens: about PK_ROW_BYTES of packed weights,
+ * so that a pass stays in L2 while every tile of tokens reads it. Without it
+ * each tile would stream all of r0..r1 from memory again. */
+#ifndef PK_ROW_BYTES
+#define PK_ROW_BYTES (512 * 1024)
+#endif
+static inline int pk_row_block(const ml_qtensor *W, int group) {
+    const size_t row = (W->type == ML_Q8_0 ? (size_t)W->cols : (size_t)W->cols / 2) + W->cols / QK * sizeof(float);
+    const int rows = (int)(PK_ROW_BYTES / row) / group * group;
+    return rows > group ? rows : group;
+}
+
 /* Runs TILE_FN over X's tokens in tiles of N (at most 4), passing the tile's
  * token count as a constant so that each instantiation's loops over tokens
- * unroll completely. */
+ * unroll completely; rows go in blocks of pk_row_block (PK: the
+ * kernel's row group). Every output is the
+ * same whatever the blocking. */
 #define PK_TILES(TILE_FN, N)                                                      \
-    for (int t0 = 0; t0 < X->n; t0 += (N)) {                                      \
-        switch (X->n - t0 < (N) ? X->n - t0 : (N)) {                              \
-        case 4: TILE_FN(Y, ldy, W, X, r0, r1, t0, 4); break;                      \
-        case 3: TILE_FN(Y, ldy, W, X, r0, r1, t0, 3); break;                      \
-        case 2: TILE_FN(Y, ldy, W, X, r0, r1, t0, 2); break;                      \
-        default: TILE_FN(Y, ldy, W, X, r0, r1, t0, 1); break;                     \
+    for (int rb_ = pk_row_block(W, PK), b0_ = r0; b0_ < r1; b0_ += rb_) {             \
+        const int b1_ = r1 - b0_ < rb_ ? r1 : b0_ + rb_;                          \
+        for (int t0 = 0; t0 < X->n; t0 += (N)) {                                  \
+            switch (X->n - t0 < (N) ? X->n - t0 : (N)) {                          \
+            case 4: TILE_FN(Y, ldy, W, X, b0_, b1_, t0, 4); break;                \
+            case 3: TILE_FN(Y, ldy, W, X, b0_, b1_, t0, 3); break;                \
+            case 2: TILE_FN(Y, ldy, W, X, b0_, b1_, t0, 2); break;                \
+            default: TILE_FN(Y, ldy, W, X, b0_, b1_, t0, 1); break;               \
+            }                                                                     \
         }                                                                         \
     }
 

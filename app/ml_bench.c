@@ -50,6 +50,16 @@ static void bench_matvec(int type, int rows, int cols, int iters) {
     else TIME_IT(iters, ml_k_matvec_q4_pk(y, &P, &x, 0, rows));
     printf("%-12s %5dx%-5d %12.0f %8.2f %8.2f\n", type == ML_Q8_0 ? "matvec_q8_pk" : "matvec_q4_pk",
            rows, cols, per * 1e9, bytes / per / 1e9, 2.0 * rows * cols / per / 1e9);
+    /* batched: ML_BATCH_MAX tokens per call, as in prompt prefill */
+    const int nt = ML_BATCH_MAX;
+    ml_qbatch X = { xalloc((size_t)nt * cols), xalloc(sizeof(float) * nt * (cols / QK)), nt, cols };
+    for (int i = 0; i < nt * (cols / QK); i++) X.d[i] = 0.01f;
+    float *Y = xalloc(sizeof(float) * nt * rows);
+    if (type == ML_Q8_0) TIME_IT(1, ml_k_matmul_q8_pk(Y, rows, &P, &X, 0, rows));
+    else TIME_IT(1, ml_k_matmul_q4_pk(Y, rows, &P, &X, 0, rows));
+    printf("%-12s %5dx%-5d %12.0f %8.2f %8.2f\n", type == ML_Q8_0 ? "matmul_q8_pk" : "matmul_q4_pk",
+           rows, cols, per * 1e9, bytes / per / 1e9, 2.0 * rows * cols * nt / per / 1e9);
+    ml_aligned_free(X.q); ml_aligned_free(X.d); ml_aligned_free(Y);
     ml_aligned_free(pq);
     ml_aligned_free(pd);
 #endif
