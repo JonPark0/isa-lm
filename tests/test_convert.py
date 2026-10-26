@@ -530,3 +530,18 @@ def test_imatrix_from_c(tmp_path):
     plain = str(tmp_path / "plain_q4.mlb")
     mlb.write_mlb(plain, cfg, w, "q4")
     assert open(q4, "rb").read() != open(plain, "rb").read()
+
+
+def test_imatrix_weights_tied_classifier(tmp_path):
+    """A tied embedding is the classifier: it takes the classifier's importance."""
+    cfg, w = gen_random.generate(dict(SMALL), seed=1)
+    D, H, L = cfg["dim"], cfg["hidden_dim"], cfg["n_layers"]
+    flat = {"layers": [dict(qkv=np.ones(D), wo=np.ones(D), ffn=np.ones(D), down=np.ones(H))] * L,
+            "cls": np.ones(D), "tokens": 1}
+    skew = dict(flat, cls=np.where(np.arange(D) % 32 < 2, 1e4, 1.0))
+    for shared in (0, 1):
+        c = dict(cfg, shared_classifier=shared)
+        mlb.write_mlb(str(tmp_path / "a.mlb"), c, w, "q4", imatrix=flat)
+        mlb.write_mlb(str(tmp_path / "b.mlb"), c, w, "q4", imatrix=skew)
+        assert (tmp_path / "a.mlb").read_bytes() != (tmp_path / "b.mlb").read_bytes()
+

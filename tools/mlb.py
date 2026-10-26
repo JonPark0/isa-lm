@@ -154,8 +154,8 @@ def quantize_q4(x, imp=None):
     input over sample text (read_imatrix). The error is then weighted as
     llama.cpp does, by imp * sqrt(s2 + x^2) with s2 the row's mean x^2, so
     that weights meeting large activations are kept closer (Qwen2.5 0.5B Q4,
-    imatrix from 32K tokens of wikitext-2 train: perplexity 26.47 -> 25.94 on
-    16 chunks of the test set; imp * x^2 gives 26.17)."""
+    imatrix from 32K tokens of wikitext-2 train: perplexity 26.47 -> 25.30 on
+    16 chunks of the test set; weighting by imp * x^2 did less)."""
     x = np.asarray(x, np.float32)
     b = x.reshape(-1, QK)
     imp = None if imp is None else _importance(imp)
@@ -243,7 +243,7 @@ def write_mlb(path, cfg, w, wtype, q8=(), imatrix=None):
                 continue
             key = name.split(".")[-1]
             t = matrix_type(key, WTYPES[wtype], mask, shared)
-            imp = imatrix_for(imatrix, name) if imatrix else None
+            imp = imatrix_for(imatrix, name, shared) if imatrix else None
             q, d = quantize_q8(arr) if t == WTYPES["q8"] else quantize_q4(arr, imp)
             put(name + ".q", q)
             put(name + ".d", d)
@@ -276,14 +276,16 @@ def read_imatrix(path, cfg):
     return {"layers": layers, "cls": s[-dim:] / ncls if ncls else None, "tokens": ntok}
 
 
-def imatrix_for(imatrix, name):
-    """Importance of the input channels of matrix `name` (write_mlb's names), or None."""
-    if name == "wcls":
+def imatrix_for(imatrix, name, shared=False):
+    """Importance of the input channels of matrix `name` (write_mlb's names), or None.
+    A tied embedding (shared) is the classifier too and takes its importance;
+    otherwise the embedding is only a lookup and keeps the plain fit."""
+    if name == "wcls" or (name == "tok_emb" and shared):
         return imatrix["cls"]
     parts = name.split(".")
     if parts[0] == "layers":
         return imatrix["layers"][int(parts[1])][_IMAT_INPUT[parts[2]]]
-    return None   # the embedding is a lookup, not a product
+    return None
 
 
 def read_mlb(path):
