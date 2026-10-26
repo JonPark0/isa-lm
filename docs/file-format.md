@@ -108,10 +108,12 @@ else:              d = amax / 127,  q = trunc(x * (127/amax) + copysign(0.5, x))
 Every SIMD implementation is bit-identical to the scalar one.
 
 Q4_0 weights are written once, so `tools/mlb.py` fits each block instead: the
-element of largest magnitude goes to a level between -6 and -10 (clamped to
+element of largest magnitude goes to a level between -6 and -8.4 (clamped to
 [-8, 7]) in steps of 0.2, the scale `d` is the least-squares fit for those
 levels with each element weighted by x², and the candidate with the least
-weighted error is kept. `d` can be negative. Any `d` and nibbles are valid
+weighted error is kept. A block whose largest magnitude is below 1e-6 is
+fitted scaled up to 1 and its `d` scaled back, so that float32 squares and
+cubes do not underflow. `d` can be negative. Any `d` and nibbles are valid
 input to the runtime.
 
 With `tools/convert.py --imatrix`, each element's weight is instead, as in

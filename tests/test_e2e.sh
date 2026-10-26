@@ -114,6 +114,10 @@ $RUN $B/ml_run $M/rand_q8.mlb --tokens $TOKENS --dump-logits $T/im.f32 --imatrix
     && $RUN $B/ml_run $M/rand_q8.mlb --tokens $TOKENS --dump-logits $T/im.f32 --imatrix $T/im.a \
     && python3 -c "import struct,sys; h=struct.unpack_from('<4sIIIIIQQ', open(sys.argv[1],'rb').read()); sys.exit(h[6:] != (32, 32))" $T/im.a \
     && ok || bad "--imatrix"
+# a file with bytes after the sums is refused and left as it is
+cp $T/im.a $T/im.tail; printf 'xxxxxxxx' >> $T/im.tail; cp $T/im.tail $T/im.tail0
+$RUN $B/ml_run $M/rand_q8.mlb --tokens $TOKENS --dump-logits $T/im.f32 --imatrix $T/im.tail 2>/dev/null \
+    && bad "--imatrix: trailing bytes accepted" || { cmp -s $T/im.tail $T/im.tail0 && ok || bad "--imatrix: refused file changed"; }
 # a failed write (file size limit) leaves the sums collected so far
 cp $T/im.a $T/im.keep
 (trap '' XFSZ; ulimit -f 2; $RUN $B/ml_run $M/rand_q8.mlb --tokens $TOKENS --dump-logits $T/im.f32 --imatrix $T/im.a 2>/dev/null) \

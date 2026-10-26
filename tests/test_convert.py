@@ -545,3 +545,33 @@ def test_imatrix_weights_tied_classifier(tmp_path):
         mlb.write_mlb(str(tmp_path / "b.mlb"), c, w, "q4", imatrix=skew)
         assert (tmp_path / "a.mlb").read_bytes() != (tmp_path / "b.mlb").read_bytes()
 
+
+def test_quantize_q4_small_blocks():
+    """Blocks of tiny values fit as if scaled up: float32 must not underflow."""
+    rng = np.random.default_rng(0)
+    x = rng.standard_normal((4, 64)).astype(np.float32)
+    for imp in (None, np.ones(64)):
+        p, d = mlb.quantize_q4(x, imp)
+        for sc in (1e-9, 1e-16, 1e-20):
+            ps, ds = mlb.quantize_q4((x * np.float32(sc)).astype(np.float32), imp)
+            assert (ps == p).all()
+            np.testing.assert_allclose(ds / np.float32(sc), d, rtol=1e-6)
+
+
+def test_read_imatrix_refuses_bad_files(tmp_path):
+    cfg = dict(SMALL)
+    n = cfg["n_layers"] * (3 * cfg["dim"] + cfg["hidden_dim"]) + cfg["dim"]
+    good = mlb._IMAT.pack(b"MLI1", 1, cfg["n_layers"], cfg["dim"], cfg["hidden_dim"], 0, 3, 3) + np.ones(n).tobytes()
+    bad = {"short": good[:4], "reserved": good[:20] + b"\1" + good[21:], "trailing": good + b"\0" * 8,
+           "truncated": good[:-8], "no tokens": good[:24] + bytes(16) + good[40:]}
+    p = tmp_path / "x.imat"
+    p.write_bytes(good)
+    assert mlb.read_imatrix(str(p), cfg)["tokens"] == 3
+    for name, data in bad.items():
+        p.write_bytes(data)
+        try:
+            mlb.read_imatrix(str(p), cfg)
+        except ValueError:
+            continue
+        raise AssertionError(f"{name} accepted")
+

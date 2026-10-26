@@ -111,6 +111,10 @@ static int imatrix_save(const char *path, const ml_state *s) {
     uint32_t h[6] = { 0, 1, (uint32_t)c->n_layers, (uint32_t)c->dim, (uint32_t)c->hidden_dim, 0 };
     uint64_t cnt[2] = { s->imat_tokens, s->imat_cls_tokens };
     memcpy(h, "MLI1", 4);
+    if (!s->imat_tokens) {   /* nothing ran (an empty chat): leave the file as it is */
+        fprintf(stderr, "imatrix: no tokens, %s unchanged\n", path);
+        return 1;
+    }
     char tmp[4096];
     if (snprintf(tmp, sizeof tmp, "%s.tmp", path) >= (int)sizeof tmp) {
         fprintf(stderr, "error: %s: path too long\n", path);
@@ -130,7 +134,7 @@ static int imatrix_save(const char *path, const ml_state *s) {
         uint32_t fh[6];
         uint64_t fc[2];
         ok = fread(fh, sizeof fh, 1, f) == 1 && !memcmp(fh, h, sizeof fh) &&
-             fread(fc, sizeof fc, 1, f) == 1 && fread(old, sizeof(double), n, f) == n;
+             fread(fc, sizeof fc, 1, f) == 1 && fread(old, sizeof(double), n, f) == n && fgetc(f) == EOF;
         fclose(f);
         if (!ok) fprintf(stderr, "error: %s is not an importance matrix for this model\n", path);
         if (ok) {

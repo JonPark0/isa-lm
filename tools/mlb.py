@@ -88,6 +88,7 @@ def _pack_q4(v):
     return packed.reshape(*v.shape[:-2], -1)
 
 
+SMALL = np.float32(1e-6)   # Q4 blocks with max |x| below this are fitted rescaled (_q4_search)
 Q4_STEPS = np.arange(-10, 3, dtype=np.float32) * np.float32(0.2)   # largest element -> level -(8 + step)
 
 
@@ -107,7 +108,17 @@ def _q4_search(b, w=None):
     mx = np.take_along_axis(b, np.abs(b).argmax(axis=-1)[:, None], axis=-1)[:, 0]
     zero = np.abs(mx) < TINY
     y = b * (np.float32(1) / np.where(zero, np.float32(1), mx))[:, None]   # largest element at 1
-    w = b * b if w is None else w
+    # Blocks of small values are fitted scaled to a largest magnitude of 1 (and
+    # their weights to a largest weight of 1): the cubes and squares of the fit
+    # would underflow float32 below about 1e-7. The others stay as they are.
+    small = (np.abs(mx) < SMALL) & ~zero
+    up = np.where(small, np.float32(1) / np.where(small, np.abs(mx), 1), np.float32(1)).astype(np.float32)
+    b = b * up[:, None]
+    if w is None:
+        w = b * b
+    else:
+        wmax = w.max(axis=-1)
+        w = w * np.where(small & (wmax > 0), np.float32(1) / np.where(wmax > 0, wmax, 1), np.float32(1))[:, None]
     wb = w * b
     best = step = None
     for s in Q4_STEPS:
@@ -122,7 +133,7 @@ def _q4_search(b, w=None):
             best, step = np.where(better, score, best), np.where(better, s, step)
     lv = np.clip(np.rint(y * -(8 + step)[:, None]), -8, 7)
     den = _sum32(w * lv * lv)
-    d = np.where(den > 0, _sum32(wb * lv) / np.where(den > 0, den, 1), 0)
+    d = np.where(den > 0, _sum32(wb * lv) / np.where(den > 0, den, 1), 0) / up
     return np.where(zero[:, None], 0, lv), np.where(zero, 0, d).astype(np.float32)
 
 
@@ -258,8 +269,10 @@ def read_imatrix(path, cfg):
     """ml_run --imatrix file -> {"layers": [{input: mean square [K]}], "cls": [dim]},
     inputs qkv, wo, ffn (dim) and down (hidden_dim)."""
     data = open(path, "rb").read()
-    magic, ver, nl, dim, hid, _, ntok, ncls = _IMAT.unpack_from(data)
-    if magic != b"MLI1" or ver != 1:
+    if len(data) < _IMAT.size:
+        raise ValueError(f"{path}: not an importance matrix")
+    magic, ver, nl, dim, hid, zero, ntok, ncls = _IMAT.unpack_from(data)
+    if magic != b"MLI1" or ver != 1 or zero:
         raise ValueError(f"{path}: not an importance matrix")
     if (nl, dim, hid) != (cfg["n_layers"], cfg["dim"], cfg["hidden_dim"]):
         raise ValueError(f"{path}: for a model with {nl} layers, dim {dim}, hidden_dim {hid}")
@@ -267,7 +280,7 @@ def read_imatrix(path, cfg):
         raise ValueError(f"{path}: no tokens")
     s = np.frombuffer(data, np.float64, offset=_IMAT.size)
     if len(s) != nl * (3 * dim + hid) + dim:
-        raise ValueError(f"{path}: truncated")
+        raise ValueError(f"{path}: wrong size for this model")
     layers = []
     for i in range(nl):
         o = i * (3 * dim + hid)
