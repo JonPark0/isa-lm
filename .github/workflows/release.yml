@@ -1,8 +1,10 @@
 name: Release
 
-# Pushing a tag vX.Y.Z (matching ML_VERSION in core/ml.h) builds the binaries
-# for every platform and ISA, runs them, and publishes a GitHub release with
-# the notes from CHANGELOG.md. workflow_dispatch rebuilds an existing tag.
+# Builds the binaries for every platform and ISA, runs them, and publishes a
+# GitHub release vX.Y.Z (ML_VERSION in core/ml.h) with the notes from
+# CHANGELOG.md. Started by auto-release.yml when main gets a new ML_VERSION
+# (the tag is created at publishing, on that commit), by pushing a tag vX.Y.Z,
+# or by hand (workflow_dispatch) to rebuild an existing tag.
 on:
   push:
     tags: ["v*"]
@@ -10,6 +12,16 @@ on:
     inputs:
       tag:
         description: "Existing tag to build and publish, e.g. v0.1.0"
+        required: true
+  workflow_call:
+    inputs:
+      tag:
+        description: "Tag to publish, vX.Y.Z"
+        type: string
+        required: true
+      sha:
+        description: "Commit to build and tag"
+        type: string
         required: true
 
 permissions:
@@ -21,15 +33,16 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+      TAG: ${{ inputs.tag || github.ref_name }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{ inputs.sha || inputs.tag || github.ref }}
       - name: Release notes from CHANGELOG.md
         # first: a tag without its CHANGELOG section fails here, not after the builds
         run: |
           v=${TAG#v}
+          grep -q "^#define ML_VERSION \"$v\"" core/ml.h || { echo "$TAG does not match ML_VERSION in core/ml.h"; exit 1; }
           awk -v v="$v" '/^## /{p = ($2 == v)} p' CHANGELOG.md | tail -n +2 > notes.md
           test -s notes.md || { echo "CHANGELOG.md has no section for $v"; exit 1; }
           printf '\n### Downloads\n\nPick the archive for your platform and run `./ml_run` (or `ml_run.cmd` on Windows): it starts the fastest build your CPU supports. Checksums are in `SHA256SUMS`.\n' >> notes.md
@@ -57,6 +70,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.TAG }}
+          target_commitish: ${{ inputs.sha || github.sha }}
           name: isa-lm ${{ env.TAG }}
           body_path: notes.md
           files: dist/*
