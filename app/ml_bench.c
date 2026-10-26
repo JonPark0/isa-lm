@@ -95,6 +95,11 @@ int ml_main(int argc, char **argv) {
     bench_matvec(ML_Q8_0, 4096, 4096, 1);
     bench_matvec(ML_Q4_0, 768, 768, 20);
     bench_matvec(ML_Q4_0, 4096, 4096, 1);
+    /* the FFN shapes of a 0.5B model (Qwen2.5): long rows weigh on per-block work */
+    bench_matvec(ML_Q8_0, 4864, 896, 1);
+    bench_matvec(ML_Q8_0, 896, 4864, 1);
+    bench_matvec(ML_Q4_0, 4864, 896, 1);
+    bench_matvec(ML_Q4_0, 896, 4864, 1);
     bench_quantize(4096, 100);
     if (!model) return 0;
 
