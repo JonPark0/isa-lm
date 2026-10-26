@@ -101,13 +101,13 @@ def _sum32(a):
     return a[..., 0]
 
 
-def _q4_search(b, imp=None):
-    """Blocks b[n, 32] -> (levels, scales) minimizing the x^2-weighted error,
-    times imp[n, 32] (channel importance) when given."""
+def _q4_search(b, w=None):
+    """Blocks b[n, 32] -> (levels, scales) minimizing the error weighted by
+    w[n, 32] (default x^2)."""
     mx = np.take_along_axis(b, np.abs(b).argmax(axis=-1)[:, None], axis=-1)[:, 0]
     zero = np.abs(mx) < TINY
     y = b * (np.float32(1) / np.where(zero, np.float32(1), mx))[:, None]   # largest element at 1
-    w = b * b if imp is None else b * b * imp
+    w = b * b if w is None else w
     wb = w * b
     best = step = None
     for s in Q4_STEPS:
@@ -151,18 +151,27 @@ def quantize_q4(x, imp=None):
     of blocks run on a thread pool (numpy releases the GIL).
 
     imp[K]: importance of each input channel, the mean square of the matrix
-    input over sample text (read_imatrix). The error is then weighted by
-    x^2 * imp, so that weights meeting large activations are kept closer."""
+    input over sample text (read_imatrix). The error is then weighted as
+    llama.cpp does, by imp * sqrt(s2 + x^2) with s2 the row's mean x^2, so
+    that weights meeting large activations are kept closer (Qwen2.5 0.5B Q4,
+    imatrix from 32K tokens of wikitext-2 train: perplexity 26.47 -> 25.94 on
+    16 chunks of the test set; imp * x^2 gives 26.17)."""
     x = np.asarray(x, np.float32)
     b = x.reshape(-1, QK)
     imp = None if imp is None else _importance(imp)
     nb = x.shape[-1] // QK
+    if imp is not None:
+        # row mean of x^2, summed in a fixed order (block trees, then blocks in turn)
+        sq = b.astype(np.float64) ** 2
+        s2 = (np.cumsum(_sum32(sq).reshape(-1, nb), axis=1)[:, -1] / x.shape[-1]).astype(np.float32)
+        impb = imp.reshape(nb, QK)
 
     def search(i):
         c = b[i:i + 4096]
         if imp is None:
             return _q4_search(c)
-        return _q4_search(c, imp.reshape(nb, QK)[np.arange(i, i + len(c)) % nb])
+        idx = np.arange(i, i + len(c))
+        return _q4_search(c, impb[idx % nb] * np.sqrt(s2[idx // nb][:, None] + c * c))
 
     with ThreadPoolExecutor(os.cpu_count() or 1) as ex:
         parts = list(ex.map(search, range(0, len(b), 4096)))

@@ -464,19 +464,19 @@ def test_mixed_q4_q8_classes(tmp_path):
 
 
 def test_quantize_q4_imatrix():
-    """Uniform importance changes nothing; skewed importance lowers the error
-    where it is weighted."""
+    """Importance is relative (a constant factor changes nothing), skewed
+    importance lowers the error where it is weighted, and an empty matrix
+    falls back to the plain fit."""
     rng = np.random.default_rng(5)
     x = rng.standard_normal((64, 256)).astype(np.float32)
     plain = mlb.quantize_q4(x)
-    same = mlb.quantize_q4(x, np.full(256, 3.0))
-    assert (plain[0] == same[0]).all() and (plain[1] == same[1]).all()
+    one, three = mlb.quantize_q4(x, np.ones(256)), mlb.quantize_q4(x, np.full(256, 3.0))
+    assert (one[0] == three[0]).all() and (one[1] == three[1]).all()
     imp = np.where(np.arange(256) % 32 < 4, 50.0, 1.0)   # 4 channels of every block matter
-    ip, idq = mlb.quantize_q4(x, imp)
 
-    def werr(p, d):
-        return ((mlb.dequant(mlb.QT(mlb.WTYPES["q4"], p, d, x.shape)) - x) ** 2 * x ** 2 * imp).sum()
-    assert werr(ip, idq) < 0.9 * werr(*plain)
+    def err(p, d):
+        return ((mlb.dequant(mlb.QT(mlb.WTYPES["q4"], p, d, x.shape)) - x) ** 2 * imp).sum()
+    assert err(*mlb.quantize_q4(x, imp)) < 0.9 * err(*plain)
     z = mlb.quantize_q4(x, np.zeros(256))   # nothing recorded: plain fit
     assert (z[0] == plain[0]).all()
 

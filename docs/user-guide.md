@@ -254,8 +254,20 @@ python3 tools/perplexity.py build/avx2/ml_run q8.mlb tok.mlt sample.txt --ml-tok
 python3 tools/convert.py hf ./Qwen2.5-0.5B-Instruct q4.mlb --wtype q4 --imatrix qwen.imat
 ```
 
-Use text unlike the one you measure perplexity on. The embedding is a lookup
-and keeps the plain fit; Q8 matrices ignore the importance matrix.
+The embedding is a lookup and keeps the plain fit; Q8 matrices ignore the
+importance matrix. Qwen2.5 0.5B Instruct Q4 on the wikitext-2 test set
+(`tools/perplexity.py --ctx 512`; importance matrix from the first 32K tokens
+of the wikitext-2 training set, `--chunks 64`):
+
+| Weights | 4 chunks | 16 chunks | `--llama-cpp`, 4 chunks |
+|---------|---------:|----------:|------------------------:|
+| Q8 | 19.01 | 22.10 | 13.33 |
+| Q4 | 21.72 | 26.47 | 15.13 |
+| Q4 `--imatrix` | 21.39 | 25.94 | 14.71 |
+
+It closes about an eighth of the gap to Q8. The gain depends on the sample
+text: an importance matrix from TinyStories gives 26.37 on 16 chunks. Collect
+it on text like the model's use.
 
 | Format | Bits per weight | Notes |
 |--------|-----------------|-------|

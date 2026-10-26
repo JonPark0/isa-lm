@@ -114,10 +114,11 @@ levels with each element weighted by x², and the candidate with the least
 weighted error is kept. `d` can be negative. Any `d` and nibbles are valid
 input to the runtime.
 
-With `tools/convert.py --imatrix`, each element's weight is x² times the
-importance of its input channel: the channel's mean squared input
-(`ml_run --imatrix`) divided by its matrix's mean over channels, and at least
-0.001.
+With `tools/convert.py --imatrix`, each element's weight is instead, as in
+llama.cpp, `imp × sqrt(s² + x²)`: `s²` is the mean x² of the element's row,
+and `imp` the importance of its input channel, the channel's mean squared
+input (`ml_run --imatrix`) divided by its matrix's mean over channels, and at
+least 0.001.
 
 ### Importance matrix file
 
