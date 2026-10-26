@@ -552,7 +552,7 @@ def test_quantize_q4_small_blocks():
     x = rng.standard_normal((4, 64)).astype(np.float32)
     for imp in (None, np.ones(64)):
         p, d = mlb.quantize_q4(x, imp)
-        for sc in (1e-9, 1e-16, 1e-20):
+        for sc in (1e-9, 1e-16, 1e-20, 1e-25):
             ps, ds = mlb.quantize_q4((x * np.float32(sc)).astype(np.float32), imp)
             assert (ps == p).all()
             np.testing.assert_allclose(ds / np.float32(sc), d, rtol=1e-6)
@@ -563,7 +563,8 @@ def test_read_imatrix_refuses_bad_files(tmp_path):
     n = cfg["n_layers"] * (3 * cfg["dim"] + cfg["hidden_dim"]) + cfg["dim"]
     good = mlb._IMAT.pack(b"MLI1", 1, cfg["n_layers"], cfg["dim"], cfg["hidden_dim"], 0, 3, 3) + np.ones(n).tobytes()
     bad = {"short": good[:4], "reserved": good[:20] + b"\1" + good[21:], "trailing": good + b"\0" * 8,
-           "truncated": good[:-8], "no tokens": good[:24] + bytes(16) + good[40:]}
+           "truncated": good[:-8], "no tokens": good[:24] + bytes(16) + good[40:],
+           "nan": good[:-8] + np.array([np.nan]).tobytes(), "negative": good[:-8] + np.array([-1.0]).tobytes()}
     p = tmp_path / "x.imat"
     p.write_bytes(good)
     assert mlb.read_imatrix(str(p), cfg)["tokens"] == 3

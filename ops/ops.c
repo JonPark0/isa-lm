@@ -208,8 +208,9 @@ void ml_attention_batch(ml_pool *pool, float *out, const float *q, const ml_kv_l
     /* Multiply-adds, in double: a 32-bit size_t would wrap on long contexts. */
     const double work = 2.0 * cfg->n_heads * cfg->head_dim * ((double)n * pos0 + (double)n * (n + 1) / 2);
     const int serial = work < PARALLEL_MIN_WEIGHTS;
-    if (!serial && n * (cfg->n_heads / heads) < nt) {
-        /* too few items to occupy the pool: split each position by heads */
+    if (!serial && heads > 1 && n * (cfg->n_heads / heads) < nt) {
+        /* too few items to occupy the pool: split each position by heads (with
+         * heads == 1 the batch already does, over all positions at once) */
         for (int t = 0; t < n; t++)
             ml_attention(pool, out + (size_t)t * cfg->dim, q + (size_t)t * cfg->dim, kv, att_scratch,
                          qq, qd, cfg, pos0 + t);

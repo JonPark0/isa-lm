@@ -118,7 +118,7 @@ def _q4_search(b, w=None):
         w = b * b
     else:
         wmax = w.max(axis=-1)
-        w = w * np.where(small & (wmax > 0), np.float32(1) / np.where(wmax > 0, wmax, 1), np.float32(1))[:, None]
+        w = w / np.where(small & (wmax > 0), wmax, np.float32(1))[:, None]   # a division: 1/wmax could overflow
     wb = w * b
     best = step = None
     for s in Q4_STEPS:
@@ -174,7 +174,8 @@ def quantize_q4(x, imp=None):
     if imp is not None:
         # row mean of x^2, summed in a fixed order (block trees, then blocks in turn)
         sq = b.astype(np.float64) ** 2
-        s2 = (np.cumsum(_sum32(sq).reshape(-1, nb), axis=1)[:, -1] / x.shape[-1]).astype(np.float32)
+        s2_64 = np.cumsum(_sum32(sq).reshape(-1, nb), axis=1)[:, -1] / x.shape[-1]
+        s2 = s2_64.astype(np.float32)
         impb = imp.reshape(nb, QK)
 
     def search(i):
@@ -182,7 +183,13 @@ def quantize_q4(x, imp=None):
         if imp is None:
             return _q4_search(c)
         idx = np.arange(i, i + len(c))
-        return _q4_search(c, impb[idx % nb] * np.sqrt(s2[idx // nb][:, None] + c * c))
+        w = impb[idx % nb] * np.sqrt(s2[idx // nb][:, None] + c * c)
+        # tiny rows: s2 and c^2 underflow float32 below about 4e-23; take them in float64
+        tiny = np.abs(c).max(axis=-1) < SMALL
+        if tiny.any():
+            c64 = c[tiny].astype(np.float64)
+            w[tiny] = (impb[idx[tiny] % nb] * np.sqrt(s2_64[idx[tiny] // nb][:, None] + c64 * c64)).astype(np.float32)
+        return _q4_search(c, w)
 
     with ThreadPoolExecutor(os.cpu_count() or 1) as ex:
         parts = list(ex.map(search, range(0, len(b), 4096)))
@@ -281,6 +288,8 @@ def read_imatrix(path, cfg):
     s = np.frombuffer(data, np.float64, offset=_IMAT.size)
     if len(s) != nl * (3 * dim + hid) + dim:
         raise ValueError(f"{path}: wrong size for this model")
+    if ncls > ntok or not np.all(np.isfinite(s) & (s >= 0)):
+        raise ValueError(f"{path}: damaged (negative or non-finite sums)")
     layers = []
     for i in range(nl):
         o = i * (3 * dim + hid)

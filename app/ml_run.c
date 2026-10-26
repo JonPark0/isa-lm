@@ -148,13 +148,17 @@ static int imatrix_save(const char *path, const ml_state *s) {
         ok = f && fwrite(h, sizeof h, 1, f) == 1 && fwrite(cnt, sizeof cnt, 1, f) == 1 &&
              fwrite(sum, sizeof(double), n, f) == n;
         if (f && fclose(f) != 0) ok = 0;
-#ifdef _WIN32
-        if (ok) remove(path);   /* Windows rename does not replace */
-#endif
-        if (ok && rename(tmp, path) != 0) ok = 0;
         if (!ok) {
-            fprintf(stderr, "error: cannot write %s\n", path);
+            fprintf(stderr, "error: cannot write %s\n", tmp);
             remove(tmp);
+        } else {
+#ifdef _WIN32
+            remove(path);   /* Windows rename does not replace */
+#endif
+            if (rename(tmp, path) != 0) {   /* keep tmp: on Windows path may be gone already */
+                fprintf(stderr, "error: cannot rename %s to %s; the sums are in %s\n", tmp, path, tmp);
+                ok = 0;
+            }
         }
     }
     free(sum);
