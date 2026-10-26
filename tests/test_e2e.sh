@@ -151,6 +151,25 @@ for t in 3 4 7; do
 done
 $RUN $B/ml_run $M/ctx_q4.mlb --tokens $CTX --dump-logits $T/ctx.q8.t3.f32 --kv q8 -t 3 \
     && cmp -s $T/ctx.q8.f32 $T/ctx.q8.t3.f32 && ok || bad "logits with --kv q8 -t 3 differ from -t 1"
+# a model wide enough (dim 2048, 32-token steps) for the batched step's
+# per-token stages to run across threads as well
+if [ $NT -gt 1 ]; then
+    python3 tools/gen_random.py --out $T/wide.mlb --wtype q4 --dim 2048 --layers 1 --heads 16 --kv-heads 4 \
+        --hidden 2048 --vocab 96 --max-seq 80 --seed 3 >/dev/null
+    W40=$(seq 1 40 | awk '{print ($1 * 7) % 95 + 1}' | paste -sd, -)
+    for kv in f32 q8; do
+        $RUN $B/ml_run $T/wide.mlb --tokens $W40 --dump-logits $T/wide.t1.f32 --kv $kv -t 1 --batch 1 \
+            && $RUN $B/ml_run $T/wide.mlb --tokens $W40 --dump-logits $T/wide.t4.f32 --kv $kv -t 4 \
+            && cmp -s $T/wide.t1.f32 $T/wide.t4.f32 && ok || bad "wide model: -t 4 batched differs from -t 1 --batch 1 (--kv $kv)"
+    done
+fi
+# batched attention splits (position, KV head) pairs across threads
+for kv in f32 q8; do
+    $RUN $B/ml_run $M/ctx_q4.mlb --tokens $CTX --dump-logits $T/ctx.$kv.t4.f32 --kv $kv -t 4 \
+        && $RUN $B/ml_run $M/ctx_q4.mlb --tokens $CTX --dump-logits $T/ctx.$kv.t4b1.f32 --kv $kv -t 4 --batch 1 \
+        && cmp -s $T/ctx.$kv.f32 $T/ctx.$kv.t4.f32 && cmp -s $T/ctx.$kv.f32 $T/ctx.$kv.t4b1.f32 \
+        && ok || bad "150-position logits with --kv $kv -t 4 differ from -t 1"
+done
 err=$($RUN $B/ml_run $M/rand_q4.mlb --tokens 1,2 -n 8 -t 4 2>&1 >/dev/null)
 echo "$err" | grep -q "threads: $NT," && ok || bad "expected 'threads: $NT' in: $err"
 

@@ -21,6 +21,12 @@
 
 ### Changed
 
+- Faster prompt prefill: the packed matmul works through L2-sized blocks of
+  rows, the AVX-512 VNNI tiles share each activation broadcast between two
+  row groups, and a batched step's attention and per-token work run across
+  threads in one pass each. 128-token prefill of a Qwen2.5-0.5B-shaped model
+  on a 4-vCPU AVX-512 VNNI Xeon: Q8 180 → 260 tok/s on 1 thread and 600 →
+  925 on 4; Q4 250 → 290 and about 660 → 890. Logits are unchanged.
 - `tools/convert.py hf` refuses architectures it cannot run correctly
   (`model_type` other than llama, mistral or qwen2; activations other than
   SiLU; explicit `head_dim`; biases other than q/k/v) instead of writing a

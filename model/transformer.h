@@ -13,14 +13,15 @@ typedef struct {
     ml_model *m;
     ml_arena arena;
     ml_pool *pool;
-    float *x, *xb, *xb2, *hb, *hb2, *q, *att, *logits;
+    float *x, *xb, *xb2, *hb, *hb2, *q, *logits;
+    float *att;                    /* scores [max(n_heads, threads * heads per KV head)][max_seq] */
     int kv_type;                   /* ML_F32 or ML_Q8_0 (see ml_state_init) */
     float *kcache, *vcache;        /* F32: [layer][max_seq][kv_dim] */
     int8_t *kq, *vq;               /* Q8: [layer][max_seq][kv_dim] */
     float *kd, *vd;                /* Q8: [layer][max_seq][n_kv_heads] scales */
     float *kbuf, *vbuf;            /* Q8: this step's K and V before quantization, [ML_BATCH_MAX][kv_dim] */
-    int8_t *qq;                    /* Q8: quantized query heads [dim] */
-    float *qd;                     /* Q8: their scales [n_heads] */
+    int8_t *qq;                    /* Q8: quantized query heads [ML_BATCH_MAX][dim] */
+    float *qd;                     /* Q8: their scales [ML_BATCH_MAX][n_heads] */
     float *rope_cos, *rope_sin;    /* [max_seq][head_dim/2] */
     ml_qact qa_dim, qa_hidden;
     /* prompt prefill: up to ML_BATCH_MAX tokens per batched step */

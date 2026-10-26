@@ -23,6 +23,10 @@ static double rope_inv_freq(const ml_config *c, int i) {
 
 const char *const ml_prof_names[ML_PROF_COUNT] = { "qkv", "attention", "wo", "ffn", "classifier", "other" };
 
+/* Per-token work (floats) below which a stage of a batched step stays on
+ * the calling thread: a pass over the pool costs a few microseconds. */
+#define TOK_PARALLEL_MIN (1 << 16)
+
 /* Runs stmt, adding its wall time to prof[cat] when profiling is on. */
 #define PROF(cat, stmt) do {                                                  \
         if (s->profile) { const double t0_ = ml_now(); stmt; s->prof[cat] += ml_now() - t0_; } \
@@ -36,6 +40,10 @@ ml_status ml_state_init(ml_state *s, ml_model *m, int nthreads, int kv_type) {
     const int q8 = kv_type == ML_Q8_0;
     const ml_config *c = &m->cfg;
     const size_t f = sizeof(float);
+    /* attention scores: n_heads rows for one position, or a KV head's worth
+     * of rows per thread for a batch (ml_attention_batch) */
+    const int group = c->n_heads / c->n_kv_heads, nthr = ml_pool_threads(nthreads);
+    const size_t att_rows = (size_t)nthr * group > (size_t)c->n_heads ? (size_t)nthr * group : (size_t)c->n_heads;
     size_t lkv, kv, half, lks, ks, need = 0;
     /* Sizes are products of header fields: check them, a 32-bit size_t wraps. */
     if (!ml_mul_size((size_t)c->n_layers, (size_t)c->kv_dim, &lkv) ||
@@ -48,8 +56,9 @@ ml_status ml_state_init(ml_state *s, ml_model *m, int nthreads, int kv_type) {
      * each padded to ML_ALIGN by the arena. */
     const size_t parts[][2] = {
         { 4, f * c->dim }, { 2, f * c->hidden_dim }, { 1, f * c->vocab },
-        { (size_t)c->n_heads, f * c->max_seq }, { 2, q8 ? kv : f * kv }, { 2, q8 ? f * ks : 0 },
-        { 2, q8 ? f * ML_BATCH_MAX * c->kv_dim : 0 }, { 1, q8 ? (size_t)c->dim : 0 }, { 1, q8 ? f * c->n_heads : 0 },
+        { att_rows, f * c->max_seq }, { 2, q8 ? kv : f * kv }, { 2, q8 ? f * ks : 0 },
+        { 2, q8 ? f * ML_BATCH_MAX * c->kv_dim : 0 }, { 1, q8 ? (size_t)ML_BATCH_MAX * c->dim : 0 },
+        { 1, q8 ? f * ML_BATCH_MAX * c->n_heads : 0 },
         { 2, f * half },
         { 1, (size_t)c->dim }, { 1, f * c->dim / QK }, { 1, (size_t)c->hidden_dim }, { 1, f * c->hidden_dim / QK },
         { 4, f * ML_BATCH_MAX * c->dim }, { 2, f * ML_BATCH_MAX * c->hidden_dim },
@@ -71,7 +80,7 @@ ml_status ml_state_init(ml_state *s, ml_model *m, int nthreads, int kv_type) {
     s->hb = ml_arena_alloc(a, f * c->hidden_dim);
     s->hb2 = ml_arena_alloc(a, f * c->hidden_dim);
     s->q = ml_arena_alloc(a, f * c->dim);
-    s->att = ml_arena_alloc(a, f * c->n_heads * c->max_seq);
+    s->att = ml_arena_alloc(a, f * att_rows * c->max_seq);
     s->logits = ml_arena_alloc(a, f * c->vocab);
     if (q8) {
         s->kq = ml_arena_alloc(a, kv);
@@ -80,8 +89,8 @@ ml_status ml_state_init(ml_state *s, ml_model *m, int nthreads, int kv_type) {
         s->vd = ml_arena_alloc(a, f * ks);
         s->kbuf = ml_arena_alloc(a, f * ML_BATCH_MAX * c->kv_dim);
         s->vbuf = ml_arena_alloc(a, f * ML_BATCH_MAX * c->kv_dim);
-        s->qq = ml_arena_alloc(a, (size_t)c->dim);
-        s->qd = ml_arena_alloc(a, f * c->n_heads);
+        s->qq = ml_arena_alloc(a, (size_t)ML_BATCH_MAX * c->dim);
+        s->qd = ml_arena_alloc(a, f * ML_BATCH_MAX * c->n_heads);
     } else {
         s->kcache = ml_arena_alloc(a, f * kv);
         s->vcache = ml_arena_alloc(a, f * kv);
@@ -214,22 +223,86 @@ float *ml_forward(ml_state *s, int token, int pos) {
     return s->logits;
 }
 
-/* Quantizes rows [0, n) of src (each k floats) into the batch q. */
-static void quantize_rows(ml_qbatch *q, const float *src, int n) {
-    q->n = n;
-    for (int t = 0; t < n; t++) {
-        ml_qact qt = { q->q + (size_t)t * q->k, q->d + (size_t)t * (q->k / QK), q->k };
-        ml_k_quantize_q8(&qt, src + (size_t)t * q->k, q->k);
+/* Quantizes row t of src (k floats each) into the batch q. */
+static void quantize_row_t(ml_qbatch *q, const float *src, int t) {
+    ml_qact qt = { q->q + (size_t)t * q->k, q->d + (size_t)t * (q->k / QK), q->k };
+    ml_k_quantize_q8(&qt, src + (size_t)t * q->k, q->k);
+}
+
+/* The per-token work between two matrix products of a batched step. */
+enum { TOK_ATTN_IN, TOK_QKV_OUT, TOK_WO_IN, TOK_FFN_IN, TOK_DOWN_IN, TOK_RESID, TOK_CLS_IN };
+
+typedef struct {
+    ml_state *s;
+    const ml_layer *L;   /* NULL for TOK_CLS_IN */
+    float *kc, *vc;      /* this step's K and V rows */
+    int l, pos0, n, stage;
+} tok_ctx;
+
+static void token_stage(const tok_ctx *c, int t) {
+    ml_state *s = c->s;
+    const ml_config *cfg = &s->m->cfg;
+    const ml_layer *L = c->L;
+    const int D = cfg->dim, H = cfg->hidden_dim, KV = cfg->kv_dim, h2 = cfg->head_dim / 2;
+    float *x = s->bx + (size_t)t * D, *xb = s->bxb + (size_t)t * D;
+    switch (c->stage) {
+    case TOK_ATTN_IN:
+        ml_k_rmsnorm(xb, x, L->attn_norm, D, cfg->norm_eps);
+        quantize_row_t(&s->qb_dim, s->bxb, t);
+        break;
+    case TOK_QKV_OUT: {
+        float *q = s->bq + (size_t)t * D, *k = c->kc + (size_t)t * KV, *v = c->vc + (size_t)t * KV;
+        if (L->bq) { ml_k_add(q, L->bq, D); ml_k_add(k, L->bk, KV); ml_k_add(v, L->bv, KV); }
+        ml_k_rope(q, k, s->rope_cos + (size_t)(c->pos0 + t) * h2, s->rope_sin + (size_t)(c->pos0 + t) * h2,
+                  cfg->head_dim, cfg->n_heads, cfg->n_kv_heads);
+        store_kv(s, c->l, c->pos0 + t, k, v);
+        break;
     }
+    case TOK_WO_IN:
+        quantize_row_t(&s->qb_dim, s->bxb, t);
+        break;
+    case TOK_FFN_IN:
+        ml_k_add(x, s->bxb2 + (size_t)t * D, D);
+        ml_k_rmsnorm(xb, x, L->ffn_norm, D, cfg->norm_eps);
+        quantize_row_t(&s->qb_dim, s->bxb, t);
+        break;
+    case TOK_DOWN_IN:
+        ml_k_silu_mul(s->bhb + (size_t)t * H, s->bhb2 + (size_t)t * H, H);
+        quantize_row_t(&s->qb_hidden, s->bhb, t);
+        break;
+    case TOK_RESID:
+        ml_k_add(x, s->bxb2 + (size_t)t * D, D);
+        break;
+    case TOK_CLS_IN:
+        ml_k_rmsnorm(xb, x, s->m->final_norm, D, cfg->norm_eps);
+        quantize_row_t(&s->qb_dim, s->bxb, t);
+        break;
+    }
+}
+
+static void token_task(void *p, int tid, int nt) {
+    const tok_ctx *c = p;
+    for (int t = tid; t < c->n; t += nt) token_stage(c, t);
+}
+
+/* Runs a stage for every token; across the pool once there is enough of it. */
+static void tokens_run(tok_ctx *c, int stage) {
+    const ml_config *cfg = &c->s->m->cfg;
+    c->stage = stage;
+    const size_t work = (size_t)c->n * (stage == TOK_DOWN_IN ? cfg->hidden_dim : cfg->dim);
+    if (work < TOK_PARALLEL_MIN) token_task(c, 0, 1);
+    else ml_pool_run(c->s->pool, token_task, c);
 }
 
 /* One batched step. Every per-token operation is the one ml_forward does,
  * in the same order, so logits match token-by-token decoding bit for bit;
- * only the matrix products are shared across the n tokens. */
+ * only the matrix products are shared across the n tokens, and the
+ * per-token work is split across threads by token. */
 static void prefill_step(ml_state *s, const int *tok, int n, int pos0, float *logits) {
     const ml_model *m = s->m;
     const ml_config *c = &m->cfg;
-    const int D = c->dim, H = c->hidden_dim, KV = c->kv_dim, h2 = c->head_dim / 2;
+    const int D = c->dim, H = c->hidden_dim, KV = c->kv_dim;
+    s->qb_dim.n = s->qb_hidden.n = n;
     PROF(ML_PROF_OTHER, for (int t = 0; t < n; t++) ml_dequant_row(s->bx + (size_t)t * D, &m->tok_emb, tok[t]));
     for (int l = 0; l < c->n_layers; l++) {
         const ml_layer *L = &m->layers[l];
@@ -237,50 +310,30 @@ static void prefill_step(ml_state *s, const int *tok, int n, int pos0, float *lo
         /* F32: K and V go straight into the cache rows; Q8: into kbuf/vbuf first */
         float *kc = s->kbuf ? s->kbuf : s->kcache + ((size_t)l * c->max_seq + pos0) * KV;
         float *vc = s->vbuf ? s->vbuf : s->vcache + ((size_t)l * c->max_seq + pos0) * KV;
-        PROF(ML_PROF_OTHER, for (int t = 0; t < n; t++)
-                                ml_k_rmsnorm(s->bxb + (size_t)t * D, s->bx + (size_t)t * D, L->attn_norm, D, c->norm_eps);
-                            quantize_rows(&s->qb_dim, s->bxb, n));
+        tok_ctx tc = { s, L, kc, vc, l, pos0, n, 0 };
+        PROF(ML_PROF_OTHER, tokens_run(&tc, TOK_ATTN_IN));
         IMAT(l, ML_IMAT_QKV, s->bxb, n, D);
         PROF(ML_PROF_QKV, ml_matmul(s->pool, s->bq, D, &L->wq, &s->qb_dim);
                           ml_matmul(s->pool, kc, KV, &L->wk, &s->qb_dim);
                           ml_matmul(s->pool, vc, KV, &L->wv, &s->qb_dim));
-        if (L->bq) PROF(ML_PROF_OTHER, for (int t = 0; t < n; t++) {
-                                           ml_k_add(s->bq + (size_t)t * D, L->bq, D);
-                                           ml_k_add(kc + (size_t)t * KV, L->bk, KV);
-                                           ml_k_add(vc + (size_t)t * KV, L->bv, KV);
-                                       });
-        PROF(ML_PROF_OTHER, for (int t = 0; t < n; t++) {
-                                ml_k_rope(s->bq + (size_t)t * D, kc + (size_t)t * KV,
-                                          s->rope_cos + (size_t)(pos0 + t) * h2, s->rope_sin + (size_t)(pos0 + t) * h2,
-                                          c->head_dim, c->n_heads, c->n_kv_heads);
-                                store_kv(s, l, pos0 + t, kc + (size_t)t * KV, vc + (size_t)t * KV);
-                            });
-        PROF(ML_PROF_ATTN, for (int t = 0; t < n; t++)
-                               ml_attention(s->pool, s->bxb + (size_t)t * D, s->bq + (size_t)t * D, &kv, s->att,
-                                            s->qq, s->qd, c, pos0 + t));
-        PROF(ML_PROF_OTHER, quantize_rows(&s->qb_dim, s->bxb, n));
+        PROF(ML_PROF_OTHER, tokens_run(&tc, TOK_QKV_OUT));
+        PROF(ML_PROF_ATTN, ml_attention_batch(s->pool, s->bxb, s->bq, &kv, s->att, s->qq, s->qd, c, pos0, n));
+        PROF(ML_PROF_OTHER, tokens_run(&tc, TOK_WO_IN));
         IMAT(l, ML_IMAT_WO, s->bxb, n, D);
         PROF(ML_PROF_WO, ml_matmul(s->pool, s->bxb2, D, &L->wo, &s->qb_dim));
-        PROF(ML_PROF_OTHER, for (int t = 0; t < n; t++) {
-                                ml_k_add(s->bx + (size_t)t * D, s->bxb2 + (size_t)t * D, D);
-                                ml_k_rmsnorm(s->bxb + (size_t)t * D, s->bx + (size_t)t * D, L->ffn_norm, D, c->norm_eps);
-                            }
-                            quantize_rows(&s->qb_dim, s->bxb, n));
+        PROF(ML_PROF_OTHER, tokens_run(&tc, TOK_FFN_IN));
         IMAT(l, ML_IMAT_FFN, s->bxb, n, D);
         PROF(ML_PROF_FFN, ml_matmul(s->pool, s->bhb, H, &L->w1, &s->qb_dim);
                           ml_matmul(s->pool, s->bhb2, H, &L->w3, &s->qb_dim));
-        PROF(ML_PROF_OTHER, for (int t = 0; t < n; t++)
-                                ml_k_silu_mul(s->bhb + (size_t)t * H, s->bhb2 + (size_t)t * H, H);
-                            quantize_rows(&s->qb_hidden, s->bhb, n));
+        PROF(ML_PROF_OTHER, tokens_run(&tc, TOK_DOWN_IN));
         IMAT(l, ML_IMAT_DOWN, s->bhb, n, H);
         PROF(ML_PROF_FFN, ml_matmul(s->pool, s->bxb2, D, &L->w2, &s->qb_hidden));
-        PROF(ML_PROF_OTHER, for (int t = 0; t < n; t++) ml_k_add(s->bx + (size_t)t * D, s->bxb2 + (size_t)t * D, D));
+        PROF(ML_PROF_OTHER, tokens_run(&tc, TOK_RESID));
     }
     if (s->imat) s->imat_tokens += n;
     if (!logits) return;
-    PROF(ML_PROF_OTHER, for (int t = 0; t < n; t++)
-                            ml_k_rmsnorm(s->bxb + (size_t)t * D, s->bx + (size_t)t * D, m->final_norm, D, c->norm_eps);
-                        quantize_rows(&s->qb_dim, s->bxb, n));
+    tok_ctx tc = { s, NULL, NULL, NULL, c->n_layers, pos0, n, 0 };
+    PROF(ML_PROF_OTHER, tokens_run(&tc, TOK_CLS_IN));
     IMAT(c->n_layers, 0, s->bxb, n, D);
     if (s->imat) s->imat_cls_tokens += n;
     PROF(ML_PROF_CLS, ml_matmul(s->pool, logits, c->vocab, &m->wcls, &s->qb_dim));

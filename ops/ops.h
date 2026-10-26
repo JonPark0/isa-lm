@@ -27,5 +27,12 @@ void ml_quantize_row(int8_t *q, float *d, const float *x, int n);
  * quantized query. */
 void ml_attention(ml_pool *pool, float *out, const float *q, const ml_kv_layer *kv, float *att_scratch,
                   int8_t *qq, float *qd, const ml_config *cfg, int pos);
+/* ml_attention for positions pos0..pos0+n-1 at once (prompt prefill), the
+ * cache already holding their K and V; out, q: [n][dim]. att_scratch:
+ * ml_pool_size * (n_heads / n_kv_heads) * max_seq floats at least; qq, qd
+ * (Q8 cache): n times ml_attention's. Each position's output is the one
+ * ml_attention gives, bit for bit, with one pass over the pool for all. */
+void ml_attention_batch(ml_pool *pool, float *out, const float *q, const ml_kv_layer *kv, float *att_scratch,
+                        int8_t *qq, float *qd, const ml_config *cfg, int pos0, int n);
 
 #endif
