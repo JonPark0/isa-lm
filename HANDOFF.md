@@ -3,16 +3,33 @@
 ## 목표
 레거시 x86-64/ARM용 C11 INT8/INT4 LLM 런타임 isa-lm. 순서: v0.1.0 배포 → Qwen2.5 → llama.cpp 비교 → 4-bit 개선 → prefill 속도.
 
-## 완료 (모두 main에 merge)
+## 완료 (main에 merge)
 - v0.1.0 릴리스(PR #14, tag `v0.1.0` = `3a1dc73`). 첫 Release 실패 원인: `scripts/smoke_release.sh`가 `set -e`에서 ISA guard의 exit 3으로 종료 → PR #15로 수정 후 tag 재생성
 - Qwen2(PR #16), Q4 scale 탐색·llama.cpp 비교(PR #17)
 - imatrix(PR #18): `ml_run --imatrix FILE`(채널별 제곱합 누적, 파일에 더함), `tools/convert.py --imatrix FILE`(q4 전용), `tools/mlb.py` `_q4_search(b, imp)`. 형식은 `docs/file-format.md` "Importance matrix file". `--imatrix` 없으면 변환 결과 비트 동일
 - prefill 속도(PR #19): `kernels/x86_pack.h` `PK_TILES` 행 블록(`PK_ROW_BYTES` 512KB), AVX-512 VNNI matmul 두 행 그룹이 broadcast 공유, `ml_attention_batch`(위치×KV head를 스레드에 분배), prefill의 토큰별 연산 병렬화(`tokens_run`, `TOK_PARALLEL_MIN`). `ml_bench`에 matmul 측정 추가
 
+## 진행 중 (브랜치 `claude/wonderful-allen-pmaeca`, 미merge)
+- imatrix 실측 + 가중치 변경(`2898568`): imatrix가 있으면 llama.cpp처럼 `imp·sqrt(s²+x²)`(s²: 행 평균 x²). Qwen2.5 0.5B, imatrix = wikitext-2 train 32K토큰(Q8 모델, `--chunks 64`, 약 4.5분)
+  | 가중치 | test 4 chunk | 16 chunk | `--llama-cpp` |
+  |---|---:|---:|---:|
+  | Q8 | 19.01 | 22.10 | 13.33 |
+  | Q4 | 21.72 | 26.47 | 15.13 |
+  | Q4 imatrix, x²·imp (PR #18) | 21.71 | 26.17 | 14.90 |
+  | Q4 imatrix, imp·sqrt(s²+x²) | 21.39 | 25.94 | 14.71 |
+  - TinyStories로 수집한 imatrix: 16 chunk 26.33(x²·imp) / 26.37(새 방식) → 도메인 의존
+  - imatrix 없이 sqrt(s²+x²): 26.67(현재 x² 26.47보다 나쁨) → 기본 변환은 그대로
+  - 찾은 scale로 level 재반올림 3회: 25.94→25.87, 코드 대비 이득 작아 미적용
+  - 실험 스크립트: scratchpad `imexp.py`(세션 종료 시 사라짐)
+- 이 HANDOFF.md 커밋은 PR 전에 뺄지 소유자가 결정
+
 ## 남은 작업
-1. imatrix 실측: Qwen2.5 0.5B Q8 변환 → wiki가 아닌 텍스트로 `perplexity.py --extra "--imatrix q.imat"` 수집 → `--wtype q4 --imatrix` 유무 perplexity 비교(기준: Q4 21.73, Q8 19.05) → `docs/user-guide.md`·README·CHANGELOG에 수치
-2. `scripts/compare_llamacpp.sh` 재실행 → `docs/benchmarks.md` 표 갱신(현재 표는 PR #19 이전 값; "llama.cpp가 prefill 1.7–2.4배 빠름" 문구 포함)
-3. 1스레드 prefill 추가 개선: 랜덤 모델 기준 llama.cpp(문서 표 Q8 335, Q4 365 tok/s) 대비 아직 느림. AVX-512 Q8 matmul은 이론치(약 560 GOPS)의 약 50%
+1. `scripts/compare_llamacpp.sh` 재실행 → `docs/benchmarks.md` 표 갱신(현재 표는 PR #19 이전 값; "llama.cpp가 prefill 1.7–2.4배 빠름" 문구 포함). llama.cpp b11835 빌드 4종과 `qwen2.5-0.5b-instruct-fp16.gguf` 필요
+2. 1스레드 prefill 추가 개선: 랜덤 모델 기준 llama.cpp(문서 표 Q8 335, Q4 365 tok/s) 대비 아직 느림. AVX-512 Q8 matmul은 이론치(약 560 GOPS)의 약 50%
+
+## 데이터
+- wikitext-2: `Salesforce/wikitext` `wikitext-2-raw-v1/{test,train}-00000-of-00001.parquet`의 `text` 열을 그대로 이어 붙임(빈 행은 빈 문자열). 이 텍스트로 문서 수치(Q4 21.72) 재현됨. `pip install pyarrow` 필요
+- 1 chunk = 512토큰, `--chunks 16` 평가가 4 chunk보다 안정적
 
 ## 측정 (PR #19, Qwen2.5-0.5B 모양 랜덤 모델 vocab 32000, 128토큰, 4 vCPU Xeon AVX-512 VNNI, tok/s)
 | | PR #19 이전 | PR #19 |
