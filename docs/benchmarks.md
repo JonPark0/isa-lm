@@ -78,7 +78,9 @@ Q8_0 matches F16. Its Q4_0 is closer to F16 because `tools/convert.py` fits
 each block's scale (see [Q8, Q4, or mixed?](user-guide.md#q8-q4-or-mixed)), while
 `llama-quantize` without an importance matrix maps the largest weight to -8.
 llama.cpp's default Q4_0 (without `--pure`) keeps the classifier in a higher
-precision type, which isa-lm can do with `--q8 cls`.
+precision type, which isa-lm can do with `--q8 cls`. Neither row uses an
+importance matrix; with one from wikitext-2 train, isa-lm's Q4_0 scores 14.71
+([importance matrix](user-guide.md#q8-q4-or-mixed)).
 
 ## Reproducing
 

@@ -17,7 +17,9 @@
   sliding-window models at the window.
 - Importance matrix: `ml_run --imatrix FILE` sums the squares of every matrix
   input per channel (over runs), and `tools/convert.py --imatrix FILE`
-  weights the Q4 fits by it.
+  weights the Q4 fits by it as llama.cpp does. Qwen2.5 0.5B Q4 with one from
+  32K tokens of wikitext-2 train: perplexity 21.72 → 21.39 (llama.cpp
+  scoring: 15.13 → 14.71, against 13.33 for Q8).
 
 ### Changed
 
