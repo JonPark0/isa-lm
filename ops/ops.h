@@ -29,9 +29,10 @@ void ml_attention(ml_pool *pool, float *out, const float *q, const ml_kv_layer *
                   int8_t *qq, float *qd, const ml_config *cfg, int pos);
 /* ml_attention for positions pos0..pos0+n-1 at once (prompt prefill), the
  * cache already holding their K and V; out, q: [n][dim]. att_scratch:
- * ml_pool_size * (n_heads / n_kv_heads) * max_seq floats at least; qq, qd
- * (Q8 cache): n times ml_attention's. Each position's output is the one
- * ml_attention gives, bit for bit, with one pass over the pool for all. */
+ * max(n_heads, ml_pool_size * ml_attention_batch_heads) * max_seq floats;
+ * qq, qd (Q8 cache): n times ml_attention's. Each position's output is the
+ * one ml_attention gives, bit for bit, with one pass over the pool for all. */
+int ml_attention_batch_heads(const ml_config *cfg, int nthreads);
 void ml_attention_batch(ml_pool *pool, float *out, const float *q, const ml_kv_layer *kv, float *att_scratch,
                         int8_t *qq, float *qd, const ml_config *cfg, int pos0, int n);
 

@@ -102,16 +102,29 @@ static int parse_tokens(const char *s, int *out, int max, int vocab) {
 
 /* --imatrix file: 40-byte header "MLI1", version 1, n_layers, dim, hidden_dim,
  * 0 (u32 each), tokens and classifier tokens (u64), then the float64 sums in
- * ml_state.imat order. Adds this run's sums to the file's. */
+ * ml_state.imat order. Adds this run's sums to the file's: the result goes to
+ * PATH.tmp and replaces PATH only once written, so a failed write keeps the
+ * sums collected so far. */
 static int imatrix_save(const char *path, const ml_state *s) {
     const ml_config *c = &s->m->cfg;
     const size_t n = ml_imatrix_size(c);
     uint32_t h[6] = { 0, 1, (uint32_t)c->n_layers, (uint32_t)c->dim, (uint32_t)c->hidden_dim, 0 };
     uint64_t cnt[2] = { s->imat_tokens, s->imat_cls_tokens };
     memcpy(h, "MLI1", 4);
+    char tmp[4096];
+    if (snprintf(tmp, sizeof tmp, "%s.tmp", path) >= (int)sizeof tmp) {
+        fprintf(stderr, "error: %s: path too long\n", path);
+        return 0;
+    }
     double *sum = malloc(sizeof(double) * n), *old = malloc(sizeof(double) * n);
     int ok = sum && old;
+    if (!ok) fprintf(stderr, "error: out of memory\n");
+    errno = 0;
     FILE *f = ok ? fopen(path, "rb") : NULL;
+    if (ok && !f && errno != ENOENT) {   /* there may be sums we cannot read: never overwrite them */
+        fprintf(stderr, "error: cannot read %s: %s\n", path, strerror(errno));
+        ok = 0;
+    }
     if (ok) memcpy(sum, s->imat, sizeof(double) * n);
     if (f) {
         uint32_t fh[6];
@@ -127,11 +140,18 @@ static int imatrix_save(const char *path, const ml_state *s) {
         }
     }
     if (ok) {
-        f = fopen(path, "wb");
+        f = fopen(tmp, "wb");
         ok = f && fwrite(h, sizeof h, 1, f) == 1 && fwrite(cnt, sizeof cnt, 1, f) == 1 &&
              fwrite(sum, sizeof(double), n, f) == n;
         if (f && fclose(f) != 0) ok = 0;
-        if (!ok) fprintf(stderr, "error: cannot write %s\n", path);
+#ifdef _WIN32
+        if (ok) remove(path);   /* Windows rename does not replace */
+#endif
+        if (ok && rename(tmp, path) != 0) ok = 0;
+        if (!ok) {
+            fprintf(stderr, "error: cannot write %s\n", path);
+            remove(tmp);
+        }
     }
     free(sum);
     free(old);

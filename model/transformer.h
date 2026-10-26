@@ -14,7 +14,7 @@ typedef struct {
     ml_arena arena;
     ml_pool *pool;
     float *x, *xb, *xb2, *hb, *hb2, *q, *logits;
-    float *att;                    /* scores [max(n_heads, threads * heads per KV head)][max_seq] */
+    float *att;                    /* scores [max(n_heads, threads * ml_attention_batch_heads)][max_seq] */
     int kv_type;                   /* ML_F32 or ML_Q8_0 (see ml_state_init) */
     float *kcache, *vcache;        /* F32: [layer][max_seq][kv_dim] */
     int8_t *kq, *vq;               /* Q8: [layer][max_seq][kv_dim] */

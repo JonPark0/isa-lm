@@ -168,37 +168,59 @@ void ml_attention(ml_pool *pool, float *out, const float *q, const ml_kv_layer *
         ml_pool_run(pool, attention_task, &c);
 }
 
+/* Query heads per work item of ml_attention_batch: a whole KV group, so that
+ * its heads share each block of K and V, unless the threads' score rows
+ * (nthreads * that many) would exceed twice ml_attention's n_heads; then the
+ * largest divisor of the group that keeps them within max(n_heads, nthreads). */
+int ml_attention_batch_heads(const ml_config *cfg, int nthreads) {
+    const int group = cfg->n_heads / cfg->n_kv_heads;
+    if ((long long)nthreads * group <= 2LL * cfg->n_heads) return group;
+    const long long cap = cfg->n_heads > nthreads ? cfg->n_heads : nthreads;
+    int g = group;
+    while (g > 1 && (group % g || (long long)nthreads * g > cap)) g--;
+    return g;
+}
+
 typedef struct {
     attn_ctx a;   /* pos: the first position */
-    int n;
+    int n, heads; /* positions; query heads per work item */
 } attn_batch_ctx;
 
-/* Work items are (position, KV head) pairs, dealt round-robin: later
- * positions cost more, and neighbours land on different threads. */
+/* Work items are (position, run of query heads within one KV group), dealt
+ * round-robin: later positions cost more, and neighbours land on different
+ * threads. */
 static void attention_batch_task(void *p, int tid, int nt) {
     const attn_batch_ctx *c = p;
     const ml_config *cfg = c->a.cfg;
-    const int group = cfg->n_heads / cfg->n_kv_heads, dim = cfg->dim;
-    float *att = c->a.att + (size_t)tid * group * cfg->max_seq;
-    for (int i = tid; i < c->n * cfg->n_kv_heads; i += nt) {
-        const int t = i / cfg->n_kv_heads, g0 = i % cfg->n_kv_heads * group;
+    const int dim = cfg->dim, per = cfg->n_heads / c->heads;
+    float *att = c->a.att + (size_t)tid * c->heads * cfg->max_seq;
+    for (int i = tid; i < c->n * per; i += nt) {
+        const int t = i / per, g0 = i % per * c->heads;
         attend(cfg, c->a.kv, c->a.out + (size_t)t * dim, c->a.q + (size_t)t * dim,
                c->a.qq ? c->a.qq + (size_t)t * dim : NULL, c->a.qd ? c->a.qd + (size_t)t * cfg->n_heads : NULL,
-               att, g0, g0 + group, c->a.pos + t);
+               att, g0, g0 + c->heads, c->a.pos + t);
     }
 }
 
 void ml_attention_batch(ml_pool *pool, float *out, const float *q, const ml_kv_layer *kv, float *att_scratch,
                         int8_t *qq, float *qd, const ml_config *cfg, int pos0, int n) {
+    const int nt = ml_pool_size(pool), heads = ml_attention_batch_heads(cfg, nt);
+    /* Multiply-adds, in double: a 32-bit size_t would wrap on long contexts. */
+    const double work = 2.0 * cfg->n_heads * cfg->head_dim * ((double)n * pos0 + (double)n * (n + 1) / 2);
+    const int serial = work < PARALLEL_MIN_WEIGHTS;
+    if (!serial && n * (cfg->n_heads / heads) < nt) {
+        /* too few items to occupy the pool: split each position by heads */
+        for (int t = 0; t < n; t++)
+            ml_attention(pool, out + (size_t)t * cfg->dim, q + (size_t)t * cfg->dim, kv, att_scratch,
+                         qq, qd, cfg, pos0 + t);
+        return;
+    }
     if (!kv->k)
         for (int t = 0; t < n; t++)
             for (int h = 0; h < cfg->n_heads; h++)
                 ml_quantize_row(qq + (size_t)t * cfg->dim + h * cfg->head_dim, qd + (size_t)t * cfg->n_heads + h,
                                 q + (size_t)t * cfg->dim + h * cfg->head_dim, cfg->head_dim);
-    attn_batch_ctx c = { { out, q, kv, att_scratch, kv->k ? NULL : qq, kv->k ? NULL : qd, cfg, pos0 }, n };
-    const size_t positions = (size_t)n * pos0 + (size_t)n * (n + 1) / 2;
-    if ((size_t)cfg->n_heads * positions * (size_t)cfg->head_dim * 2 < PARALLEL_MIN_WEIGHTS)
-        attention_batch_task(&c, 0, 1);
-    else
-        ml_pool_run(pool, attention_batch_task, &c);
+    attn_batch_ctx c = { { out, q, kv, att_scratch, kv->k ? NULL : qq, kv->k ? NULL : qd, cfg, pos0 }, n, heads };
+    if (serial) attention_batch_task(&c, 0, 1);
+    else ml_pool_run(pool, attention_batch_task, &c);
 }
