@@ -26,6 +26,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
+      - name: Release notes from CHANGELOG.md
+        # first: a tag without its CHANGELOG section fails here, not after the builds
+        run: |
+          v=${TAG#v}
+          awk -v v="$v" '/^## /{p = ($2 == v)} p' CHANGELOG.md | tail -n +2 > notes.md
+          test -s notes.md || { echo "CHANGELOG.md has no section for $v"; exit 1; }
+          printf '\n### Downloads\n\nPick the archive for your platform and run `./ml_run` (or `ml_run.cmd` on Windows): it starts the fastest build your CPU supports. Checksums are in `SHA256SUMS`.\n' >> notes.md
       - name: Cache apt packages
         uses: actions/cache@v4
         with:
@@ -46,12 +53,6 @@ jobs:
         run: |
           make -s ISA=scalar build/scalar/ml_run build/models/rand_q8.mlb
           scripts/smoke_release.sh
-      - name: Release notes from CHANGELOG.md
-        run: |
-          v=${TAG#v}
-          awk -v v="$v" '/^## /{p = ($2 == v)} p' CHANGELOG.md | tail -n +2 > notes.md
-          test -s notes.md || { echo "CHANGELOG.md has no section for $v"; exit 1; }
-          printf '\n### Downloads\n\nPick the archive for your platform and run `./ml_run` (or `ml_run.cmd` on Windows): it starts the fastest build your CPU supports. Checksums are in `SHA256SUMS`.\n' >> notes.md
       - name: Publish
         uses: softprops/action-gh-release@v2
         with:
