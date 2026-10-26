@@ -40,28 +40,34 @@ Tokens per second; the ratio is isa-lm's decode speed over llama.cpp's.
 
 | ISA level | Weights | Threads | isa-lm prefill | llama.cpp prefill | isa-lm decode | llama.cpp decode | Decode ratio |
 |-----------|---------|--------:|---------------:|------------------:|--------------:|-----------------:|-------------:|
-| AVX-512 VNNI | Q8_0 | 1 | 144.9 | 335.4 | 21.9 | 20.0 | 1.09× |
-| AVX-512 VNNI | Q8_0 | 4 | 401.8 | 953.3 | 65.1 | 56.8 | 1.15× |
-| AVX-512 VNNI | Q4_0 | 1 | 209.6 | 365.4 | 37.5 | 27.1 | 1.38× |
-| AVX-512 VNNI | Q4_0 | 4 | 483.7 | 828.8 | 103.0 | 80.8 | 1.27× |
-| AVX2 | Q8_0 | 1 | 81.6 | 69.5 | 20.2 | 10.6 | 1.91× |
-| AVX2 | Q8_0 | 4 | 210.3 | 198.3 | 60.2 | 36.7 | 1.64× |
-| AVX2 | Q4_0 | 1 | 146.2 | 77.8 | 35.2 | 16.9 | 2.08× |
-| AVX2 | Q4_0 | 4 | 453.9 | 269.3 | 110.1 | 56.0 | 1.97× |
-| SSE4.1 / SSE4.2 | Q8_0 | 1 | 43.2 | 13.2 | 18.4 | 6.1 | 3.02× |
-| SSE4.1 / SSE4.2 | Q8_0 | 4 | 96.5 | 47.6 | 45.5 | 20.1 | 2.26× |
-| SSE4.1 / SSE4.2 | Q4_0 | 1 | 56.2 | 25.1 | 23.8 | 11.2 | 2.12× |
-| SSE4.1 / SSE4.2 | Q4_0 | 4 | 141.0 | 92.5 | 64.6 | 38.3 | 1.69× |
-| SSE2 | Q8_0 | 1 | 36.1 | 12.1 | 17.0 | 5.8 | 2.93× |
-| SSE2 | Q8_0 | 4 | 77.0 | 46.9 | 47.2 | 18.7 | 2.52× |
-| SSE2 | Q4_0 | 1 | 32.4 | 5.6 | 23.5 | 3.3 | 7.12× |
-| SSE2 | Q4_0 | 4 | 86.4 | 19.4 | 55.9 | 11.4 | 4.90× |
+| AVX-512 VNNI | Q8_0 | 1 | 221.2 | 361.4 | 24.3 | 21.8 | 1.11× |
+| AVX-512 VNNI | Q8_0 | 4 | 674.0 | 1222.8 | 79.0 | 71.0 | 1.11× |
+| AVX-512 VNNI | Q4_0 | 1 | 288.7 | 353.7 | 41.6 | 31.0 | 1.34× |
+| AVX-512 VNNI | Q4_0 | 4 | 890.2 | 857.3 | 156.4 | 105.2 | 1.49× |
+| AVX2 | Q8_0 | 1 | 91.4 | 72.0 | 22.8 | 12.4 | 1.84× |
+| AVX2 | Q8_0 | 4 | 295.8 | 217.3 | 78.0 | 41.3 | 1.89× |
+| AVX2 | Q4_0 | 1 | 167.4 | 83.5 | 43.1 | 18.6 | 2.32× |
+| AVX2 | Q4_0 | 4 | 519.1 | 298.7 | 140.7 | 64.6 | 2.18× |
+| SSE4.1 / SSE4.2 | Q8_0 | 1 | 48.5 | 14.4 | 21.0 | 6.7 | 3.13× |
+| SSE4.1 / SSE4.2 | Q8_0 | 4 | 161.3 | 53.8 | 57.0 | 23.0 | 2.48× |
+| SSE4.1 / SSE4.2 | Q4_0 | 1 | 75.3 | 28.3 | 35.0 | 13.2 | 2.65× |
+| SSE4.1 / SSE4.2 | Q4_0 | 4 | 240.1 | 108.2 | 96.3 | 43.3 | 2.22× |
+| SSE2 | Q8_0 | 1 | 40.9 | 13.9 | 19.1 | 6.5 | 2.94× |
+| SSE2 | Q8_0 | 4 | 130.9 | 53.3 | 56.7 | 21.8 | 2.60× |
+| SSE2 | Q4_0 | 1 | 38.6 | 5.7 | 25.4 | 3.7 | 6.86× |
+| SSE2 | Q4_0 | 4 | 113.6 | 21.9 | 68.8 | 12.6 | 5.46× |
 
-- **Decode** is faster with isa-lm at every level: 1.1–1.4× with AVX-512
-  VNNI, about 2× with AVX2, and 1.7–7× on the SSE builds.
-- **Prefill** is 1.7–2.4× faster with llama.cpp on AVX-512 VNNI, whose batched
-  matrix multiplication beats isa-lm's batches of 32 there. From AVX2 down,
-  isa-lm prefills faster.
+- **Decode** is faster with isa-lm at every level: 1.1–1.5× with AVX-512
+  VNNI, about 2× with AVX2, and 2.2–7× on the SSE builds.
+- **Prefill** of Q8_0 is 1.6–1.8× faster with llama.cpp on AVX-512 VNNI; Q4_0
+  is 1.2× faster with llama.cpp on one thread and level on four. From AVX2
+  down, isa-lm prefills faster (1.3–6.8×).
+
+Measured with isa-lm at commit `0cb4d16`. Against the previous run (isa-lm
+before the faster prefill), AVX-512 VNNI prefill went from 145 to 221 tok/s
+(Q8_0, 1 thread) and from 484 to 890 (Q4_0, 4 threads); llama.cpp's own numbers
+moved by -3% to +28% between the two runs on the same kind of machine, so
+compare rows of one run.
 
 ## Quality
 
@@ -71,7 +77,7 @@ Tokens per second; the ratio is isa-lm's decode speed over llama.cpp's.
 | llama.cpp | Q8_0 | 13.44 |
 | isa-lm | Q8_0 | 13.33 |
 | llama.cpp | Q4_0 | 15.86 |
-| isa-lm | Q4_0 | 15.10 |
+| isa-lm | Q4_0 | 15.13 |
 
 The two runtimes tokenize this text identically (no BOS for Qwen2.5). isa-lm's
 Q8_0 matches F16. Its Q4_0 is closer to F16 because `tools/convert.py` fits
@@ -79,7 +85,7 @@ each block's scale (see [Q8, Q4, or mixed?](user-guide.md#q8-q4-or-mixed)), whil
 `llama-quantize` without an importance matrix maps the largest weight to -8.
 llama.cpp's default Q4_0 (without `--pure`) keeps the classifier in a higher
 precision type, which isa-lm can do with `--q8 cls`. Neither row uses an
-importance matrix; with one from wikitext-2 train, isa-lm's Q4_0 scores 14.71
+importance matrix; with one from wikitext-2 train, isa-lm's Q4_0 scores 14.52
 ([importance matrix](user-guide.md#q8-q4-or-mixed)).
 
 ## Reproducing

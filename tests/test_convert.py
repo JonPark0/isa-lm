@@ -530,3 +530,49 @@ def test_imatrix_from_c(tmp_path):
     plain = str(tmp_path / "plain_q4.mlb")
     mlb.write_mlb(plain, cfg, w, "q4")
     assert open(q4, "rb").read() != open(plain, "rb").read()
+
+
+def test_imatrix_weights_tied_classifier(tmp_path):
+    """A tied embedding is the classifier: it takes the classifier's importance."""
+    cfg, w = gen_random.generate(dict(SMALL), seed=1)
+    D, H, L = cfg["dim"], cfg["hidden_dim"], cfg["n_layers"]
+    flat = {"layers": [dict(qkv=np.ones(D), wo=np.ones(D), ffn=np.ones(D), down=np.ones(H))] * L,
+            "cls": np.ones(D), "tokens": 1}
+    skew = dict(flat, cls=np.where(np.arange(D) % 32 < 2, 1e4, 1.0))
+    for shared in (0, 1):
+        c = dict(cfg, shared_classifier=shared)
+        mlb.write_mlb(str(tmp_path / "a.mlb"), c, w, "q4", imatrix=flat)
+        mlb.write_mlb(str(tmp_path / "b.mlb"), c, w, "q4", imatrix=skew)
+        assert (tmp_path / "a.mlb").read_bytes() != (tmp_path / "b.mlb").read_bytes()
+
+
+def test_quantize_q4_small_blocks():
+    """Blocks of tiny values fit as if scaled up: float32 must not underflow."""
+    rng = np.random.default_rng(0)
+    x = rng.standard_normal((4, 64)).astype(np.float32)
+    for imp in (None, np.ones(64)):
+        p, d = mlb.quantize_q4(x, imp)
+        for sc in (1e-9, 1e-16, 1e-20, 1e-25):
+            ps, ds = mlb.quantize_q4((x * np.float32(sc)).astype(np.float32), imp)
+            assert (ps == p).all()
+            np.testing.assert_allclose(ds / np.float32(sc), d, rtol=1e-6)
+
+
+def test_read_imatrix_refuses_bad_files(tmp_path):
+    cfg = dict(SMALL)
+    n = cfg["n_layers"] * (3 * cfg["dim"] + cfg["hidden_dim"]) + cfg["dim"]
+    good = mlb._IMAT.pack(b"MLI1", 1, cfg["n_layers"], cfg["dim"], cfg["hidden_dim"], 0, 3, 3) + np.ones(n).tobytes()
+    bad = {"short": good[:4], "reserved": good[:20] + b"\1" + good[21:], "trailing": good + b"\0" * 8,
+           "truncated": good[:-8], "no tokens": good[:24] + bytes(16) + good[40:],
+           "nan": good[:-8] + np.array([np.nan]).tobytes(), "negative": good[:-8] + np.array([-1.0]).tobytes()}
+    p = tmp_path / "x.imat"
+    p.write_bytes(good)
+    assert mlb.read_imatrix(str(p), cfg)["tokens"] == 3
+    for name, data in bad.items():
+        p.write_bytes(data)
+        try:
+            mlb.read_imatrix(str(p), cfg)
+        except ValueError:
+            continue
+        raise AssertionError(f"{name} accepted")
+

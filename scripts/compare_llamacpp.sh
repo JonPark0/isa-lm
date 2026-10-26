@@ -30,6 +30,7 @@ if [ -z "${NATIVE_ISA:-}" ]; then
         if build/$isa/ml_tok --help >/dev/null 2>&1; then NATIVE_ISA=$isa; break; fi
     done
 fi
+[ -n "${NATIVE_ISA:-}" ] || { log "no x86 ISA build runs on this machine"; exit 1; }
 
 # isa-lm builds (threaded) and models
 for isa in $NATIVE_ISA avx2 sse41 sse2; do make -s ISA=$isa THREADS=pthread -j4 >/dev/null; done

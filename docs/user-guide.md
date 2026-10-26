@@ -254,8 +254,9 @@ python3 tools/perplexity.py build/avx2/ml_run q8.mlb tok.mlt sample.txt --ml-tok
 python3 tools/convert.py hf ./Qwen2.5-0.5B-Instruct q4.mlb --wtype q4 --imatrix qwen.imat
 ```
 
-The embedding is a lookup and keeps the plain fit; Q8 matrices ignore the
-importance matrix. Qwen2.5 0.5B Instruct Q4 on the wikitext-2 test set
+A tied embedding (Qwen2.5, Llama 3.2) is also the classifier and takes the
+classifier's importance; an untied one is only a lookup and keeps the plain
+fit. Q8 matrices ignore the importance matrix. Qwen2.5 0.5B Instruct Q4 on the wikitext-2 test set
 (`tools/perplexity.py --ctx 512`; importance matrix from the first 32K tokens
 of the wikitext-2 training set, `--chunks 64`):
 
@@ -263,11 +264,11 @@ of the wikitext-2 training set, `--chunks 64`):
 |---------|---------:|----------:|------------------------:|
 | Q8 | 19.01 | 22.10 | 13.33 |
 | Q4 | 21.72 | 26.47 | 15.13 |
-| Q4 `--imatrix` | 21.39 | 25.94 | 14.71 |
+| Q4 `--imatrix` | 20.92 | 25.30 | 14.52 |
 
-It closes about an eighth of the gap to Q8. The gain depends on the sample
-text: an importance matrix from TinyStories gives 26.37 on 16 chunks. Collect
-it on text like the model's use.
+It closes about a quarter of the gap to Q8. The gain depends on the sample
+text: one from TinyStories gives 25.74 on 16 chunks. Collect it on text like
+the model's use.
 
 | Format | Bits per weight | Notes |
 |--------|-----------------|-------|

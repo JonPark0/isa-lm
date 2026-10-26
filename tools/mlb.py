@@ -88,6 +88,7 @@ def _pack_q4(v):
     return packed.reshape(*v.shape[:-2], -1)
 
 
+SMALL = np.float32(1e-6)   # Q4 blocks with max |x| below this are fitted rescaled (_q4_search)
 Q4_STEPS = np.arange(-10, 3, dtype=np.float32) * np.float32(0.2)   # largest element -> level -(8 + step)
 
 
@@ -107,7 +108,17 @@ def _q4_search(b, w=None):
     mx = np.take_along_axis(b, np.abs(b).argmax(axis=-1)[:, None], axis=-1)[:, 0]
     zero = np.abs(mx) < TINY
     y = b * (np.float32(1) / np.where(zero, np.float32(1), mx))[:, None]   # largest element at 1
-    w = b * b if w is None else w
+    # Blocks of small values are fitted scaled to a largest magnitude of 1 (and
+    # their weights to a largest weight of 1): the cubes and squares of the fit
+    # would underflow float32 below about 1e-7. The others stay as they are.
+    small = (np.abs(mx) < SMALL) & ~zero
+    up = np.where(small, np.float32(1) / np.where(small, np.abs(mx), 1), np.float32(1)).astype(np.float32)
+    b = b * up[:, None]
+    if w is None:
+        w = b * b
+    else:
+        wmax = w.max(axis=-1)
+        w = w / np.where(small & (wmax > 0), wmax, np.float32(1))[:, None]   # a division: 1/wmax could overflow
     wb = w * b
     best = step = None
     for s in Q4_STEPS:
@@ -122,7 +133,7 @@ def _q4_search(b, w=None):
             best, step = np.where(better, score, best), np.where(better, s, step)
     lv = np.clip(np.rint(y * -(8 + step)[:, None]), -8, 7)
     den = _sum32(w * lv * lv)
-    d = np.where(den > 0, _sum32(wb * lv) / np.where(den > 0, den, 1), 0)
+    d = np.where(den > 0, _sum32(wb * lv) / np.where(den > 0, den, 1), 0) / up
     return np.where(zero[:, None], 0, lv), np.where(zero, 0, d).astype(np.float32)
 
 
@@ -154,8 +165,8 @@ def quantize_q4(x, imp=None):
     input over sample text (read_imatrix). The error is then weighted as
     llama.cpp does, by imp * sqrt(s2 + x^2) with s2 the row's mean x^2, so
     that weights meeting large activations are kept closer (Qwen2.5 0.5B Q4,
-    imatrix from 32K tokens of wikitext-2 train: perplexity 26.47 -> 25.94 on
-    16 chunks of the test set; imp * x^2 gives 26.17)."""
+    imatrix from 32K tokens of wikitext-2 train: perplexity 26.47 -> 25.30 on
+    16 chunks of the test set; weighting by imp * x^2 did less)."""
     x = np.asarray(x, np.float32)
     b = x.reshape(-1, QK)
     imp = None if imp is None else _importance(imp)
@@ -163,7 +174,8 @@ def quantize_q4(x, imp=None):
     if imp is not None:
         # row mean of x^2, summed in a fixed order (block trees, then blocks in turn)
         sq = b.astype(np.float64) ** 2
-        s2 = (np.cumsum(_sum32(sq).reshape(-1, nb), axis=1)[:, -1] / x.shape[-1]).astype(np.float32)
+        s2_64 = np.cumsum(_sum32(sq).reshape(-1, nb), axis=1)[:, -1] / x.shape[-1]
+        s2 = s2_64.astype(np.float32)
         impb = imp.reshape(nb, QK)
 
     def search(i):
@@ -171,7 +183,13 @@ def quantize_q4(x, imp=None):
         if imp is None:
             return _q4_search(c)
         idx = np.arange(i, i + len(c))
-        return _q4_search(c, impb[idx % nb] * np.sqrt(s2[idx // nb][:, None] + c * c))
+        w = impb[idx % nb] * np.sqrt(s2[idx // nb][:, None] + c * c)
+        # tiny rows: s2 and c^2 underflow float32 below about 4e-23; take them in float64
+        tiny = np.abs(c).max(axis=-1) < SMALL
+        if tiny.any():
+            c64 = c[tiny].astype(np.float64)
+            w[tiny] = (impb[idx[tiny] % nb] * np.sqrt(s2_64[idx[tiny] // nb][:, None] + c64 * c64)).astype(np.float32)
+        return _q4_search(c, w)
 
     with ThreadPoolExecutor(os.cpu_count() or 1) as ex:
         parts = list(ex.map(search, range(0, len(b), 4096)))
@@ -243,7 +261,7 @@ def write_mlb(path, cfg, w, wtype, q8=(), imatrix=None):
                 continue
             key = name.split(".")[-1]
             t = matrix_type(key, WTYPES[wtype], mask, shared)
-            imp = imatrix_for(imatrix, name) if imatrix else None
+            imp = imatrix_for(imatrix, name, shared) if imatrix else None
             q, d = quantize_q8(arr) if t == WTYPES["q8"] else quantize_q4(arr, imp)
             put(name + ".q", q)
             put(name + ".d", d)
@@ -258,8 +276,10 @@ def read_imatrix(path, cfg):
     """ml_run --imatrix file -> {"layers": [{input: mean square [K]}], "cls": [dim]},
     inputs qkv, wo, ffn (dim) and down (hidden_dim)."""
     data = open(path, "rb").read()
-    magic, ver, nl, dim, hid, _, ntok, ncls = _IMAT.unpack_from(data)
-    if magic != b"MLI1" or ver != 1:
+    if len(data) < _IMAT.size:
+        raise ValueError(f"{path}: not an importance matrix")
+    magic, ver, nl, dim, hid, zero, ntok, ncls = _IMAT.unpack_from(data)
+    if magic != b"MLI1" or ver != 1 or zero:
         raise ValueError(f"{path}: not an importance matrix")
     if (nl, dim, hid) != (cfg["n_layers"], cfg["dim"], cfg["hidden_dim"]):
         raise ValueError(f"{path}: for a model with {nl} layers, dim {dim}, hidden_dim {hid}")
@@ -267,7 +287,9 @@ def read_imatrix(path, cfg):
         raise ValueError(f"{path}: no tokens")
     s = np.frombuffer(data, np.float64, offset=_IMAT.size)
     if len(s) != nl * (3 * dim + hid) + dim:
-        raise ValueError(f"{path}: truncated")
+        raise ValueError(f"{path}: wrong size for this model")
+    if ncls > ntok or not np.all(np.isfinite(s) & (s >= 0)):
+        raise ValueError(f"{path}: damaged (negative or non-finite sums)")
     layers = []
     for i in range(nl):
         o = i * (3 * dim + hid)
@@ -276,14 +298,16 @@ def read_imatrix(path, cfg):
     return {"layers": layers, "cls": s[-dim:] / ncls if ncls else None, "tokens": ntok}
 
 
-def imatrix_for(imatrix, name):
-    """Importance of the input channels of matrix `name` (write_mlb's names), or None."""
-    if name == "wcls":
+def imatrix_for(imatrix, name, shared=False):
+    """Importance of the input channels of matrix `name` (write_mlb's names), or None.
+    A tied embedding (shared) is the classifier too and takes its importance;
+    otherwise the embedding is only a lookup and keeps the plain fit."""
+    if name == "wcls" or (name == "tok_emb" and shared):
         return imatrix["cls"]
     parts = name.split(".")
     if parts[0] == "layers":
         return imatrix["layers"][int(parts[1])][_IMAT_INPUT[parts[2]]]
-    return None   # the embedding is a lookup, not a product
+    return None
 
 
 def read_mlb(path):

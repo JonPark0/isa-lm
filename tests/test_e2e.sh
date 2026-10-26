@@ -114,6 +114,14 @@ $RUN $B/ml_run $M/rand_q8.mlb --tokens $TOKENS --dump-logits $T/im.f32 --imatrix
     && $RUN $B/ml_run $M/rand_q8.mlb --tokens $TOKENS --dump-logits $T/im.f32 --imatrix $T/im.a \
     && python3 -c "import struct,sys; h=struct.unpack_from('<4sIIIIIQQ', open(sys.argv[1],'rb').read()); sys.exit(h[6:] != (32, 32))" $T/im.a \
     && ok || bad "--imatrix"
+# a file with bytes after the sums is refused and left as it is
+cp $T/im.a $T/im.tail; printf 'xxxxxxxx' >> $T/im.tail; cp $T/im.tail $T/im.tail0
+$RUN $B/ml_run $M/rand_q8.mlb --tokens $TOKENS --dump-logits $T/im.f32 --imatrix $T/im.tail 2>/dev/null \
+    && bad "--imatrix: trailing bytes accepted" || { cmp -s $T/im.tail $T/im.tail0 && ok || bad "--imatrix: refused file changed"; }
+# a failed write (file size limit) leaves the sums collected so far
+cp $T/im.a $T/im.keep
+(trap '' XFSZ; ulimit -f 2; $RUN $B/ml_run $M/rand_q8.mlb --tokens $TOKENS --dump-logits $T/im.f32 --imatrix $T/im.a 2>/dev/null) \
+    && bad "--imatrix: a write over the file size limit succeeded" || { cmp -s $T/im.a $T/im.keep && ok || bad "--imatrix: a failed write lost the file"; }
 
 # greedy: same text as the host scalar build
 $RUN $B/ml_run $M/rand_q8.mlb -z $TOK -i "ab" -n 16 -T 0 > $T/greedy.txt 2>/dev/null \
@@ -152,15 +160,22 @@ done
 $RUN $B/ml_run $M/ctx_q4.mlb --tokens $CTX --dump-logits $T/ctx.q8.t3.f32 --kv q8 -t 3 \
     && cmp -s $T/ctx.q8.f32 $T/ctx.q8.t3.f32 && ok || bad "logits with --kv q8 -t 3 differ from -t 1"
 # a model wide enough (dim 2048, 32-token steps) for the batched step's
-# per-token stages to run across threads as well
+# per-token stages to run across threads as well, with Q/K/V biases; -t 64
+# --batch 1 has fewer (position, heads) items than threads, so attention
+# splits each position by heads instead; the importance matrix is the same
+# whatever the threads
 if [ $NT -gt 1 ]; then
     python3 tools/gen_random.py --out $T/wide.mlb --wtype q4 --dim 2048 --layers 1 --heads 16 --kv-heads 4 \
-        --hidden 2048 --vocab 96 --max-seq 80 --seed 3 >/dev/null
-    W40=$(seq 1 40 | awk '{print ($1 * 7) % 95 + 1}' | paste -sd, -)
+        --hidden 2048 --vocab 96 --max-seq 80 --seed 3 --qkv-bias >/dev/null
+    W78=$(seq 1 78 | awk '{print ($1 * 7) % 95 + 1}' | paste -sd, -)
     for kv in f32 q8; do
-        $RUN $B/ml_run $T/wide.mlb --tokens $W40 --dump-logits $T/wide.t1.f32 --kv $kv -t 1 --batch 1 \
-            && $RUN $B/ml_run $T/wide.mlb --tokens $W40 --dump-logits $T/wide.t4.f32 --kv $kv -t 4 \
-            && cmp -s $T/wide.t1.f32 $T/wide.t4.f32 && ok || bad "wide model: -t 4 batched differs from -t 1 --batch 1 (--kv $kv)"
+        rm -f $T/wide.t1.imat $T/wide.t4.imat
+        $RUN $B/ml_run $T/wide.mlb --tokens $W78 --dump-logits $T/wide.t1.f32 --kv $kv -t 1 --batch 1 --imatrix $T/wide.t1.imat \
+            && $RUN $B/ml_run $T/wide.mlb --tokens $W78 --dump-logits $T/wide.t4.f32 --kv $kv -t 4 --imatrix $T/wide.t4.imat \
+            && $RUN $B/ml_run $T/wide.mlb --tokens $W78 --dump-logits $T/wide.t64.f32 --kv $kv -t 64 --batch 1 \
+            && cmp -s $T/wide.t1.f32 $T/wide.t4.f32 && cmp -s $T/wide.t1.f32 $T/wide.t64.f32 \
+            && cmp -s $T/wide.t1.imat $T/wide.t4.imat \
+            && ok || bad "wide model: -t 4 batched or -t 64 --batch 1 differs from -t 1 --batch 1 (--kv $kv)"
     done
 fi
 # batched attention splits (position, KV head) pairs across threads
