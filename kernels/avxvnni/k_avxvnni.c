@@ -83,7 +83,9 @@ ML_INLINE void matmul_q8_tile(float *Y, int ldy, const ml_qtensor *W, const ml_q
         for (int b = 0; b < nb; b++, p += 8 * PK * 4) {
             __m256i s[PK_TILE];
             ML_UNROLL(4) for (int t = 0; t < PK_TILE; t++) s[t] = _mm256_setzero_si256();
-            for (int k = 0; k < 8; k++) {
+            /* unrolled: in a loop GCC copies each vpdpbusd accumulator to and from
+             * another register, two moves per product (no zmm move elimination) */
+            ML_UNROLL(8) for (int k = 0; k < 8; k++) {
                 const __m256i w = _mm256_loadu_si256((const __m256i *)(p + k * PK * 4));
                 ML_UNROLL(4) for (int t = 0; t < T; t++) s[t] = _mm256_dpbusd_avx_epi32(s[t], w, _mm256_set1_epi32(((const int32_t *)(X->q + (size_t)(t0 + t) * X->k + b * QK))[k]));
             }
@@ -118,7 +120,7 @@ ML_INLINE void matmul_q4_tile(float *Y, int ldy, const ml_qtensor *W, const ml_q
         for (int b = 0; b < nb; b++, p += 4 * PK * 4) {
             __m256i s[PK_TILE];
             ML_UNROLL(4) for (int t = 0; t < PK_TILE; t++) s[t] = _mm256_setzero_si256();
-            for (int v = 0; v < 4; v++) {
+            ML_UNROLL(4) for (int v = 0; v < 4; v++) {
                 const __m256i w = _mm256_loadu_si256((const __m256i *)(p + v * PK * 4));
                 const __m256i lo = _mm256_and_si256(w, m4), hi = _mm256_and_si256(_mm256_srli_epi16(w, 4), m4);
                 ML_UNROLL(4) for (int t = 0; t < T; t++) {

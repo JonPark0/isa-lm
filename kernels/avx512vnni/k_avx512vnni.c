@@ -203,7 +203,9 @@ ML_INLINE void matmul_q8_groups(float *Y, int ldy, const ml_qtensor *W, const ml
     for (int b = 0; b < nb; b++, p += 8 * PK * 4) {
         __m512i s[2][TILE];
         ML_UNROLL(2) for (int g = 0; g < 2; g++) ML_UNROLL(4) for (int t = 0; t < TILE; t++) s[g][t] = _mm512_setzero_si512();
-        for (int k = 0; k < 8; k++) {
+        /* unrolled: in a loop GCC copies each vpdpbusd accumulator to and from
+         * another register, two moves per product (no zmm move elimination) */
+        ML_UNROLL(8) for (int k = 0; k < 8; k++) {
             __m512i w[2];
             ML_UNROLL(2) for (int g = 0; g < NG; g++) w[g] = _mm512_loadu_si512((const void *)(p + g * gq + k * PK * 4));
             ML_UNROLL(4) for (int t = 0; t < T; t++) {
@@ -248,7 +250,7 @@ ML_INLINE void matmul_q4_groups(float *Y, int ldy, const ml_qtensor *W, const ml
     for (int b = 0; b < nb; b++, p += 4 * PK * 4) {
         __m512i s[2][TILE];
         ML_UNROLL(2) for (int g = 0; g < 2; g++) ML_UNROLL(4) for (int t = 0; t < TILE; t++) s[g][t] = _mm512_setzero_si512();
-        for (int v = 0; v < 4; v++) {
+        ML_UNROLL(4) for (int v = 0; v < 4; v++) {
             __m512i lo[2], hi[2];
             ML_UNROLL(2) for (int g = 0; g < NG; g++) {
                 const __m512i w = _mm512_loadu_si512((const void *)(p + g * gq + v * PK * 4));

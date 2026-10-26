@@ -1,16 +1,22 @@
 /* Shared pieces of the x86 packed matvec kernels (core/pack.h layout). */
 #ifndef ML_X86_PACK_H
 #define ML_X86_PACK_H
+#include <emmintrin.h>
 #include "core/ml.h"
 
 #define PK_MAX_BLOCKS 2048   /* cols <= 65536, enforced by the loader */
 
-/* xsum[b] = offset * sum of block b's activation quants. */
+/* xsum[b] = offset * sum of block b's activation quants. psadbw sums
+ * |q + 128 - 0| per 8 bytes; the 32 biases are taken off after. The batched
+ * kernels call this per row block and tile, so a byte-by-byte sum cost as
+ * much as the products on long rows. */
 static inline void pk_block_sums(int *xsum, const ml_qact *x, int nb, int offset) {
+    const __m128i bias = _mm_set1_epi8((char)0x80), zero = _mm_setzero_si128();
     for (int b = 0; b < nb; b++) {
-        int s = 0;
-        for (int j = 0; j < QK; j++) s += x->q[b * QK + j];
-        xsum[b] = offset * s;
+        const __m128i *p = (const __m128i *)(x->q + b * QK);
+        const __m128i s = _mm_add_epi64(_mm_sad_epu8(_mm_xor_si128(_mm_loadu_si128(p), bias), zero),
+                                        _mm_sad_epu8(_mm_xor_si128(_mm_loadu_si128(p + 1), bias), zero));
+        xsum[b] = offset * (_mm_cvtsi128_si32(s) + _mm_cvtsi128_si32(_mm_unpackhi_epi64(s, s)) - QK * 128);
     }
 }
 
