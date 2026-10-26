@@ -10,8 +10,9 @@
   Qwen2.5 0.5B Instruct Q8: perplexity 19.05 against 19.00 for an F32
   reference.
 - `scripts/compare_llamacpp.sh` and [the comparison with llama.cpp](docs/benchmarks.md):
-  decode is 1.1–1.4× faster than llama.cpp with AVX-512 VNNI, about 2× with
-  AVX2 and 1.7–7× on SSE builds; llama.cpp prefills faster with AVX-512.
+  decode is 1.1–1.5× faster than llama.cpp with AVX-512 VNNI, about 2× with
+  AVX2 and 2.2–7× on SSE builds; llama.cpp still prefills Q8_0 faster with
+  AVX-512.
 - `tools/perplexity.py --llama-cpp` chunks and scores as `llama-perplexity`.
 - `tools/convert.py hf` reads Mistral checkpoints and caps the context of
   sliding-window models at the window.
