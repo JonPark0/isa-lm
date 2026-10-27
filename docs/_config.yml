@@ -7,9 +7,6 @@ description: >-
 url: https://jonpark0.github.io
 baseurl: /isa-lm
 theme: jekyll-theme-cayman
-# jekyll-seo-tag puts <meta name="google-site-verification"> in every page's <head>
-webmaster_verifications:
-  google: vdWPbd329u9frBt5qHcv9qjmzwIU3tt48bxwHLVrNRc
 plugins:
   - jekyll-seo-tag
   - jekyll-sitemap
