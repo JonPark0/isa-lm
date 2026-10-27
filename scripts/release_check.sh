@@ -14,6 +14,13 @@ if git ls-remote --exit-code --tags "${1:-origin}" "refs/tags/$tag" >/dev/null 2
     echo "release=false"
     exit 0
 fi
-awk -v v="$ver" '/^## /{p = ($2 == v)} p' CHANGELOG.md | tail -n +2 | grep -q . ||
+notes=$(awk -v v="$ver" '/^## /{p = ($2 == v)} p' CHANGELOG.md | tail -n +2)
+[ -n "$notes" ] ||
     { echo "release_check: ML_VERSION $ver has no tag and CHANGELOG.md has no section for it" >&2; exit 1; }
+# the section becomes the release page, where repository-relative links break
+if printf '%s\n' "$notes" | grep -o '\]([^)]*)' | grep -vqE '^\]\((https?://|#)'; then
+    echo "release_check: CHANGELOG.md section $ver has relative links; use full URLs:" >&2
+    printf '%s\n' "$notes" | grep -o '\]([^)]*)' | grep -vE '^\]\((https?://|#)' >&2
+    exit 1
+fi
 echo "release=true"

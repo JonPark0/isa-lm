@@ -9,7 +9,7 @@
   MLT1 flags 8 and 16), and the `qwen` and `chatml` chat templates.
   Qwen2.5 0.5B Instruct Q8: perplexity 19.05 against 19.00 for an F32
   reference.
-- `scripts/compare_llamacpp.sh` and [the comparison with llama.cpp](docs/benchmarks.md):
+- `scripts/compare_llamacpp.sh` and [the comparison with llama.cpp](https://github.com/JonPark0/isa-lm/blob/main/docs/benchmarks.md):
   decode is 1.1–1.5× faster than llama.cpp with AVX-512 VNNI, about 2× with
   AVX2 and 2.2–7× on SSE builds; llama.cpp still prefills Q8_0 faster with
   AVX-512.
