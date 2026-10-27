@@ -94,7 +94,7 @@ If isa-lm helps your research, please cite it (GitHub's *Cite this repository* u
   author  = {Park, Yeochoon},
   title   = {isa-lm: a portable C11 runtime for INT8/INT4 Llama-style language model inference on legacy x86-64 and ARM instruction sets},
   year    = {2026},
-  version = {0.1.0},
+  version = {0.2.0},
   url     = {https://github.com/JonPark0/isa-lm}
 }
 ```
