@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 — 2026-10-27
 
 ### Added
 
@@ -21,7 +21,13 @@
   weights the Q4 fits by it as llama.cpp does. Qwen2.5 0.5B Q4 with one from
   32K tokens of wikitext-2 train: perplexity 21.72 → 20.92 (llama.cpp
   scoring: 15.13 → 14.52, against 13.33 for Q8). A tied embedding takes the
-  classifier's importance.
+  classifier's importance. The file is replaced only once fully written.
+- Releases from main: merging a version bump (`ML_VERSION` and its
+  CHANGELOG.md section) builds, tests and publishes the release
+  (`.github/workflows/auto-release.yml`); CI fails a bump without notes.
+- `scripts/bench.py` and the Benchmark workflow: A/B speed comparison of two
+  versions, run alternately on one machine (GitHub's x86-64 and AArch64
+  runners for the workflow).
 
 ### Changed
 
@@ -31,6 +37,14 @@
   threads in one pass each. 128-token prefill of a Qwen2.5-0.5B-shaped model
   on a 4-vCPU AVX-512 VNNI Xeon: Q8 180 → 260 tok/s on 1 thread and 600 →
   925 on 4; Q4 250 → 290 and about 660 → 890. Logits are unchanged.
+- Batched kernels sum activation blocks with `psadbw` (Qwen2.5 0.5B, one
+  AVX-512 VNNI thread: Q4 prefill 240 → 287 tok/s, Q8 231 → 246), and the
+  AVX-512 VNNI and AVX-VNNI tiles are unrolled so that GCC no longer copies
+  every accumulator (kernel throughput: AVX-512 VNNI Q8 +6–18%, AVX-VNNI Q8
+  +12–51%).
+- Q4 blocks of values below 1e-6 are fitted rescaled: their float32 fit
+  underflowed (zero scale below about 1e-12). Other blocks convert to the
+  same bytes.
 - `tools/convert.py hf` refuses architectures it cannot run correctly
   (`model_type` other than llama, mistral or qwen2; activations other than
   SiLU; explicit `head_dim`; biases other than q/k/v) instead of writing a
