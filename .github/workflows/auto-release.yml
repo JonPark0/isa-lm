@@ -1,0 +1,35 @@
+name: Auto release
+
+# A push to main that changes ML_VERSION (core/ml.h) to a version without a
+# tag releases it: release.yml builds, tests and publishes that commit and
+# creates the tag vX.Y.Z with the release. A version bump without its
+# CHANGELOG.md section fails here (and in CI on the pull request).
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: auto-release
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: New version?
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.v.outputs.tag }}
+      release: ${{ steps.v.outputs.release }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        run: scripts/release_check.sh | tee -a "$GITHUB_OUTPUT"
+
+  release:
+    needs: check
+    if: needs.check.outputs.release == 'true'
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ needs.check.outputs.tag }}
+      sha: ${{ github.sha }}

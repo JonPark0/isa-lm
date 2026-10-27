@@ -31,8 +31,13 @@ also hold the model tools (`tools/convert.py`, `tools/convert_tokenizer.py`,
 `tools/perplexity.py`; they need Python 3 with numpy).
 
 `scripts/package_release.sh` builds the same archives locally, and
-`scripts/smoke_release.sh` runs them; a `vX.Y.Z` tag runs both in CI
-(`.github/workflows/release.yml`) and publishes the release.
+`scripts/smoke_release.sh` runs them. A release is cut by merging a version
+bump into main: `ML_VERSION` in `core/ml.h` raised to X.Y.Z and the
+`## Unreleased` heading of `CHANGELOG.md` renamed to `## X.Y.Z — date`.
+`.github/workflows/auto-release.yml` sees the new version, and
+`release.yml` builds and runs the archives and publishes release vX.Y.Z,
+creating the tag on that commit. Pushing a tag vX.Y.Z still works too; CI
+fails a pull request that raises `ML_VERSION` without its CHANGELOG section.
 
 ## Building
 

@@ -18,6 +18,9 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+      - name: Release version check
+        # a new ML_VERSION needs its CHANGELOG.md section (auto-release.yml)
+        run: scripts/release_check.sh
       - name: Cache apt packages
         uses: actions/cache@v4
         with:

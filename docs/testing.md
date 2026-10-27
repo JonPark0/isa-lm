@@ -152,7 +152,24 @@ build/avx2-pt/ml_bench bench.mlb -n 128 -t 4        # THREADS=pthread build
 - tokens/s on the model you pass, with greedy decoding.
 
 `ml_bench` also times the packed kernels (`matvec_q8_pk`, `matvec_q4_pk`) when
-the build has them.
+the build has them, the batched ones (`matmul_q8_pk`, `matmul_q4_pk`, 32
+tokens), and the FFN shapes of a 0.5B model (4864×896, 896×4864).
+
+To compare two versions, build both and run them alternately on one machine,
+so that the machine's noise falls on both:
+
+```sh
+git worktree add ../isa-lm-main main
+python3 scripts/bench.py --new . --base ../isa-lm-main --model bench.mlb --reps 5
+```
+
+`scripts/bench.py` builds `ml_bench` for every ISA the CPU runs and prints
+the best of the alternating runs and the new/base ratio as Markdown. The
+**Benchmark** workflow (`.github/workflows/bench.yml`, run by hand from the
+Actions tab) does the same on GitHub's x86-64 and AArch64 runners, for the
+branch it runs on against `base` (default `main`), with a random
+Qwen2.5-0.5B-shaped model or the real one; the tables land in the run's
+summary.
 
 All x86 results below are from a 4-vCPU VM with AVX-512 VNNI. The kernel and
 prefill tables were measured in one session, as the best of several runs

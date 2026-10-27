@@ -1,0 +1,93 @@
+name: Benchmark
+
+# Manual A/B speed comparison on GitHub's runners (x86-64 and AArch64), so
+# that measurements need neither a development machine nor its noise: the
+# branch this runs on is built next to BASE and the two run alternately
+# (scripts/bench.py). The tables go to the run's summary and an artifact.
+on:
+  workflow_dispatch:
+    inputs:
+      base:
+        description: "Branch, tag or commit to compare against (empty: no comparison)"
+        default: main
+        required: false
+      model:
+        description: "Model for prefill/decode: a random Qwen2.5-0.5B-shaped one, the real Qwen2.5 0.5B Instruct, or none"
+        type: choice
+        options: [random-0.5b, qwen2.5-0.5b, none]
+        default: random-0.5b
+      reps:
+        description: "Alternating repetitions (the best of them is reported)"
+        default: "5"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: x86-64
+            runner: ubuntu-24.04
+          - name: AArch64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: new
+      - uses: actions/checkout@v4
+        if: inputs.base != ''
+        with:
+          ref: ${{ inputs.base }}
+          path: base
+      - name: Install numpy
+        run: new/.github/scripts/apt-install.sh python3-numpy
+      - name: CPU
+        run: lscpu | grep -E 'Model name|^CPU\(s\)|Flags' | cut -c1-400
+      - name: Model
+        if: inputs.model != 'none'
+        working-directory: new
+        env:
+          MODEL: ${{ inputs.model }}
+        run: |
+          mkdir -p ../models
+          if [ "$MODEL" = random-0.5b ]; then
+            for wt in q8 q4; do
+              python3 tools/gen_random.py --out ../models/random_$wt.mlb --wtype $wt --dim 896 --layers 24 \
+                --heads 14 --kv-heads 2 --hidden 4864 --vocab 32000 --max-seq 512 >/dev/null
+            done
+          else
+            hf=https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct/resolve/main
+            mkdir -p ../models/qwen
+            for f in config.json model.safetensors; do curl -fsSL -o ../models/qwen/$f $hf/$f; done
+            for wt in q8 q4; do
+              python3 tools/convert.py hf ../models/qwen ../models/qwen_$wt.mlb --wtype $wt --max-seq 512 >/dev/null
+            done
+          fi
+          ls -la ../models
+      - name: Benchmark
+        env:
+          REPS: ${{ inputs.reps }}
+          BASE: ${{ inputs.base }}
+          NAME: ${{ matrix.name }}
+        run: |
+          set -- --new new --reps "$REPS" --out bench.md
+          [ -d base ] && set -- "$@" --base base
+          for m in models/*.mlb; do [ -f "$m" ] && set -- "$@" --model "$m"; done
+          python3 new/scripts/bench.py "$@"
+          {
+            echo "# $NAME: $GITHUB_REF_NAME (${GITHUB_SHA::7}) against ${BASE:-nothing}"
+            echo
+            cat bench.md
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bench-${{ matrix.name }}
+          path: bench.md
