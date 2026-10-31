@@ -42,7 +42,9 @@ typedef struct {
 enum { ML_IMAT_QKV, ML_IMAT_WO, ML_IMAT_FFN, ML_IMAT_DOWN };
 size_t ml_imatrix_size(const ml_config *c);
 
-#define ML_BATCH_MAX 32
+#ifndef ML_BATCH_MAX
+#define ML_BATCH_MAX 128
+#endif
 
 /* kv_type: ML_F32 keeps the KV cache in float; ML_Q8_0 stores each position's
  * K and V per KV head as int8 with one scale (about 3.8x less memory, faster

@@ -321,7 +321,7 @@ build/avx2/ml_run model.mlb --tokens 1,450,3681 --dump-logits l.f32
 | `-s N` | Seed for the xorshift64* RNG. Default 1. |
 | `-t N` | Threads, 1 to 64. Only builds made with `THREADS=pthread` use more than one. |
 | `--dump-logits F` | Write float32 logits `[n_tokens][vocab]` for every `--tokens` position, then exit. |
-| `--batch N` | Prompt tokens per batched prefill step, 1 to 32. Default 32; `1` processes the prompt token by token. The output is identical either way. |
+| `--batch N` | Prompt tokens per batched prefill step, 1 to 128. Default 128; `1` processes the prompt token by token. The output is identical either way. |
 | `--kv TYPE` | KV cache type: `f32` (default) or `q8`. `q8` stores K and V as int8 with one scale per position and KV head: about 3.8× less memory and faster attention on long contexts, with slightly different logits. |
 | `--pack-cache` | Save the packed weights next to the model (`MODEL.pk<G>`, G = pack group) and map them from there on later runs instead of packing again. The cache is checked against the model and the build's layout and rewritten when stale. |
 | `--no-pack` | Keep weights row-major instead of repacking them for the packed kernels. Uses less memory during load, but runs slower. |
@@ -362,7 +362,7 @@ On a 4-vCPU VM with the avx512vnni build, `-t 4` decodes a 4-layer dim-2048 Q4 m
 - **Q4 or Q8:** prefer Q4 on large models. Decoding is limited by memory
   bandwidth, and Q4 moves 45% fewer bytes. With packed kernels, Q4 is the
   faster format on every ISA that has them.
-- **Prompts:** long prompts are processed in batches of 32 tokens. That is 2–6×
+- **Prompts:** long prompts are processed in batches of 128 tokens. That is 2–6×
   faster than token by token, depending on the ISA and the model size.
 - **Long contexts:** attention grows with the position and, past a few
   thousand tokens, takes a third or more of the time. `--kv q8` cuts the KV
