@@ -35,6 +35,10 @@ void ml_attention(ml_pool *pool, float *out, const float *q, const ml_kv_layer *
  * qq, qd (Q8 cache): n times ml_attention's. Each position's output is the
  * one ml_attention gives, bit for bit, with one pass over the pool for all. */
 int ml_attention_batch_heads(const ml_config *cfg, int nthreads);
+
+/* x[r * ld + i] = cap * tanh(x[r * ld + i] / cap) for rows r < rows, i < n
+ * (logit soft-capping, Gemma 2). */
+void ml_softcap_rows(float *x, size_t ld, int rows, int n, float cap);
 void ml_attention_batch(ml_pool *pool, float *out, const float *q, const ml_kv_layer *kv, float *att_scratch,
                         int8_t *qq, float *qd, const ml_config *cfg, int pos0, int n);
 

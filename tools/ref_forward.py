@@ -95,6 +95,7 @@ def forward(cfg, t, tokens, kv="f32"):
     emb = mlb.dequant(t["tok_emb"])
     escale = np.float32(cfg.get("embed_scale") or 1.0)
     ascale = float(cfg.get("attn_scale") or 0.0) or 1.0 / np.sqrt(hd)
+    acap, fcap = float(cfg.get("attn_softcap") or 0.0), float(cfg.get("final_softcap") or 0.0)
     gelu = cfg.get("act") == "gelu_tanh"
     kcache = [[] for _ in t["layers"]]
     vcache = [[] for _ in t["layers"]]
@@ -135,6 +136,8 @@ def forward(cfg, t, tokens, kv="f32"):
                 kh = hh // group
                 qh = np.asarray(q[hh * hd:(hh + 1) * hd], np.float64)
                 sc = K[:, kh * hd:(kh + 1) * hd] @ qh * ascale
+                if acap:   # Gemma 2: scores soft-capped at acap
+                    sc = acap * np.tanh(sc / acap)
                 p = softmax(sc)
                 o[hh * hd:(hh + 1) * hd] = p @ V[:, kh * hd:(kh + 1) * hd]
             a = m.matvec(L["wo"], o)
@@ -152,7 +155,10 @@ def forward(cfg, t, tokens, kv="f32"):
             if "post_ffn_norm" in L:
                 f = rmsnorm(f, L["post_ffn_norm"], eps)
             x = (x + f).astype(np.float32)
-        out.append(m.matvec(t["wcls"], rmsnorm(x, t["final_norm"], eps)))
+        lg = m.matvec(t["wcls"], rmsnorm(x, t["final_norm"], eps))
+        if fcap:   # Gemma 2: logits soft-capped at fcap
+            lg = (fcap * np.tanh(lg.astype(np.float64) / fcap)).astype(np.float32)
+        out.append(lg)
     return np.stack(out).astype(np.float32)
 
 

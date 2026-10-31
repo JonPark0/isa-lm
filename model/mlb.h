@@ -22,6 +22,8 @@ typedef struct {
     float embed_scale;  /* factor on embedding rows; 1 when the header has 0 (offset 112) */
     float attn_scale;   /* attention score factor; 1/sqrt(head_dim) when the header has 0 (116) */
     int scale_f16;      /* matrix scales are stored as f16 (offset 120) */
+    float attn_softcap; /* > 0: attention scores become cap * tanh(score / cap) (124; Gemma 2) */
+    float final_softcap;/* > 0: the same on the logits (128) */
     /* RoPE scaling (header offsets 52..71, 88): ML_ROPE_*. For yarn the low
      * and high frequency factors hold beta_fast and beta_slow. */
     int rope_type, rope_orig_max_seq;
