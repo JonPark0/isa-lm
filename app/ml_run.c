@@ -39,7 +39,7 @@ static const char USAGE[] =
     "  --batch N        prompt tokens per batched prefill step, 1..128 (default 128; 1 = token by token)\n"
     "  --no-pack        keep weights row-major (no repacking at load: less memory, slower)\n"
     "  --pack-cache     keep the packed weights in MODEL.pk<G> and map them from there next time\n"
-    "  --kv TYPE        KV cache type: f32 (default) or q8 (3.8x smaller, faster on long contexts)\n"
+    "  --kv TYPE        KV cache type: f32 (default), f16 (2x smaller) or q8 (3.8x smaller, faster on long contexts)\n"
     "  --profile        print time spent per stage (qkv, attention, wo, ffn, classifier, other)\n"
     "  --imatrix FILE   add the squares of every matrix input, per channel, to FILE (created if\n"
     "                   missing) for tools/convert.py --imatrix; run on text like the model's use\n"
@@ -277,6 +277,7 @@ int ml_main(int argc, char **argv) {
         else if (!strcmp(a, "--kv")) {
             if (!strcmp(v, "f32")) kv_type = ML_F32;
             else if (!strcmp(v, "q8")) kv_type = ML_Q8_0;
+            else if (!strcmp(v, "f16")) kv_type = ML_F16;
             else ok = 0;
         }
         else return usage("unknown option");
@@ -406,7 +407,7 @@ int ml_main(int argc, char **argv) {
     if (npre > 0)
         fprintf(stderr, "prefill: %d tokens in %.1f ms (%.1f tok/s)\n", npre, tp * 1e3, tp > 0 ? npre / tp : 0.0);
     fprintf(stderr, "positions: %d, tok/s: %.2f, threads: %d, isa: %s, packed: %d, kv: %s\n", pos, dt > 0 ? pos / dt : 0.0,
-            ml_pool_size(s.pool), ML_ISA_NAME, m.packed ? ml_pack_group() : 0, kv_type == ML_Q8_0 ? "q8" : "f32");
+            ml_pool_size(s.pool), ML_ISA_NAME, m.packed ? ml_pack_group() : 0, kv_type == ML_Q8_0 ? "q8" : kv_type == ML_F16 ? "f16" : "f32");
     if (profile) {
         double total = 0.0;
         for (int i = 0; i < ML_PROF_COUNT; i++) total += s.prof[i];

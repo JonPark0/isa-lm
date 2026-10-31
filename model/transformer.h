@@ -16,9 +16,10 @@ typedef struct {
     float *x, *xb, *xb2, *hb, *hb2, *q, *logits;
     float *ao;                     /* attention output [q_dim] (wo's input) */
     float *att;                    /* scores [max(n_heads, threads * ml_attention_batch_heads)][max_seq] */
-    int kv_type;                   /* ML_F32 or ML_Q8_0 (see ml_state_init) */
+    int kv_type;                   /* ML_F32, ML_F16 or ML_Q8_0 (see ml_state_init) */
     float *kcache, *vcache;        /* F32: [layer][max_seq][kv_dim] */
     int8_t *kq, *vq;               /* Q8: [layer][max_seq][kv_dim] */
+    uint16_t *kh, *vh;             /* F16: [layer][max_seq][kv_dim] */
     float *kd, *vd;                /* Q8: [layer][max_seq][n_kv_heads] scales */
     float *kbuf, *vbuf;            /* Q8: this step's K and V before quantization, [ML_BATCH_MAX][kv_dim] */
     int8_t *qq;                    /* Q8: quantized query heads [ML_BATCH_MAX][q_dim] */
@@ -47,9 +48,11 @@ size_t ml_imatrix_size(const ml_config *c);
 #define ML_BATCH_MAX 128
 #endif
 
-/* kv_type: ML_F32 keeps the KV cache in float; ML_Q8_0 stores each position's
- * K and V per KV head as int8 with one scale (about 3.8x less memory, faster
- * attention on long contexts, slightly different logits). */
+/* kv_type: ML_F32 keeps the KV cache in float; ML_F16 rounds K and V to half
+ * precision (half the memory, logits within f16 rounding of F32's); ML_Q8_0
+ * stores each position's K and V per KV head as int8 with one scale (about
+ * 3.8x less memory, faster attention on long contexts, slightly different
+ * logits). */
 ml_status ml_state_init(ml_state *s, ml_model *m, int nthreads, int kv_type);
 /* Runs n tokens at positions pos0.. through the model in batches, filling the
  * KV cache. If logits is non-NULL it receives [n][vocab] logits; otherwise

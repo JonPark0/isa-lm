@@ -344,7 +344,7 @@ build/avx2/ml_run model.mlb --tokens 1,450,3681 --dump-logits l.f32
 | `-t N` | Threads, 1 to 64. Only builds made with `THREADS=pthread` use more than one. |
 | `--dump-logits F` | Write float32 logits `[n_tokens][vocab]` for every `--tokens` position, then exit. |
 | `--batch N` | Prompt tokens per batched prefill step, 1 to 128. Default 128; `1` processes the prompt token by token. The output is identical either way. |
-| `--kv TYPE` | KV cache type: `f32` (default) or `q8`. `q8` stores K and V as int8 with one scale per position and KV head: about 3.8× less memory and faster attention on long contexts, with slightly different logits. |
+| `--kv TYPE` | KV cache type: `f32` (default), `f16` or `q8`. `f16` rounds K and V to half precision: half the memory at the same speed, with logits within that rounding (Qwen2.5 0.5B Q4 perplexity 21.71 against 21.74). `q8` stores K and V as int8 with one scale per position and KV head: about 3.8× less memory and faster attention on long contexts, with slightly different logits (22.82 on the same test). |
 | `--pack-cache` | Save the packed weights next to the model (`MODEL.pk<G>`, G = pack group) and map them from there on later runs instead of packing again. The cache is checked against the model and the build's layout and rewritten when stale. |
 | `--no-pack` | Keep weights row-major instead of repacking them for the packed kernels. Uses less memory during load, but runs slower. |
 | `--profile` | Print the share of forward-pass time per stage (qkv, attention, wo, ffn, classifier, other). |
@@ -387,8 +387,9 @@ On a 4-vCPU VM with the avx512vnni build, `-t 4` decodes a 4-layer dim-2048 Q4 m
 - **Prompts:** long prompts are processed in batches of 128 tokens. That is 2–6×
   faster than token by token, depending on the ISA and the model size.
 - **Long contexts:** attention grows with the position and, past a few
-  thousand tokens, takes a third or more of the time. `--kv q8` cuts the KV
-  cache's memory traffic and size by about 3.8×.
+  thousand tokens, takes a third or more of the time. `--kv f16` halves the
+  KV cache at no measurable cost; `--kv q8` cuts its memory traffic and size
+  by about 3.8×.
 - **Memory:** packing makes one copy of the weights at load and then releases
   the originals' pages. If a device cannot hold two copies of the model even
   briefly, use `--no-pack`, or `--pack-cache` once on a bigger machine with the
@@ -404,7 +405,8 @@ On a 4-vCPU VM with the avx512vnni build, `-t 4` decodes a 4-layer dim-2048 Q4 m
   65536. `vocab` and `max_seq` can be at most 2^24.
 - **Shapes:** `dim` and `hidden_dim` must be multiples of 32, `head_dim` must be
   even, and `n_heads` must be a multiple of `n_kv_heads`.
-- **Memory:** the KV cache uses `n_layers × max_seq × kv_dim × 8` bytes, or
+- **Memory:** the KV cache uses `n_layers × max_seq × kv_dim × 8` bytes,
+  `n_layers × max_seq × kv_dim × 4` with `--kv f16`, or
   `n_layers × max_seq × (kv_dim + 4 × n_kv_heads) × 2` with `--kv q8`. All size
   arithmetic is overflow-checked, so on 32-bit ARMv7 an oversized model fails
   with `out of memory` instead of crashing.

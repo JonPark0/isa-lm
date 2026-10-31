@@ -239,6 +239,18 @@
 #define ml_k_axpy_f32 ml_k_axpy_f32_scalar
 #endif
 
+/* F16 KV cache: F16C on x86 (the AVX2 builds and up), fcvtl on AArch64. */
+#if defined(ML_HAS_DOT_F16_AVX2)
+#define ml_k_dot_f16 ml_k_dot_f16_avx2
+#define ml_k_axpy_f16 ml_k_axpy_f16_avx2
+#elif defined(ML_HAS_DOT_F16_NEON)
+#define ml_k_dot_f16 ml_k_dot_f16_neon
+#define ml_k_axpy_f16 ml_k_axpy_f16_neon
+#else
+#define ml_k_dot_f16 ml_k_dot_f16_scalar
+#define ml_k_axpy_f16 ml_k_axpy_f16_scalar
+#endif
+
 #if defined(ML_HAS_DOT_Q8_AVX512VNNI)
 #define ml_k_dot_q8 ml_k_dot_q8_avx512vnni
 #elif defined(ML_HAS_DOT_Q8_AVXVNNI)

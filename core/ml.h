@@ -64,7 +64,7 @@ static inline void ml_prefetch_ahead(const void *p, int bytes) {
     for (int l = 0; l < bytes; l += 64) ML_PREFETCH((const void *)((uintptr_t)p + ML_PREFETCH_DIST + (uintptr_t)l));
 }
 
-enum { ML_F32 = 0, ML_Q8_0 = 1, ML_Q4_0 = 2 };
+enum { ML_F32 = 0, ML_Q8_0 = 1, ML_Q4_0 = 2, ML_F16 = 3 };   /* ML_F16: KV cache only */
 
 /* Quantized weight matrix, SoA: q[rows*cols] (Q4: rows*cols/2 packed bytes),
  * d[rows*cols/QK] scales. */

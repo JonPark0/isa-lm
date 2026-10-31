@@ -17,6 +17,9 @@ void ml_k_gelu_mul_scalar(float *g, const float *u, int n);
 void ml_k_add_scalar(float *y, const float *x, int n);
 void ml_k_dot_f32_scalar(float *s, const float *q, const float *k, size_t ldk, int rows, int n, float scale);
 void ml_k_axpy_f32_scalar(float *y, const float *a, const float *x, size_t ldx, int rows, int n);
+/* F16 KV cache: the same over IEEE half-precision rows, widened exactly. */
+void ml_k_dot_f16_scalar(float *s, const float *q, const uint16_t *k, size_t ldk, int rows, int n, float scale);
+void ml_k_axpy_f16_scalar(float *y, const float *a, const uint16_t *x, size_t ldx, int rows, int n);
 void ml_k_dot_q8_scalar(float *s, const int8_t *q, float dq, const int8_t *k, const float *dk, size_t ldk, size_t lddk, int rows, int n, float scale);
 void ml_k_axpy_q8_scalar(float *y, const float *a, const int8_t *x, const float *dx, size_t ldx, size_t lddx, int rows, int n);
 
