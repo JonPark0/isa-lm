@@ -91,10 +91,10 @@ HF_TYPES = ("llama", "mistral", "qwen2", "qwen3")
 
 
 def _window(c):
-    """-> (window, mixed): the sliding-window span, and whether only some layers use it."""
+    """-> (window, per-layer sliding flags or None when every layer slides); (None, None) without a window."""
     w = c.get("sliding_window")
     if not w:
-        return None, False
+        return None, None
     n = c["num_hidden_layers"]
     if c.get("layer_types"):
         sliding = [t == "sliding_attention" for t in c["layer_types"]]
@@ -103,8 +103,8 @@ def _window(c):
     else:
         sliding = [True] * n
     if not any(sliding):
-        return None, False
-    return int(w), not all(sliding)
+        return None, None
+    return int(w), (None if all(sliding) else sliding)
 
 
 def _rope_scaling(c, hd):
@@ -166,11 +166,9 @@ def load_hf(d, max_seq=None):
     nkv = c.get("num_key_value_heads", nh)
     tied = c.get("tie_word_embeddings", False) or "lm_head.weight" not in t
     seq = min(c["max_position_embeddings"], max_seq or c["max_position_embeddings"])
-    window, mixed = _window(c)
-    if mixed:   # only some layers slide: within the window that equals full attention
-        seq, window = min(seq, window), None
-    if window and window >= seq:
-        window = None
+    window, sliding = _window(c)
+    if window and window >= seq:   # the window never cuts anything off
+        window, sliding = None, None
     qk_norm = "model.layers.0.self_attn.q_norm.weight" in t
     if (t["model.layers.0.self_attn.q_proj.weight"].shape[0] != nh * hd or
             t["model.layers.0.self_attn.k_proj.weight"].shape[0] != nkv * hd):
@@ -183,7 +181,8 @@ def load_hf(d, max_seq=None):
                hidden_dim=c["intermediate_size"], vocab=c["vocab_size"], max_seq=seq, qkv_bias=int(bias),
                rope_theta=float(c.get("rope_theta", 10000.0)), norm_eps=float(c.get("rms_norm_eps", 1e-5)),
                shared_classifier=int(tied), rope_scaling=rope_scaling, head_dim=hd, qk_norm=int(qk_norm),
-               sliding_window=window or 0)
+               sliding_window=window or 0,
+               layer_flags=[mlb.LAYER_SLIDING if sl else 0 for sl in sliding] if sliding else None)
     w = {"tok_emb": t["model.embed_tokens.weight"], "final_norm": t["model.norm.weight"], "layers": []}
     for i in range(cfg["n_layers"]):
         p = f"model.layers.{i}."

@@ -8,7 +8,7 @@
 #include "model/transformer.h"
 #include "tests/tt.h"
 
-static const char *q8_path, *q4_path, *wrap_path;
+static const char *q8_path, *q4_path, *wrap_path, *lwin_path;
 static char tmp_path[1024];
 
 static unsigned char *slurp(const char *path, size_t *n) {
@@ -149,6 +149,30 @@ static void test_load_empty_file_is_format_error(void) {
     remove(tmp_path);
 }
 
+/* Per-layer flags (lwin_q8.mlb: 4 flag bytes after the header): unknown bits,
+ * or the local RoPE base used without a rope_local_theta. */
+static void test_load_rejects_bad_layer_flags(void) {
+    if (!lwin_path) return;
+    size_t n;
+    unsigned char *b = slurp(lwin_path, &n);
+    ml_model m;
+    spit(tmp_path, b, n);
+    TT_EQ_INT(ml_model_load(&m, tmp_path), ML_OK);
+    TT_EQ_INT(m.layers[0].window, 5);
+    TT_EQ_INT(m.layers[1].window, 0);
+    TT_EQ_INT(m.layers[0].local_rope, 1);
+    ml_model_free(&m);
+    b[256] = 4;   /* unknown bit */
+    spit(tmp_path, b, n);
+    TT_EQ_INT(ml_model_load(&m, tmp_path), ML_E_FORMAT);
+    b[256] = 3;
+    memset(b + 100, 0, 4);   /* rope_local_theta = 0 */
+    spit(tmp_path, b, n);
+    TT_EQ_INT(ml_model_load(&m, tmp_path), ML_E_FORMAT);
+    free(b);
+    remove(tmp_path);
+}
+
 static void test_load_rejects_tiny_vocab(void) {
     TT_EQ_INT(load_patched(0, 28, 2), ML_E_SHAPE);   /* BOS/EOS ids need vocab >= 3 */
 }
@@ -179,14 +203,17 @@ static void test_load_rejects_bad_rope_scaling(void) {
     TT_EQ_INT(load_patched(0, 88, 0x3f800000u), ML_E_FORMAT);   /* attention factor without yarn */
 }
 
-/* head_dim (offset 80), qk_norm (84) and sliding_window (92). Models using
- * them are covered end to end (qk_q4.mlb, swa_q8.mlb). */
+/* head_dim (offset 80), qk_norm (84), sliding_window (92), per-layer flags
+ * (96, 100). Models using them are covered end to end (qk_q4.mlb, swa_q8.mlb,
+ * lwin_q8.mlb). */
 static void test_load_rejects_bad_attention_fields(void) {
     TT_EQ_INT(load_patched(0, 80, 3), ML_E_SHAPE);           /* odd head_dim */
     TT_EQ_INT(load_patched(0, 80, 0x20000u), ML_E_SHAPE);    /* n_heads * head_dim too large */
     TT_EQ_INT(load_patched(0, 84, 2), ML_E_FORMAT);          /* qk_norm is a 0/1 flag */
     TT_EQ_INT(load_patched(0, 92, 0x2000000u), ML_E_FORMAT); /* window beyond any context */
     TT_EQ_INT(load_patched(0, 92, 8), ML_OK);                /* a window alone needs no other data */
+    TT_EQ_INT(load_patched(0, 96, 2), ML_E_FORMAT);          /* per-layer flags present: 0 or 1 */
+    TT_EQ_INT(load_patched(0, 100, 0xbf800000u), ML_E_FORMAT);   /* negative local RoPE base */
 }
 
 /* q8_mask (offset 72): only Q4 models may keep classes in Q8, and only known
@@ -214,7 +241,11 @@ int TT_ENTRY(int argc, char **argv) {
     if (argc < 3) { fprintf(stderr, "usage: test_load Q8.mlb Q4.mlb\n"); return 2; }
     q8_path = argv[1];
     q4_path = argv[2];
-    wrap_path = argc > 3 ? argv[3] : NULL;
+    /* the other models of the Makefile's list, found by name */
+    for (int i = 3; i < argc; i++) {
+        if (strstr(argv[i], "wrap32")) wrap_path = argv[i];
+        if (strstr(argv[i], "lwin")) lwin_path = argv[i];
+    }
     snprintf(tmp_path, sizeof tmp_path, "%s.tmp", q8_path);
     TT_RUN(test_load_ok);
     TT_RUN(test_load_rejects_truncated);
@@ -224,6 +255,7 @@ int TT_ENTRY(int argc, char **argv) {
     TT_RUN(test_load_rejects_bad_rope_scaling);
     TT_RUN(test_load_rejects_bad_q8_mask);
     TT_RUN(test_load_rejects_bad_attention_fields);
+    TT_RUN(test_load_rejects_bad_layer_flags);
     TT_RUN(test_load_rejects_overflowing_dims);
     TT_RUN(test_load_rejects_tiny_vocab);
     TT_RUN(test_load_rejects_q8_minus_128);

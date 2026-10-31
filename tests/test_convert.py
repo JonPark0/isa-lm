@@ -319,20 +319,23 @@ def test_hf_qwen2_runs_in_c(tmp_path):
 
 
 def test_hf_sliding_window(tmp_path):
-    """A window on every layer is kept; one on some layers caps the context instead."""
-    win = lambda d: (lambda c: (c["max_seq"], c["sliding_window"]))(convert.load_hf(d)[0])
+    """A window on every layer applies to all; one on some layers goes in the per-layer flags."""
+    win = lambda d: (lambda c: (c["max_seq"], c["sliding_window"], c["layer_flags"]))(convert.load_hf(d)[0])
     d, cfg, _ = _make_hf(tmp_path, model_type="mistral", sliding_window=16)
-    assert win(d) == (cfg["max_seq"], 16)
+    assert win(d) == (cfg["max_seq"], 16, None)
     d, _, _ = _make_hf(tmp_path / "a", model_type="qwen2", sliding_window=16, use_sliding_window=True,
                        max_window_layers=0)
-    assert win(d) == (cfg["max_seq"], 16)
+    assert win(d) == (cfg["max_seq"], 16, None)
     d, _, _ = _make_hf(tmp_path / "b", model_type="qwen2", sliding_window=16, use_sliding_window=True,
-                       max_window_layers=1)
-    assert win(d) == (16, 0)
+                       max_window_layers=1)   # layer 0 attends to everything, layer 1 slides
+    assert win(d) == (cfg["max_seq"], 16, [0, mlb.LAYER_SLIDING])
+    d, _, _ = _make_hf(tmp_path / "e", model_type="qwen2", sliding_window=16,
+                       layer_types=["sliding_attention", "full_attention"])
+    assert win(d) == (cfg["max_seq"], 16, [mlb.LAYER_SLIDING, 0])
     d, _, _ = _make_hf(tmp_path / "c", model_type="qwen2", sliding_window=16, use_sliding_window=False)
-    assert win(d) == (cfg["max_seq"], 0)
+    assert win(d) == (cfg["max_seq"], 0, None)
     d, _, _ = _make_hf(tmp_path / "d", model_type="mistral", sliding_window=4096)   # wider than the context
-    assert win(d) == (cfg["max_seq"], 0)
+    assert win(d) == (cfg["max_seq"], 0, None)
 
 
 def test_hf_unsupported_models_refused(tmp_path):

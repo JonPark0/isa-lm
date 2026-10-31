@@ -17,6 +17,7 @@ typedef struct {
     const float *k, *v;
     const int8_t *kq, *vq;
     const float *kd, *vd;
+    int window;   /* positions attended at most (sliding window); 0: all */
 } ml_kv_layer;
 
 /* Quantizes x[0, n) with a single scale, by the quantize_q8 rule. */
