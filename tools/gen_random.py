@@ -13,24 +13,27 @@ def generate(cfg, seed=0):
     """cfg: dim, n_layers, n_heads, n_kv_heads, hidden_dim, vocab, max_seq, rope_theta,
     norm_eps -> (cfg, weights) with float32 weights scaled by 1/sqrt(fan_in)."""
     rng = np.random.default_rng(seed)
-    dim, hid = cfg["dim"], cfg["hidden_dim"]
-    kv = dim // cfg["n_heads"] * cfg["n_kv_heads"]
+    dim, hid, hd = cfg["dim"], cfg["hidden_dim"], mlb.head_dim(cfg)
+    qd, kv = hd * cfg["n_heads"], hd * cfg["n_kv_heads"]
 
     def mat(rows, cols):
         return (rng.standard_normal((rows, cols)) / np.sqrt(cols)).astype(np.float32)
 
-    def norm():
-        return (1.0 + 0.01 * rng.standard_normal(dim)).astype(np.float32)
+    def norm(n=dim):
+        return (1.0 + 0.01 * rng.standard_normal(n)).astype(np.float32)
 
     w = {"tok_emb": (0.5 * rng.standard_normal((cfg["vocab"], dim))).astype(np.float32), "layers": []}
     for _ in range(cfg["n_layers"]):
-        w["layers"].append({"attn_norm": norm(), "wq": mat(dim, dim), "wk": mat(kv, dim),
-                            "wv": mat(kv, dim), "wo": mat(dim, dim), "ffn_norm": norm(),
+        w["layers"].append({"attn_norm": norm(), "wq": mat(qd, dim), "wk": mat(kv, dim),
+                            "wv": mat(kv, dim), "wo": mat(dim, qd), "ffn_norm": norm(),
                             "w1": mat(hid, dim), "w2": mat(dim, hid), "w3": mat(hid, dim)})
         if cfg.get("qkv_bias"):
-            w["layers"][-1].update(bq=(0.2 * rng.standard_normal(dim)).astype(np.float32),
+            w["layers"][-1].update(bq=(0.2 * rng.standard_normal(qd)).astype(np.float32),
                                    bk=(0.2 * rng.standard_normal(kv)).astype(np.float32),
                                    bv=(0.2 * rng.standard_normal(kv)).astype(np.float32))
+        if cfg.get("qk_norm"):   # spread out, so that a wrong permutation shows
+            w["layers"][-1].update(q_norm=(1.0 + 0.3 * rng.standard_normal(hd)).astype(np.float32),
+                                   k_norm=(1.0 + 0.3 * rng.standard_normal(hd)).astype(np.float32))
     w["final_norm"] = norm()
     w["wcls"] = mat(cfg["vocab"], dim)
     cfg = dict(cfg, shared_classifier=0)
@@ -53,18 +56,32 @@ def main():
     ap.add_argument("--max-seq", type=int, default=32)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--qkv-bias", action="store_true", help="Q/K/V projection biases (Qwen2)")
+    ap.add_argument("--head-dim", type=int, default=0, help="head size other than dim / heads (Qwen3)")
+    ap.add_argument("--qk-norm", action="store_true", help="RMSNorm of each query and key head (Qwen3)")
+    ap.add_argument("--sliding-window", type=int, default=0, help="attend to this many positions at most")
     ap.add_argument("--rope-scaling", default=None, metavar="F,LO,HI,ORIG",
                     help="llama3 RoPE scaling: factor, low/high freq factors, original context")
+    ap.add_argument("--rope-linear", type=float, default=None, metavar="F", help="linear RoPE scaling")
+    ap.add_argument("--rope-yarn", default=None, metavar="F,ORIG",
+                    help="yarn RoPE scaling (beta_fast 32, beta_slow 1, default attention factor)")
     ap.add_argument("--dump-emb-row", type=int, default=None,
                     help="also write <out>.emb<N>.f32: dequantized embedding row N")
     a = ap.parse_args()
     cfg = dict(dim=a.dim, n_layers=a.layers, n_heads=a.heads, n_kv_heads=a.kv_heads,
                hidden_dim=a.hidden, vocab=a.vocab, max_seq=a.max_seq,
-               rope_theta=10000.0, norm_eps=1e-5, qkv_bias=int(a.qkv_bias))
+               rope_theta=10000.0, norm_eps=1e-5, qkv_bias=int(a.qkv_bias), head_dim=a.head_dim or None,
+               qk_norm=int(a.qk_norm), sliding_window=a.sliding_window)
     if a.rope_scaling:
         f, lo, hi, orig = a.rope_scaling.split(",")
         cfg["rope_scaling"] = {"type": "llama3", "factor": float(f), "low_freq_factor": float(lo),
                                "high_freq_factor": float(hi), "original_max_position_embeddings": int(orig)}
+    if a.rope_linear:
+        cfg["rope_scaling"] = {"type": "linear", "factor": a.rope_linear}
+    if a.rope_yarn:
+        f, orig = a.rope_yarn.split(",")
+        cfg["rope_scaling"] = {"type": "yarn", "factor": float(f), "beta_fast": 32.0, "beta_slow": 1.0,
+                               "original_max_position_embeddings": int(orig),
+                               "attention_factor": 0.1 * np.log(float(f)) + 1.0}
     cfg, w = generate(cfg, a.seed)
     mlb.write_mlb(a.out, cfg, w, a.wtype, [c for c in a.q8.split(",") if c])
     if a.dump_emb_row is not None:

@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Qwen3: a `head_dim` other than `dim / n_heads` and per-head q/k RMSNorm
+  (`.mlb` header offsets 80 and 84). Qwen3 0.6B Q8 perplexity 27.91 against
+  28.10 for an F32 reference.
+- SmolLM2 and GPT-2 tokenizers: the GPT-2 pre-tokenizer regex (MLT1 flag 32),
+  after a digit split if the tokenizer has one (flag 64); identical to the
+  tokenizers library on every checked text. `--chat smollm`.
+- RoPE scaling of the linear and yarn kinds (header `rope_type` 2 and 3, yarn's
+  attention factor at offset 88), with transformers' formulas.
+- Sliding-window attention (offset 92): a window on every layer, as Mistral
+  v0.1 has, is kept instead of capping the context.
+- Windows: CI builds the scalar, SSE2 and AVX2 configurations with MSVC and
+  checks them against the numpy reference.
+
+### Changed
+
+- `tools/convert.py hf` refuses partial rotary embeddings, and q/k projections
+  that do not match the configured heads.
+- Importance matrix files record the attention width when it differs from
+  `dim` (Qwen3); files for other models are unchanged.
+
 ## 0.2.0 — 2026-10-27
 
 ### Added

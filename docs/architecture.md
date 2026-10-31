@@ -86,8 +86,10 @@ instruction can execute on an unsupported CPU, not even in a function prologue.
 x = dequant(tok_emb[token])
 for each layer:
     h  = rmsnorm(x) ; qa = quantize_q8(h)
-    q, k, v = matvec(Wq|Wk|Wv, qa) ; rope(q, k)       k, v go into the KV cache (F32, or quantized for Q8)
-    o  = attention(q, K[0..pos], V[0..pos])           per head, GQA head h → kv head h / (n_heads / n_kv_heads)
+    q, k, v = matvec(Wq|Wk|Wv, qa) (+ biases) ; per-head q/k norm (Qwen3) ; rope(q, k)
+                                                      k, v go into the KV cache (F32, or quantized for Q8)
+    o  = attention(q, K[w..pos], V[w..pos])           per head, GQA head h → kv head h / (n_heads / n_kv_heads);
+                                                      w = 0, or pos + 1 − sliding_window with a window
     x += matvec(Wo, quantize_q8(o))
     h  = rmsnorm(x) ; qa = quantize_q8(h)
     g  = silu(matvec(W1, qa)) * matvec(W3, qa)

@@ -73,7 +73,8 @@ $(BUILD)/test_%: $(BUILD)/obj/tests/test_%.o $(GUARD_OBJ) $(LIB_OBJ)
 	@$(CC) $(LDFLAGS) $^ -o $@ $(LDLIBS)
 
 MODELS := build/models/rand_q8.mlb build/models/rand_q4.mlb build/models/ctx_q4.mlb build/models/mix_q4.mlb \
-          build/models/chat_q8.mlb build/models/bias_q4.mlb
+          build/models/chat_q8.mlb build/models/bias_q4.mlb \
+          build/models/qk_q4.mlb build/models/swa_q8.mlb build/models/yarn_q4.mlb
 build/models/rand_%.mlb: tools/gen_random.py tools/mlb.py
 	@mkdir -p $(dir $@)
 	@$(PYTHON) tools/gen_random.py --out $@ --wtype $* --dump-emb-row 5
@@ -87,6 +88,21 @@ build/models/mix_q4.mlb: tools/gen_random.py tools/mlb.py
 build/models/bias_q4.mlb: tools/gen_random.py tools/mlb.py
 	@mkdir -p $(dir $@)
 	@$(PYTHON) tools/gen_random.py --out $@ --wtype q4 --qkv-bias --seed 7
+
+# Qwen3 shape: head_dim 32 with dim 64 (q_dim 128), per-head q/k RMSNorm
+build/models/qk_q4.mlb: tools/gen_random.py tools/mlb.py
+	@mkdir -p $(dir $@)
+	@$(PYTHON) tools/gen_random.py --out $@ --wtype q4 --head-dim 32 --qk-norm --qkv-bias --seed 4
+
+# sliding-window attention over the last 6 positions
+build/models/swa_q8.mlb: tools/gen_random.py tools/mlb.py
+	@mkdir -p $(dir $@)
+	@$(PYTHON) tools/gen_random.py --out $@ --wtype q8 --sliding-window 6 --seed 4
+
+# yarn RoPE scaling (factor 4 over an original context of 8)
+build/models/yarn_q4.mlb: tools/gen_random.py tools/mlb.py
+	@mkdir -p $(dir $@)
+	@$(PYTHON) tools/gen_random.py --out $@ --wtype q4 --rope-yarn 4,8 --seed 4
 
 # vocabulary of tests/data/bpe_tiny.json (335 tokens) for --chat; 128 positions
 build/models/chat_q8.mlb: tools/gen_random.py tools/mlb.py

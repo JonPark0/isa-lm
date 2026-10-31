@@ -192,10 +192,10 @@ def _interleaved_rope(v, pos, hd, theta):
     return np.stack([a * np.cos(ang) - b * np.sin(ang), a * np.sin(ang) + b * np.cos(ang)], -1).reshape(-1, hd)
 
 
-def _make_hf(tmp_path, bias=False, **extra):
-    cfg, w = gen_random.generate(dict(SMALL, qkv_bias=bias), seed=5)
+def _make_hf(tmp_path, bias=False, head_dim=None, qk_norm=False, **extra):
+    cfg, w = gen_random.generate(dict(SMALL, qkv_bias=bias, head_dim=head_dim, qk_norm=qk_norm), seed=5)
     dim, nh, nkv = cfg["dim"], cfg["n_heads"], cfg["n_kv_heads"]
-    hd = dim // nh
+    hd = mlb.head_dim(cfg)
 
     def to_hf(m, n_heads):   # interleaved rows -> rotate_half rows (inverse of the converter)
         return m.reshape(n_heads, hd // 2, 2, -1).transpose(0, 2, 1, 3).reshape(-1, m.shape[1])
@@ -218,6 +218,9 @@ def _make_hf(tmp_path, bias=False, **extra):
             put(p + "self_attn.q_proj.bias", to_hf(L["bq"][:, None], nh)[:, 0])
             put(p + "self_attn.k_proj.bias", to_hf(L["bk"][:, None], nkv)[:, 0])
             put(p + "self_attn.v_proj.bias", L["bv"])
+        if qk_norm:
+            put(p + "self_attn.q_norm.weight", to_hf(L["q_norm"][:, None], 1)[:, 0])
+            put(p + "self_attn.k_norm.weight", to_hf(L["k_norm"][:, None], 1)[:, 0])
         put(p + "self_attn.o_proj.weight", L["wo"])
         put(p + "post_attention_layernorm.weight", L["ffn_norm"])
         put(p + "mlp.gate_proj.weight", L["w1"])
@@ -231,7 +234,7 @@ def _make_hf(tmp_path, bias=False, **extra):
         "hidden_size": dim, "intermediate_size": cfg["hidden_dim"], "num_hidden_layers": cfg["n_layers"],
         "num_attention_heads": nh, "num_key_value_heads": nkv, "vocab_size": cfg["vocab"],
         "max_position_embeddings": cfg["max_seq"], "rope_theta": 10000.0, "rms_norm_eps": 1e-5,
-        "tie_word_embeddings": True, **extra}))
+        "tie_word_embeddings": True, **({"head_dim": head_dim} if head_dim else {}), **extra}))
     return str(d), cfg, orig
 
 
@@ -315,20 +318,98 @@ def test_hf_qwen2_runs_in_c(tmp_path):
     _assert_close_to_ref(got, ref)
 
 
-def test_hf_sliding_window_caps_context(tmp_path):
+def test_hf_sliding_window(tmp_path):
+    """A window on every layer is kept; one on some layers caps the context instead."""
+    win = lambda d: (lambda c: (c["max_seq"], c["sliding_window"]))(convert.load_hf(d)[0])
     d, cfg, _ = _make_hf(tmp_path, model_type="mistral", sliding_window=16)
-    assert convert.load_hf(d)[0]["max_seq"] == 16
-    d2, _, _ = _make_hf(tmp_path / "q", model_type="qwen2", sliding_window=16, use_sliding_window=True)
-    assert convert.load_hf(d2)[0]["max_seq"] == 16
+    assert win(d) == (cfg["max_seq"], 16)
+    d, _, _ = _make_hf(tmp_path / "a", model_type="qwen2", sliding_window=16, use_sliding_window=True,
+                       max_window_layers=0)
+    assert win(d) == (cfg["max_seq"], 16)
+    d, _, _ = _make_hf(tmp_path / "b", model_type="qwen2", sliding_window=16, use_sliding_window=True,
+                       max_window_layers=1)
+    assert win(d) == (16, 0)
+    d, _, _ = _make_hf(tmp_path / "c", model_type="qwen2", sliding_window=16, use_sliding_window=False)
+    assert win(d) == (cfg["max_seq"], 0)
+    d, _, _ = _make_hf(tmp_path / "d", model_type="mistral", sliding_window=4096)   # wider than the context
+    assert win(d) == (cfg["max_seq"], 0)
 
 
 def test_hf_unsupported_models_refused(tmp_path):
     import pytest
-    for i, extra in enumerate(({"model_type": "gemma"}, {"hidden_act": "gelu"}, {"head_dim": 4},
-                               {"mlp_bias": True})):
+    for i, extra in enumerate(({"model_type": "gemma"}, {"hidden_act": "gelu"}, {"partial_rotary_factor": 0.5},
+                               {"mlp_bias": True}, {"num_key_value_heads": 1})):
         d, _, _ = _make_hf(tmp_path / str(i), **extra)
         with pytest.raises(ValueError):
             convert.load_hf(d)
+
+
+def _hf_rms(v, w, eps=1e-5):
+    return v / np.sqrt((v * v).mean() + eps) * w
+
+
+def test_hf_qwen3(tmp_path):
+    """Qwen3: head_dim 32 with dim 64 and per-head q/k RMSNorm before RoPE.
+    The norm weights follow their heads' rows through the RoPE permutation."""
+    d, cfg, orig = _make_hf(tmp_path, head_dim=32, qk_norm=True, model_type="qwen3")
+    ccfg, w = convert.load_hf(d)
+    assert ccfg["head_dim"] == 32 and ccfg["qk_norm"] == 1
+    nh, nkv, hd = cfg["n_heads"], cfg["n_kv_heads"], 32
+    p = "model.layers.1.self_attn."
+    L = w["layers"][1]
+    x = np.random.default_rng(2).standard_normal(cfg["dim"])
+    for pos in (0, 7):
+        qh = (orig[p + "q_proj.weight"] @ x).reshape(nh, hd)
+        kh = (orig[p + "k_proj.weight"] @ x).reshape(nkv, hd)
+        qh = _hf_rope(np.stack([_hf_rms(r, orig[p + "q_norm.weight"]) for r in qh]).reshape(-1), pos, hd, 10000.0)
+        kh = _hf_rope(np.stack([_hf_rms(r, orig[p + "k_norm.weight"]) for r in kh]).reshape(-1), pos + 1, hd, 10000.0)
+        qi = (L["wq"] @ x).reshape(nh, hd)
+        ki = (L["wk"] @ x).reshape(nkv, hd)
+        qi = _interleaved_rope(np.stack([_hf_rms(r, L["q_norm"]) for r in qi]).reshape(-1), pos, hd, 10000.0)
+        ki = _interleaved_rope(np.stack([_hf_rms(r, L["k_norm"]) for r in ki]).reshape(-1), pos + 1, hd, 10000.0)
+        for h in range(nh):
+            np.testing.assert_allclose(qh[h] @ kh[h // (nh // nkv)], qi[h] @ ki[h // (nh // nkv)],
+                                       rtol=1e-5, atol=1e-6)
+    exe = os.path.join(ROOT, "build", "scalar", "ml_run")
+    if os.path.exists(exe):
+        out = str(tmp_path / "q3.mlb")
+        convert.main(["hf", d, out])
+        rcfg, t = mlb.read_mlb(out)
+        assert rcfg["head_dim"] == 32 and rcfg["qk_norm"] == 1
+        subprocess.run([exe, out, "--tokens", "1,7,3", "--dump-logits", str(tmp_path / "c.f32")], check=True)
+        got = np.fromfile(tmp_path / "c.f32", np.float32).reshape(3, -1)
+        _assert_close_to_ref(got, ref_forward.forward(rcfg, t, [1, 7, 3]))
+
+
+def test_hf_rope_scaling_types(tmp_path):
+    """linear and yarn rope_scaling convert; yarn's attention factor defaults as
+    transformers computes it, and its frequencies match transformers' (values
+    from _compute_yarn_parameters for this configuration)."""
+    d, _, _ = _make_hf(tmp_path)
+    cpath = tmp_path / "hf" / "config.json"
+    c = json.loads(cpath.read_text())
+    c["rope_scaling"] = {"rope_type": "linear", "factor": 2.0}
+    cpath.write_text(json.dumps(c))
+    assert convert.load_hf(d)[0]["rope_scaling"] == {"type": "linear", "factor": 2.0}
+    c["rope_scaling"] = {"rope_type": "yarn", "factor": 4.0, "original_max_position_embeddings": 8}
+    cpath.write_text(json.dumps(c))
+    rs = convert.load_hf(d)[0]["rope_scaling"]
+    assert rs["type"] == "yarn" and rs["beta_fast"] == 32 and rs["beta_slow"] == 1
+    assert abs(rs["attention_factor"] - (0.1 * np.log(4.0) + 1)) < 1e-12
+    c["rope_scaling"]["mscale"], c["rope_scaling"]["mscale_all_dim"] = 0.707, 0.707
+    cpath.write_text(json.dumps(c))
+    assert abs(convert.load_hf(d)[0]["rope_scaling"]["attention_factor"] - 1.0) < 1e-12
+    c["rope_scaling"]["truncate"] = False
+    cpath.write_text(json.dumps(c))
+    import pytest
+    with pytest.raises(ValueError):
+        convert.load_hf(d)
+    inv = mlb.rope_inv_freq({"dim": 512, "n_heads": 4, "head_dim": 128, "rope_theta": 1e6, "rope_scaling": {
+        "type": "yarn", "factor": 4.0, "beta_fast": 32.0, "beta_slow": 1.0,
+        "original_max_position_embeddings": 32768, "attention_factor": 1.0}})
+    np.testing.assert_allclose(inv[[0, 10, 20, 30, 40, 63]],
+                               [1.0, 0.1154781985, 0.01333521432, 0.001064360981, 4.445698525e-05, 3.102344402e-07],
+                               rtol=1e-6)
 
 
 def test_large_vocab_loads_in_c(tmp_path):
@@ -352,7 +433,7 @@ def test_large_vocab_loads_in_c(tmp_path):
 def test_hf_rope_scaling_refused(tmp_path):
     d, _, _ = _make_hf(tmp_path)
     c = json.loads((tmp_path / "hf" / "config.json").read_text())
-    c["rope_scaling"] = {"rope_type": "yarn", "factor": 32.0}
+    c["rope_scaling"] = {"rope_type": "longrope", "factor": 32.0}
     (tmp_path / "hf" / "config.json").write_text(json.dumps(c))
     import pytest
     with pytest.raises(ValueError, match="rope_scaling"):

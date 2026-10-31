@@ -23,20 +23,27 @@ straight into it without copying. Everything is little-endian.
 | 40 | `f32` | `norm_eps` | ≥ 0 |
 | 44 | `u32` | `wtype` | `1` = Q8_0, `2` = Q4_0 |
 | 48 | `u32` | `shared_classifier` | non-zero: `wcls` is omitted and `tok_emb` is used |
-| 52 | `u32` | `rope_type` | `0` = plain RoPE, `1` = llama3 scaling |
-| 56 | `f32` | `rope_factor` | llama3 only: > 0 |
-| 60 | `f32` | `rope_low_freq_factor` | llama3 only: > 0 |
-| 64 | `f32` | `rope_high_freq_factor` | llama3 only: > `rope_low_freq_factor` |
-| 68 | `u32` | `rope_orig_max_seq` | llama3 only: > 0 |
+| 52 | `u32` | `rope_type` | `0` = plain RoPE, `1` = llama3, `2` = linear, `3` = yarn scaling |
+| 56 | `f32` | `rope_factor` | llama3, linear, yarn: > 0 |
+| 60 | `f32` | `rope_low_freq_factor` | llama3: > 0; yarn: `beta_fast` |
+| 64 | `f32` | `rope_high_freq_factor` | llama3: > `rope_low_freq_factor`; yarn: `beta_slow`, > 0 and < `beta_fast` |
+| 68 | `u32` | `rope_orig_max_seq` | llama3, yarn: > 0 |
 | 72 | `u32` | `q8_mask` | `wtype` Q4_0 only: matrix classes stored as Q8_0 instead (below); 0 for Q8_0 models |
 | 76 | `u32` | `qkv_bias` | 0 or 1: the q, k and v projections have biases (Qwen2) |
-| 80 | | padding | zero up to offset 256 |
+| 80 | `u32` | `head_dim` | 0: `dim / n_heads`; else the head size (even; Qwen3) |
+| 84 | `u32` | `qk_norm` | 0 or 1: per-head RMSNorm of q and k before RoPE (Qwen3) |
+| 88 | `f32` | `rope_attn_factor` | yarn only: > 0, multiplies RoPE's cos and sin; 0 otherwise |
+| 92 | `u32` | `sliding_window` | 0: full attention; else each position attends to the last this many |
+| 96 | | padding | zero up to offset 256 |
 
 `dim`, `n_layers`, `n_heads`, `n_kv_heads` and `hidden_dim` are limited to
 65536. `vocab` and `max_seq` are limited to 2^24. Files written before RoPE
 scaling existed have zeros at offsets 52–71, which means plain RoPE.
 
-Derived values: `head_dim = dim / n_heads` and `kv_dim = head_dim × n_kv_heads`.
+Derived values: `head_dim` (offset 80, or `dim / n_heads` when 0),
+`q_dim = head_dim × n_heads` (a multiple of 32) and
+`kv_dim = head_dim × n_kv_heads`. Files written before these fields existed
+have zeros at offsets 80–95: `dim / n_heads`, no q/k norm, full attention.
 
 `q8_mask` bits, one per matrix class: 1 `tok_emb`, 2 `wcls`, 4 `wq` and
 `wk`, 8 `wv`, 16 `wo`, 32 `w1` and `w3`, 64 `w2`. With a shared classifier,
@@ -45,7 +52,9 @@ existed have 0 there.
 
 With `qkv_bias` set, each layer stores `bq`, `bk` and `bv` after `wo`; they
 are added to the projections before RoPE. Files written before biases existed
-have 0 at offset 76.
+have 0 at offset 76. With `qk_norm` set, each layer then stores `q_norm` and
+`k_norm` (`head_dim` floats each), applied to every query and key head after
+the biases and before RoPE, with `norm_eps`.
 
 ## Body
 
@@ -55,11 +64,12 @@ The arrays start at offset 256 and come in this order:
 tok_emb                     vocab × dim         (wtype, or Q8_0 per q8_mask; same below)
 for each layer:
   attn_norm                 dim                 (F32)
-  wq                        dim × dim           (wtype)
+  wq                        q_dim × dim         (wtype)
   wk                        kv_dim × dim        (wtype)
   wv                        kv_dim × dim        (wtype)
-  wo                        dim × dim           (wtype)
-  bq, bk, bv                dim, kv_dim, kv_dim (F32; only if qkv_bias)
+  wo                        dim × q_dim         (wtype)
+  bq, bk, bv                q_dim, kv_dim, kv_dim (F32; only if qkv_bias)
+  q_norm, k_norm            head_dim, head_dim  (F32; only if qk_norm)
   ffn_norm                  dim                 (F32)
   w1   (gate)               hidden_dim × dim    (wtype)
   w2   (down)               dim × hidden_dim    (wtype)
@@ -149,13 +159,28 @@ wavelen > orig / lo     → inv_i / f                              (low frequenc
 otherwise               → (1 − s) · inv_i / f + s · inv_i,  s = (orig / wavelen − lo) / (hi − lo)
 ```
 
+With `rope_type = 2` (linear), every frequency is divided by `f`. With
+`rope_type = 3` (yarn), as `transformers` computes it, with `d(r)` the
+dimension at which a wavelength fits `r` rotations into `orig`:
+
+```
+d(r)  = head_dim · ln(orig / (2π r)) / (2 ln rope_theta)
+lo    = max(floor(d(beta_fast)), 0),  hi = min(ceil(d(beta_slow)), head_dim − 1)
+ramp  = clamp((i − lo) / (hi − lo), 0, 1)
+inv_i → inv_i / f · ramp + inv_i · (1 − ramp)
+```
+
+and the cos and sin tables are multiplied by `rope_attn_factor` (the
+converter takes `attention_factor` from the config, or computes
+`0.1 ln f + 1`, or the `mscale` / `mscale_all_dim` ratio, as transformers does).
+
 ## Validation done by the loader
 
 | Problem | Status |
 |---------|--------|
 | file cannot be opened | `ML_E_IO` |
-| empty file, file shorter than the header, bad magic or version, unknown `wtype` or `rope_type`, invalid llama3 parameters, file shorter than the arrays the header implies, a Q8 quant equal to −128 | `ML_E_FORMAT` |
-| zero or over-limit dimension, `dim` or `hidden_dim` not a multiple of 32, `dim % n_heads ≠ 0`, `n_heads % n_kv_heads ≠ 0`, odd `head_dim`, `vocab < 3` | `ML_E_SHAPE` |
+| empty file, file shorter than the header, bad magic or version, unknown `wtype` or `rope_type`, invalid llama3, linear or yarn parameters, a `rope_attn_factor` without yarn, `qkv_bias` or `qk_norm` other than 0 or 1, `sliding_window` above 2^24, file shorter than the arrays the header implies, a Q8 quant equal to −128 | `ML_E_FORMAT` |
+| zero or over-limit dimension, `dim` or `hidden_dim` not a multiple of 32, `dim % n_heads ≠ 0` without `head_dim`, `n_heads % n_kv_heads ≠ 0`, odd `head_dim`, `q_dim` not a multiple of 32 or above 65536, `vocab < 3` | `ML_E_SHAPE` |
 
 All size arithmetic is overflow-checked, which matters on 32-bit targets.
 
