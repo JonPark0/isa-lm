@@ -22,7 +22,7 @@ void ml_k_matvec_q4_neon_dotprod(float *y, const ml_qtensor *W, const ml_qact *x
  * 16 * (q - 8) as a signed byte, and the 16 is removed by the conversion to
  * float (vcvtq_n_f32_s32, exact here), with no per-block sum to subtract. */
 #define PK 4
-#define PK_TILE 4
+#define PK_TILE 8
 
 static inline void pk_store(float *y, float32x4_t acc, int row, int r1) {
     if (row + PK <= r1) { vst1q_f32(y + row, acc); return; }
@@ -98,17 +98,17 @@ void ml_k_matvec_q4_pk_neon_dotprod(float *y, const ml_qtensor *W, const ml_qact
 #define GROUP_TILE(BLOCK, STEPS, NT)                                       \
     do {                                                                          \
         float32x4_t acc[NT];                                                      \
-        _Pragma("GCC unroll 4")                                                   \
+        _Pragma("GCC unroll 8")                                                   \
         for (int t = 0; t < (NT); t++) acc[t] = vdupq_n_f32(0.0f);                \
         const int8_t *pp = p;                                                     \
         for (int b = 0; b < nb; b++, pp += STEPS * PK * 4) {                      \
             const float32x4_t dv = vld1q_f32(d + b * PK);                         \
-            _Pragma("GCC unroll 4")                                               \
+            _Pragma("GCC unroll 8")                                               \
             for (int t = 0; t < (NT); t++)                                        \
                 acc[t] = vfmaq_f32(acc[t], BLOCK(t),                              \
                                    vmulq_n_f32(dv, X->d[(size_t)(t0 + t) * nb + b])); \
         }                                                                         \
-        _Pragma("GCC unroll 4")                                                   \
+        _Pragma("GCC unroll 8")                                                   \
         for (int t = 0; t < (NT); t++) pk_store(Y + (size_t)(t0 + t) * ldy, acc[t], row, r1); \
     } while (0)
 
@@ -120,6 +120,10 @@ void ml_k_matvec_q4_pk_neon_dotprod(float *y, const ml_qtensor *W, const ml_qact
             const int8_t *p = (const int8_t *)W->pq + (size_t)(row / PK) * nb * (STEPS * PK * 4); \
             const float *d = W->pd + (size_t)(row / PK) * nb * PK;                \
             switch (T) {                                                          \
+            case 8: GROUP_TILE(BLOCK, STEPS, 8); break;                           \
+            case 7: GROUP_TILE(BLOCK, STEPS, 7); break;                           \
+            case 6: GROUP_TILE(BLOCK, STEPS, 6); break;                           \
+            case 5: GROUP_TILE(BLOCK, STEPS, 5); break;                           \
             case 4: GROUP_TILE(BLOCK, STEPS, 4); break;                           \
             case 3: GROUP_TILE(BLOCK, STEPS, 3); break;                           \
             case 2: GROUP_TILE(BLOCK, STEPS, 2); break;                           \

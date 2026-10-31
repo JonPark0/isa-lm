@@ -172,8 +172,8 @@ decoding 26% slower, so it is on by default for x86 only;
 Decoding one token reads every weight once, so on large models it is bound by
 memory bandwidth. `ml_prefill` instead processes up to 32 prompt tokens per
 step, and each matrix product becomes a matmul (`ml_k_matmul_*_pk`). Each
-packed weight vector is loaded once and feeds a tile of 4 tokens, which makes
-the kernel compute-bound.
+packed weight vector is loaded once and feeds a tile of 4 tokens (8 on the
+NEON dotprod, i8mm and SVE builds), which makes the kernel compute-bound.
 
 - **Same arithmetic as decoding:** every per-token operation (norms,
   quantization, RoPE, attention, SiLU) is the one `ml_forward` performs, in the
