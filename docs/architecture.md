@@ -32,6 +32,7 @@ There are twelve kernels. Every ISA implements the same C ABI, named
 | `rmsnorm`, `softmax`, `silu_mul`, `add`, `rope` | element-wise and normalization ops |
 | `dot_f32`, `axpy_f32` | attention over an F32 KV cache: scores of one query against many strided K rows, and the weighted sum of V rows |
 | `dot_q8`, `axpy_q8` | the same over a Q8 KV cache: integer dot products, one scale per row |
+| `dot_f16`, `axpy_f16` | the same over an F16 KV cache, widened on the fly (F16C on the AVX2 builds and up, `fcvtl` on AArch64, in C elsewhere) |
 
 `make ISA=X` passes `-DML_ISA_X`, plus `-DML_ENABLE_<I>` for every ISA in X's
 fallback chain:
@@ -213,6 +214,9 @@ softmax, and sums the V rows. On long contexts this dominates: a head reads
   the V sum converts int8 to float on the fly. The cache shrinks by about
   3.8× (`head_dim` 64: 68 bytes per head instead of 256). The logits change
   slightly, so F32 stays the default.
+- **F16 cache (`--kv f16`):** K and V are rounded to IEEE half precision as
+  they are stored and widened back for the scores and the V sum; queries stay
+  float. The cache halves; scores and logits move only by that rounding.
 
 Per head, the arithmetic does not depend on the block size or the thread
 count, so results stay bit-identical across `-t` and `--batch`.

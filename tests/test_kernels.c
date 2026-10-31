@@ -328,6 +328,30 @@ static void test_dot_f32(void) {
     }
 }
 
+/* F16 KV cache: on half-precision rows the f16 kernels must give what the
+ * scalar f32 kernels give on the same values widened (to rounding: an ISA's
+ * f16 and f32 kernels can sum in different orders). */
+static void test_f16_kv(void) {
+    static const int rows_l[] = { 1, 3, 4, 5, 9 };
+    for (int s = 0; s < 5; s++) for (int ri = 0; ri < 5; ri++) {
+        const int n = sizes[s] < 300 ? sizes[s] : 300, rows = rows_l[ri];
+        const size_t ld = (size_t)n + 3;
+        float *K = xalloc(sizeof(float) * ld * rows), r1[9], r2[9], a[9];
+        uint16_t *Kh = xalloc(sizeof(uint16_t) * ld * rows);
+        float *O1 = xalloc(sizeof(float) * n), *O2 = xalloc(sizeof(float) * n);
+        fill(A, n, 0, 1); fill(K, (int)(ld * rows), 0, 1); fill(a, rows, 0, 1);
+        for (size_t i = 0; i < ld * rows; i++) { Kh[i] = ml_f32_to_f16(K[i]); K[i] = ml_f16_to_f32(Kh[i]); }
+        ml_k_dot_f16(r1, A, Kh, ld, rows, n, 0.125f);
+        ml_k_dot_f32_scalar(r2, A, K, ld, rows, n, 0.125f);
+        for (int t = 0; t < rows; t++) TT_NEAR(r1[t], r2[t], 1e-5);
+        memset(O1, 0, sizeof(float) * n); memset(O2, 0, sizeof(float) * n);
+        ml_k_axpy_f16(O1, a, Kh, ld, rows, n);
+        ml_k_axpy_f32_scalar(O2, a, K, ld, rows, n);
+        for (int i = 0; i < n; i++) TT_NEAR(O1[i], O2[i], 1e-5);
+        free(K); free(Kh); free(O1); free(O2);
+    }
+}
+
 /* Weighted sum over V rows: y += sum_t a[t] * x_t. */
 static void test_axpy_f32(void) {
     static const int rows_l[] = { 1, 3, 4, 5, 9 };
@@ -438,7 +462,7 @@ int TT_ENTRY(int argc, char **argv) {
     O1 = xalloc(4 * MAXN); O2 = xalloc(4 * MAXN); W = xalloc(4 * MAXN);
     printf("ISA: %s\n", ML_ISA_NAME);
     SHOW(matvec_q8); SHOW(matvec_q4); SHOW(quantize_q8); SHOW(rmsnorm); SHOW(softmax);
-    SHOW(rope); SHOW(silu_mul); SHOW(add); SHOW(dot_f32); SHOW(axpy_f32); SHOW(dot_q8); SHOW(axpy_q8);
+    SHOW(rope); SHOW(silu_mul); SHOW(add); SHOW(dot_f32); SHOW(axpy_f32); SHOW(dot_f16); SHOW(axpy_f16); SHOW(dot_q8); SHOW(axpy_q8);
 #if ML_PACK_G
     SHOW(matvec_q8_pk); SHOW(matvec_q4_pk); SHOW(matmul_q8_pk); SHOW(matmul_q4_pk);
     printf("pack: %d rows, q8 offset %d, q4 xor 0x%x, f16 scales %s\n", ML_PACK_G, ML_PACK_Q8_OFFSET, ML_PACK_Q4_XOR,
@@ -466,6 +490,7 @@ int TT_ENTRY(int argc, char **argv) {
     TT_RUN(test_add);
     TT_RUN(test_dot_f32);
     TT_RUN(test_axpy_f32);
+    TT_RUN(test_f16_kv);
     TT_RUN(test_dot_q8);
     TT_RUN(test_axpy_q8);
     TT_RUN(test_rope);

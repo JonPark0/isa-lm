@@ -134,6 +134,7 @@ static void attend(const ml_config *cfg, const ml_kv_layer *kv, float *out, cons
         for (int h = g0; h < g1; h++) {
             float *s = att + (h - g0) * ldatt + t0;
             if (kv->k) ml_k_dot_f32(s, q + h * hd, kv->k + t0 * ld + off, ld, m, hd, scale);
+            else if (kv->kh) ml_k_dot_f16(s, q + h * hd, kv->kh + t0 * ld + off, ld, m, hd, scale);
             else ml_k_dot_q8(s, qq + h * hd, qd[h], kv->kq + t0 * ld + off, kv->kd + offd + t0 * ldd + kvh, ld, ldd, m, hd, scale);
         }
     }
@@ -147,6 +148,7 @@ static void attend(const ml_config *cfg, const ml_kv_layer *kv, float *out, cons
         for (int h = g0; h < g1; h++) {
             const float *a = att + (h - g0) * ldatt + t0;
             if (kv->v) ml_k_axpy_f32(out + h * hd, a, kv->v + t0 * ld + off, ld, m, hd);
+            else if (kv->vh) ml_k_axpy_f16(out + h * hd, a, kv->vh + t0 * ld + off, ld, m, hd);
             else ml_k_axpy_q8(out + h * hd, a, kv->vq + t0 * ld + off, kv->vd + offd + t0 * ldd + kvh, ld, ldd, m, hd);
         }
     }
@@ -166,7 +168,7 @@ static void attention_task(void *p, int tid, int nt) {
 
 void ml_attention(ml_pool *pool, float *out, const float *q, const ml_kv_layer *kv, float *att_scratch,
                   int8_t *qq, float *qd, const ml_config *cfg, int pos) {
-    if (!kv->k)   /* Q8 cache: quantize each query head once, before the split */
+    if (kv->kq)   /* Q8 cache: quantize each query head once, before the split */
         for (int h = 0; h < cfg->n_heads; h++)
             ml_quantize_row(qq + h * cfg->head_dim, qd + h, q + h * cfg->head_dim, cfg->head_dim);
     attn_ctx c = { out, q, kv, att_scratch, qq, qd, cfg, pos };
@@ -225,12 +227,12 @@ void ml_attention_batch(ml_pool *pool, float *out, const float *q, const ml_kv_l
                          qq, qd, cfg, pos0 + t);
         return;
     }
-    if (!kv->k)
+    if (kv->kq)
         for (int t = 0; t < n; t++)
             for (int h = 0; h < cfg->n_heads; h++)
                 ml_quantize_row(qq + (size_t)t * cfg->q_dim + h * cfg->head_dim, qd + (size_t)t * cfg->n_heads + h,
                                 q + (size_t)t * cfg->q_dim + h * cfg->head_dim, cfg->head_dim);
-    attn_batch_ctx c = { { out, q, kv, att_scratch, kv->k ? NULL : qq, kv->k ? NULL : qd, cfg, pos0 }, n, heads };
+    attn_batch_ctx c = { { out, q, kv, att_scratch, kv->kq ? qq : NULL, kv->kq ? qd : NULL, cfg, pos0 }, n, heads };
     if (serial) attention_batch_task(&c, 0, 1);
     else ml_pool_run(pool, attention_batch_task, &c);
 }

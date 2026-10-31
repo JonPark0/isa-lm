@@ -54,16 +54,18 @@ python3 tools/ref_forward.py $M/swa_q8.mlb --tokens $TOKENS --out $T/swa.kv8.ref
     && python3 tests/compare_logits.py $T/swa.kv8.f32 $T/swa.kv8.ref.f32 96 5e-2 --any-argmax >/dev/null \
     && ok || bad "sliding window with --kv q8"
 
-# Q8 KV cache (--kv q8) against the reference emulating it. K, V and q are
-# quantized from float results that differ in the last bits between C and numpy,
-# so a value near a rounding boundary can land one step away: compare
-# distributions (argmax, top-5, KL), as for real models.
-for wt in q8 q4; do
-    $RUN $B/ml_run $M/rand_$wt.mlb --tokens $TOKENS --dump-logits $T/$wt.kv8.f32 --kv q8 \
-        && python3 tools/ref_forward.py $M/rand_$wt.mlb --tokens $TOKENS --out $T/$wt.kv8.ref.f32 --kv q8 \
-        && python3 tests/compare_logits.py $T/$wt.kv8.f32 $T/$wt.kv8.ref.f32 96 --kl 1e-3 >/dev/null \
-        && ok || bad "ref --kv q8 $wt"
-done
+# Q8 and F16 KV caches (--kv q8, --kv f16) against the reference emulating
+# them. K, V (and q for Q8) are rounded from float results that differ in the
+# last bits between C and numpy, so a value near a rounding boundary can land
+# one step away: compare distributions (argmax, top-5, KL), as for real models.
+for kvt in q8 f16; do for wt in q8 q4; do
+    $RUN $B/ml_run $M/rand_$wt.mlb --tokens $TOKENS --dump-logits $T/$wt.kv$kvt.f32 --kv $kvt \
+        && python3 tools/ref_forward.py $M/rand_$wt.mlb --tokens $TOKENS --out $T/$wt.kv$kvt.ref.f32 --kv $kvt \
+        && python3 tests/compare_logits.py $T/$wt.kv$kvt.f32 $T/$wt.kv$kvt.ref.f32 96 --kl 1e-3 >/dev/null \
+        && $RUN $B/ml_run $M/rand_$wt.mlb --tokens $TOKENS --dump-logits $T/$wt.kv$kvt.b1.f32 --kv $kvt --batch 1 \
+        && cmp -s $T/$wt.kv$kvt.f32 $T/$wt.kv$kvt.b1.f32 \
+        && ok || bad "ref --kv $kvt $wt"
+done; done
 
 # 150 positions: attention crosses its 64-position blocks, both cache types.
 # The host scalar build with an F32 cache must match the reference closely.
@@ -73,7 +75,7 @@ done
 # without the argmax check: enough to catch a wrong block offset or stride,
 # which garbles the logits.
 CTX=$(seq 1 150 | awk '{print ($1 * 37) % 95 + 1}' | paste -sd, -)
-for kv in f32 q8; do
+for kv in f32 q8 f16; do
     if [ $kv = f32 ]; then strict="1e-3"; else strict="5e-2 --any-argmax"; fi
     python3 tools/ref_forward.py $M/ctx_q4.mlb --tokens $CTX --out $T/ctx.$kv.ref.f32 --kv $kv \
         && $SCALAR $M/ctx_q4.mlb --tokens $CTX --dump-logits $T/ctx.$kv.scalar.f32 --kv $kv \
@@ -199,7 +201,7 @@ if [ $NT -gt 1 ]; then
     done
 fi
 # batched attention splits (position, KV head) pairs across threads
-for kv in f32 q8; do
+for kv in f32 q8 f16; do
     $RUN $B/ml_run $M/ctx_q4.mlb --tokens $CTX --dump-logits $T/ctx.$kv.t4.f32 --kv $kv -t 4 \
         && $RUN $B/ml_run $M/ctx_q4.mlb --tokens $CTX --dump-logits $T/ctx.$kv.t4b1.f32 --kv $kv -t 4 --batch 1 \
         && cmp -s $T/ctx.$kv.f32 $T/ctx.$kv.t4.f32 && cmp -s $T/ctx.$kv.f32 $T/ctx.$kv.t4b1.f32 \

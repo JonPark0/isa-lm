@@ -51,11 +51,13 @@ The first lines of the output name the kernel each op resolved to, for example
 - **Batched prefill:** `--batch 1`, `--batch 5` and the default produce
   byte-identical logits, and generated text is the same with and without
   batching. This also holds with `--kv q8`, and so does `-t 3` against `-t 1`.
-- **Q8 KV cache:** `--kv q8` logits match `tools/ref_forward.py --kv q8`, which
-  emulates the quantized cache, by the `--kl` criterion below.
+- **Q8 and F16 KV caches:** `--kv q8` and `--kv f16` logits match
+  `tools/ref_forward.py --kv q8` / `--kv f16`, which emulate those caches, by
+  the `--kl` criterion below, and batched prefill matches `--batch 1` with
+  either.
 - **Long context:** a 160-position model runs 150 positions, so attention
   crosses its 64-position blocks. The host scalar build must match the
-  reference within 1e-3 (F32 cache) and 5% (Q8). The build under test is held
+  reference within 1e-3 (F32 cache) and 5% (Q8, F16). The build under test is held
   to 5% without the argmax check (`compare_logits.py --any-argmax`): builds
   with FMA round some activations differently and drift by up to 2% over 150
   positions, while a wrong block offset or stride garbles the logits (85%

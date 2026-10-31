@@ -412,3 +412,66 @@ void ml_k_matmul_q4_pk_neon(float *Y, int ldy, const ml_qtensor *W, const ml_qba
         }
     }
 }
+
+#if defined(__aarch64__)
+/* F16 KV cache: 4 halves widen to floats per load (fcvtl). */
+#define LDH4(p) vcvt_f32_f16(vreinterpret_f16_u16(vld1_u16(p)))
+
+void ml_k_dot_f16_neon(float *s, const float *q, const uint16_t *k, size_t ldk, int rows, int n, float scale) {
+    int t = 0;
+    for (; t + 4 <= rows; t += 4) {
+        const uint16_t *k0 = k + (size_t)t * ldk, *k1 = k0 + ldk, *k2 = k1 + ldk, *k3 = k2 + ldk;
+        float32x4_t a0 = vdupq_n_f32(0.0f), a1 = vdupq_n_f32(0.0f), a2 = vdupq_n_f32(0.0f), a3 = vdupq_n_f32(0.0f);
+        int i = 0;
+        for (; i + 4 <= n; i += 4) {
+            const float32x4_t qv = vld1q_f32(q + i);
+            a0 = mla_f32(a0, qv, LDH4(k0 + i));
+            a1 = mla_f32(a1, qv, LDH4(k1 + i));
+            a2 = mla_f32(a2, qv, LDH4(k2 + i));
+            a3 = mla_f32(a3, qv, LDH4(k3 + i));
+        }
+        float r0 = hsum_f32x4(a0), r1 = hsum_f32x4(a1), r2 = hsum_f32x4(a2), r3 = hsum_f32x4(a3);
+        for (; i < n; i++) {
+            r0 += q[i] * ml_f16_to_f32(k0[i]); r1 += q[i] * ml_f16_to_f32(k1[i]);
+            r2 += q[i] * ml_f16_to_f32(k2[i]); r3 += q[i] * ml_f16_to_f32(k3[i]);
+        }
+        s[t] = r0 * scale; s[t + 1] = r1 * scale; s[t + 2] = r2 * scale; s[t + 3] = r3 * scale;
+    }
+    for (; t < rows; t++) {
+        const uint16_t *k0 = k + (size_t)t * ldk;
+        float32x4_t a0 = vdupq_n_f32(0.0f);
+        int i = 0;
+        for (; i + 4 <= n; i += 4) a0 = mla_f32(a0, vld1q_f32(q + i), LDH4(k0 + i));
+        float r0 = hsum_f32x4(a0);
+        for (; i < n; i++) r0 += q[i] * ml_f16_to_f32(k0[i]);
+        s[t] = r0 * scale;
+    }
+}
+
+void ml_k_axpy_f16_neon(float *y, const float *a, const uint16_t *x, size_t ldx, int rows, int n) {
+    int i = 0;
+    for (; i + 16 <= n; i += 16) {
+        float32x4_t y0 = vld1q_f32(y + i), y1 = vld1q_f32(y + i + 4), y2 = vld1q_f32(y + i + 8), y3 = vld1q_f32(y + i + 12);
+        const uint16_t *xt = x + i;
+        for (int t = 0; t < rows; t++, xt += ldx) {
+            const float32x4_t av = vdupq_n_f32(a[t]);
+            y0 = mla_f32(y0, av, LDH4(xt));
+            y1 = mla_f32(y1, av, LDH4(xt + 4));
+            y2 = mla_f32(y2, av, LDH4(xt + 8));
+            y3 = mla_f32(y3, av, LDH4(xt + 12));
+        }
+        vst1q_f32(y + i, y0); vst1q_f32(y + i + 4, y1); vst1q_f32(y + i + 8, y2); vst1q_f32(y + i + 12, y3);
+    }
+    for (; i + 4 <= n; i += 4) {
+        float32x4_t y0 = vld1q_f32(y + i);
+        const uint16_t *xt = x + i;
+        for (int t = 0; t < rows; t++, xt += ldx) y0 = mla_f32(y0, vdupq_n_f32(a[t]), LDH4(xt));
+        vst1q_f32(y + i, y0);
+    }
+    for (; i < n; i++) {
+        float v = y[i];
+        for (int t = 0; t < rows; t++) v += a[t] * ml_f16_to_f32(x[(size_t)t * ldx + i]);
+        y[i] = v;
+    }
+}
+#endif

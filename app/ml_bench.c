@@ -85,8 +85,9 @@ int ml_main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--no-pack")) no_pack = 1;
         else if (!strcmp(argv[i], "--kv") && i + 1 < argc && !strcmp(argv[i + 1], "q8")) { kv_type = ML_Q8_0; i++; }
         else if (!strcmp(argv[i], "--kv") && i + 1 < argc && !strcmp(argv[i + 1], "f32")) { kv_type = ML_F32; i++; }
+        else if (!strcmp(argv[i], "--kv") && i + 1 < argc && !strcmp(argv[i + 1], "f16")) { kv_type = ML_F16; i++; }
         else if (argv[i][0] != '-') model = argv[i];
-        else { fprintf(stderr, "usage: ml_bench [MODEL.mlb] [-t threads] [-n tokens] [--no-pack] [--kv f32|q8]\n"); return 2; }
+        else { fprintf(stderr, "usage: ml_bench [MODEL.mlb] [-t threads] [-n tokens] [--no-pack] [--kv f32|f16|q8]\n"); return 2; }
     }
     printf("isa-lm %s, ISA: %s  (matvec_q8 -> %s, matvec_q4 -> %s, quantize_q8 -> %s)\n", ML_VERSION, ML_ISA_NAME,
            ML_STR(ml_k_matvec_q8), ML_STR(ml_k_matvec_q4), ML_STR(ml_k_quantize_q8));

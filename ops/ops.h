@@ -10,14 +10,15 @@ void ml_matvec(ml_pool *pool, float *y, const ml_qtensor *W, const ml_qact *x);
 /* Y[t*ldy + row] = W x_t for the n tokens of X (prompt prefill). */
 void ml_matmul(ml_pool *pool, float *Y, int ldy, const ml_qtensor *W, const ml_qbatch *X);
 
-/* One layer of the KV cache, rows [max_seq][kv_dim]. F32 when k is set;
- * otherwise Q8 with one scale per position and KV head: kq, vq hold the
- * quants and kd, vd the scales [max_seq][n_kv_heads]. */
+/* One layer of the KV cache, rows [max_seq][kv_dim]. F32 when k is set,
+ * F16 when kh is set; otherwise Q8 with one scale per position and KV head:
+ * kq, vq hold the quants and kd, vd the scales [max_seq][n_kv_heads]. */
 typedef struct {
     const float *k, *v;
     const int8_t *kq, *vq;
     const float *kd, *vd;
     int window;   /* positions attended at most (sliding window); 0: all */
+    const uint16_t *kh, *vh;
 } ml_kv_layer;
 
 /* Quantizes x[0, n) with a single scale, by the quantize_q8 rule. */

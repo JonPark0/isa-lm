@@ -84,7 +84,8 @@ def rope(v, c, s, hd):
 def forward(cfg, t, tokens, kv="f32"):
     """-> float32 logits [len(tokens), vocab], position p attending to 0..p
     (to the last sliding_window positions, if set).
-    kv="q8" emulates the runtime's Q8 KV cache (--kv q8)."""
+    kv="q8" emulates the runtime's Q8 KV cache (--kv q8), kv="f16" its F16
+    cache (K and V rounded to half precision)."""
     m = Model(cfg, t)
     dim, nh, nkv = cfg["dim"], cfg["n_heads"], cfg["n_kv_heads"]
     hd, eps = mlb.head_dim(cfg), float(cfg["norm_eps"])
@@ -115,6 +116,9 @@ def forward(cfg, t, tokens, kv="f32"):
                 k = np.concatenate([rmsnorm(k[i:i + hd], L["k_norm"], eps) for i in range(0, len(k), hd)])
             q = rope(q, ct[pos], st[pos], hd)
             k = rope(k, ct[pos], st[pos], hd)
+            if kv == "f16":
+                k = np.asarray(k, np.float32).astype(np.float16).astype(np.float64)
+                v = np.asarray(v, np.float32).astype(np.float16).astype(np.float64)
             if kv == "q8":   # per position and KV head: int8 quants, one scale
                 kq, kd = quantize_rows(k, hd)
                 vq, vd = quantize_rows(v, hd)
@@ -163,7 +167,7 @@ def main():
     ap.add_argument("model")
     ap.add_argument("--tokens", required=True, help="comma-separated token ids")
     ap.add_argument("--out", required=True, help="raw float32 [n_tokens, vocab]")
-    ap.add_argument("--kv", choices=["f32", "q8"], default="f32", help="KV cache type to emulate")
+    ap.add_argument("--kv", choices=["f32", "f16", "q8"], default="f32", help="KV cache type to emulate")
     a = ap.parse_args()
     cfg, t = mlb.read_mlb(a.model)
     forward(cfg, t, [int(s) for s in a.tokens.split(",")], a.kv).tofile(a.out)

@@ -51,9 +51,9 @@ const char *const ml_prof_names[ML_PROF_COUNT] = { "qkv", "attention", "wo", "ff
 ml_status ml_state_init(ml_state *s, ml_model *m, int nthreads, int kv_type) {
     memset(s, 0, sizeof *s);
     s->m = m;
-    if (kv_type != ML_F32 && kv_type != ML_Q8_0) return ML_E_SHAPE;
+    if (kv_type != ML_F32 && kv_type != ML_Q8_0 && kv_type != ML_F16) return ML_E_SHAPE;
     s->kv_type = kv_type;
-    const int q8 = kv_type == ML_Q8_0;
+    const int q8 = kv_type == ML_Q8_0, f16 = kv_type == ML_F16, conv = q8 || f16;   /* conv: K, V staged in kbuf, vbuf */
     const ml_config *c = &m->cfg;
     const size_t f = sizeof(float);
     /* attention scores: n_heads rows for one position, or
@@ -72,8 +72,8 @@ ml_status ml_state_init(ml_state *s, ml_model *m, int nthreads, int kv_type) {
      * each padded to ML_ALIGN by the arena. */
     const size_t parts[][2] = {
         { 4, f * c->dim }, { 2, f * c->q_dim }, { 2, f * c->hidden_dim }, { 1, f * c->vocab },
-        { att_rows, f * c->max_seq }, { 2, q8 ? kv : f * kv }, { 2, q8 ? f * ks : 0 },
-        { 2, q8 ? f * ML_BATCH_MAX * c->kv_dim : 0 }, { 1, q8 ? (size_t)ML_BATCH_MAX * c->q_dim : 0 },
+        { att_rows, f * c->max_seq }, { 2, q8 ? kv : f16 ? 2 * kv : f * kv }, { 2, q8 ? f * ks : 0 },
+        { 2, conv ? f * ML_BATCH_MAX * c->kv_dim : 0 }, { 1, q8 ? (size_t)ML_BATCH_MAX * c->q_dim : 0 },
         { 1, q8 ? f * ML_BATCH_MAX * c->n_heads : 0 },
         { 4, f * half },
         { 1, (size_t)c->dim }, { 1, f * c->dim / QK }, { 1, (size_t)c->hidden_dim }, { 1, f * c->hidden_dim / QK },
@@ -110,6 +110,11 @@ ml_status ml_state_init(ml_state *s, ml_model *m, int nthreads, int kv_type) {
         s->vbuf = ml_arena_alloc(a, f * ML_BATCH_MAX * c->kv_dim);
         s->qq = ml_arena_alloc(a, (size_t)ML_BATCH_MAX * c->q_dim);
         s->qd = ml_arena_alloc(a, f * ML_BATCH_MAX * c->n_heads);
+    } else if (f16) {
+        s->kh = ml_arena_alloc(a, 2 * kv);
+        s->vh = ml_arena_alloc(a, 2 * kv);
+        s->kbuf = ml_arena_alloc(a, f * ML_BATCH_MAX * c->kv_dim);
+        s->vbuf = ml_arena_alloc(a, f * ML_BATCH_MAX * c->kv_dim);
     } else {
         s->kcache = ml_arena_alloc(a, f * kv);
         s->vcache = ml_arena_alloc(a, f * kv);
@@ -166,9 +171,11 @@ static ml_kv_layer kv_layer(const ml_state *s, int l) {
     const size_t rows = (size_t)l * c->max_seq;
     const int win = s->m->layers[l].window;
     if (s->kv_type == ML_F32)
-        return (ml_kv_layer){ s->kcache + rows * c->kv_dim, s->vcache + rows * c->kv_dim, NULL, NULL, NULL, NULL, win };
+        return (ml_kv_layer){ s->kcache + rows * c->kv_dim, s->vcache + rows * c->kv_dim, NULL, NULL, NULL, NULL, win, NULL, NULL };
+    if (s->kv_type == ML_F16)
+        return (ml_kv_layer){ NULL, NULL, NULL, NULL, NULL, NULL, win, s->kh + rows * c->kv_dim, s->vh + rows * c->kv_dim };
     return (ml_kv_layer){ NULL, NULL, s->kq + rows * c->kv_dim, s->vq + rows * c->kv_dim,
-                          s->kd + rows * c->n_kv_heads, s->vd + rows * c->n_kv_heads, win };
+                          s->kd + rows * c->n_kv_heads, s->vd + rows * c->n_kv_heads, win, NULL, NULL };
 }
 
 /* Layer l's RoPE tables at position pos: the local base's, if the layer uses it. */
@@ -178,12 +185,18 @@ static void rope_at(const ml_state *s, const ml_layer *L, int pos, const float *
     *sn = (L->local_rope ? s->rope_sin_local : s->rope_sin) + o;
 }
 
-/* Q8 cache: quantizes position pos's K and V, per KV head, into layer l.
- * The F32 cache is written in place by the projections. */
+/* Q8 cache: quantizes position pos's K and V, per KV head, into layer l;
+ * F16 cache: rounds them to half precision. The F32 cache is written in
+ * place by the projections. */
 static void store_kv(ml_state *s, int l, int pos, const float *k, const float *v) {
     if (s->kv_type == ML_F32) return;
     const ml_config *c = &s->m->cfg;
     const size_t row = (size_t)l * c->max_seq + pos;
+    if (s->kv_type == ML_F16) {
+        uint16_t *kh = s->kh + row * c->kv_dim, *vh = s->vh + row * c->kv_dim;
+        for (int i = 0; i < c->kv_dim; i++) { kh[i] = ml_f32_to_f16(k[i]); vh[i] = ml_f32_to_f16(v[i]); }
+        return;
+    }
     for (int h = 0; h < c->n_kv_heads; h++) {
         const size_t o = (size_t)h * c->head_dim;
         ml_quantize_row(s->kq + row * c->kv_dim + o, s->kd + row * c->n_kv_heads + h, k + o, c->head_dim);
