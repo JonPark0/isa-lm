@@ -34,6 +34,11 @@
   weights, so decoding reads fewer bytes: on GitHub's x86-64 runner
   (Qwen2.5 0.5B) Q4 decode is 1.04-1.12x faster and Q8 1.05-1.11x. These
   builds now require F16C, which every AVX2 CPU has.
+- Prompt prefill takes up to 128 tokens per batched step (was 32; `--batch`
+  1-128), so each step's pass over the weights serves 4x the tokens: prefill
+  up to 1.4x faster on the AVX-512 reference VM (Qwen2.5 0.5B, 4 threads) and
+  1.06-1.15x on GitHub's Neoverse N2 runner; level where the model fits the
+  cache (GitHub's EPYC runner). Results stay identical to `--batch 1`.
 - AArch64 dotprod builds (neon_dotprod, neon_i8mm, sve): Q4 nibbles are packed
   in signed form, so no per-block activation sums are subtracted; the dotprod
   batched kernels take 8 tokens per weight block, and the i8mm ones

@@ -36,7 +36,7 @@ static const char USAGE[] =
     "  --eos ID         stop when ID is generated (default: the tokenizer's BOS/EOS with -z,\n"
     "                   otherwise run all -n positions)\n"
     "  --dump-logits F  write float32 logits for every --tokens position, then exit\n"
-    "  --batch N        prompt tokens per batched prefill step, 1..32 (default 32; 1 = token by token)\n"
+    "  --batch N        prompt tokens per batched prefill step, 1..128 (default 128; 1 = token by token)\n"
     "  --no-pack        keep weights row-major (no repacking at load: less memory, slower)\n"
     "  --pack-cache     keep the packed weights in MODEL.pk<G> and map them from there next time\n"
     "  --kv TYPE        KV cache type: f32 (default) or q8 (3.8x smaller, faster on long contexts)\n"
