@@ -153,7 +153,7 @@ clean:
 
 -include $(shell find build -name '*.d' 2>/dev/null)
 
-GUARD_ISAS := scalar sse2 sse41 avx2 avxvnni avx512vnni
+GUARD_ISAS := scalar sse2 sse41 avx2 avxvnni avx512vnni amx
 guard-test:
 	@for i in $(GUARD_ISAS); do $(MAKE) -s ISA=$$i build/$$i/test_quant || exit 1; done
 	@sh tests/test_isa_guard.sh

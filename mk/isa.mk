@@ -1,6 +1,6 @@
 # ISA selection: flags, fallback chain, target arch, emulator prefix.
 
-ISAS := scalar sse2 sse41 avx2 avxvnni avx512vnni neon neon_dotprod neon_i8mm sve
+ISAS := scalar sse2 sse41 avx2 avxvnni avx512vnni amx neon neon_dotprod neon_i8mm sve
 ifeq ($(filter $(ISA),$(ISAS)),)
 $(error Unknown ISA '$(ISA)'. Valid: $(ISAS))
 endif
@@ -8,7 +8,7 @@ endif
 HOST_ARCH := $(shell uname -m | sed -e 's/^arm.*/arm/' -e 's/^arm64$$/aarch64/')
 ARCH := $(shell $(CC) -dumpmachine | cut -d- -f1 | sed -e 's/^arm.*/arm/' -e 's/^i.86$$/x86/')
 
-X86_ISAS := sse2 sse41 avx2 avxvnni avx512vnni
+X86_ISAS := sse2 sse41 avx2 avxvnni avx512vnni amx
 ARM_ISAS := neon neon_dotprod neon_i8mm sve
 ifneq ($(filter $(ISA),$(X86_ISAS)),)
   ifneq ($(ARCH),x86_64)
@@ -34,6 +34,7 @@ CHAIN_sse41        := $(CHAIN_sse2) sse41
 CHAIN_avx2         := $(CHAIN_sse41) avx2
 CHAIN_avxvnni      := $(CHAIN_avx2) avxvnni
 CHAIN_avx512vnni   := $(CHAIN_avx2) avx512vnni
+CHAIN_amx          := $(CHAIN_avx512vnni) amx
 CHAIN_neon         := scalar neon
 CHAIN_neon_dotprod := $(CHAIN_neon) neon_dotprod
 CHAIN_neon_i8mm    := $(CHAIN_neon_dotprod) neon_i8mm
@@ -46,6 +47,7 @@ ISAFLAGS_sse41        := -msse4.1
 ISAFLAGS_avx2         := -mavx2 -mfma
 ISAFLAGS_avxvnni      := -mavx2 -mfma -mavxvnni
 ISAFLAGS_avx512vnni   := -mavx512f -mavx512bw -mavx512vnni -mfma
+ISAFLAGS_amx          := $(ISAFLAGS_avx512vnni) -mamx-tile -mamx-int8
 ifeq ($(ARCH),arm)
   ISAFLAGS_neon       := -march=armv7-a -mfpu=neon -mfloat-abi=hard
 else

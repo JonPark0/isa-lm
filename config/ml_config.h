@@ -37,6 +37,9 @@
 #ifdef ML_ENABLE_AVX512VNNI
 #include "kernels/avx512vnni/k_avx512vnni.h"
 #endif
+#ifdef ML_ENABLE_AMX
+#include "kernels/amx/k_amx.h"
+#endif
 
 #if defined(ML_HAS_MATVEC_Q8_AVX512VNNI)
 #define ml_k_matvec_q8 ml_k_matvec_q8_avx512vnni
@@ -334,7 +337,10 @@
 /* Batched packed kernels: native where the packed ISA has one, else a loop
  * over the packed matvec. */
 #include "kernels/pk_loop.h"
-#if defined(ML_HAS_MATVEC_PK_AVX512VNNI) && defined(ML_HAS_MATMUL_PK_AVX512VNNI)
+#if defined(ML_HAS_MATVEC_PK_AVX512VNNI) && defined(ML_HAS_MATMUL_PK_AMX)
+#define ml_k_matmul_q8_pk ml_k_matmul_q8_pk_amx
+#define ml_k_matmul_q4_pk ml_k_matmul_q4_pk_amx
+#elif defined(ML_HAS_MATVEC_PK_AVX512VNNI) && defined(ML_HAS_MATMUL_PK_AVX512VNNI)
 #define ml_k_matmul_q8_pk ml_k_matmul_q8_pk_avx512vnni
 #define ml_k_matmul_q4_pk ml_k_matmul_q4_pk_avx512vnni
 #elif !defined(ML_HAS_MATVEC_PK_AVX512VNNI) && defined(ML_HAS_MATMUL_PK_AVXVNNI)
@@ -365,6 +371,8 @@
 
 #if defined(ML_ISA_SCALAR)
 #define ML_ISA_NAME "scalar"
+#elif defined(ML_ISA_AMX)
+#define ML_ISA_NAME "amx"
 #elif defined(ML_ISA_AVX512VNNI)
 #define ML_ISA_NAME "avx512vnni"
 #elif defined(ML_ISA_AVXVNNI)

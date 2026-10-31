@@ -32,6 +32,18 @@ static unsigned long long xgetbv0(void) {
 
 #define BIT(r, n) (((r) >> (n)) & 1u)
 
+#if defined(ML_ISA_AMX)
+/* Linux hands out the AMX tile state (XFEATURE_XTILEDATA, 18) only on request;
+ * without it the first tile instruction faults. Elsewhere XCR0 decides. */
+#if defined(__linux__)
+#include <sys/syscall.h>
+#include <unistd.h>
+static int amx_permission(void) { return syscall(SYS_arch_prctl, 0x1023 /* ARCH_REQ_XCOMP_PERM */, 18) == 0; }
+#else
+static int amx_permission(void) { return 1; }
+#endif
+#endif
+
 ml_status ml_isa_check(const char **missing) {
     unsigned l1[4], l7[4], l71[4];
     cpuid(1, 0, l1);
@@ -43,11 +55,11 @@ ml_status ml_isa_check(const char **missing) {
     *missing = NULL;
 
     REQUIRE(BIT(l1[3], 26), "sse2");
-#if defined(ML_ISA_SSE41) || defined(ML_ISA_AVX2) || defined(ML_ISA_AVXVNNI) || defined(ML_ISA_AVX512VNNI)
+#if defined(ML_ISA_SSE41) || defined(ML_ISA_AVX2) || defined(ML_ISA_AVXVNNI) || defined(ML_ISA_AVX512VNNI) || defined(ML_ISA_AMX)
     REQUIRE(BIT(l1[2], 9), "ssse3");
     REQUIRE(BIT(l1[2], 19), "sse4.1");
 #endif
-#if defined(ML_ISA_AVX2) || defined(ML_ISA_AVXVNNI) || defined(ML_ISA_AVX512VNNI)
+#if defined(ML_ISA_AVX2) || defined(ML_ISA_AVXVNNI) || defined(ML_ISA_AVX512VNNI) || defined(ML_ISA_AMX)
     REQUIRE(BIT(l1[2], 28), "avx");
     REQUIRE(osxsave && (xcr0 & 0x6) == 0x6, "os-avx-state");
     REQUIRE(BIT(l1[2], 12), "fma");
@@ -56,11 +68,17 @@ ml_status ml_isa_check(const char **missing) {
 #if defined(ML_ISA_AVXVNNI)
     REQUIRE(BIT(l71[0], 4), "avx-vnni");
 #endif
-#if defined(ML_ISA_AVX512VNNI)
+#if defined(ML_ISA_AVX512VNNI) || defined(ML_ISA_AMX)
     REQUIRE(BIT(l7[1], 16), "avx512f");
     REQUIRE(BIT(l7[1], 30), "avx512bw");
     REQUIRE(BIT(l7[2], 11), "avx512-vnni");
     REQUIRE((xcr0 & 0xE6) == 0xE6, "os-avx512-state");
+#endif
+#if defined(ML_ISA_AMX)
+    REQUIRE(BIT(l7[3], 24), "amx-tile");
+    REQUIRE(BIT(l7[3], 25), "amx-int8");
+    REQUIRE((xcr0 & 0x60000) == 0x60000, "os-amx-state");
+    REQUIRE(amx_permission(), "os-amx-permission");
 #endif
     return ML_OK;
 }
