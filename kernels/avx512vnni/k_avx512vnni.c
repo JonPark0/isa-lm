@@ -205,11 +205,10 @@ static inline void store_rows(float *Y, int ldy, int t0, int T, const __m512 *ac
 /* NG row groups (1 or 2) of a tile: each activation broadcast feeds NG dot
  * products, and the NG x T accumulator chains hide vpdpbusd's latency. */
 ML_INLINE void matmul_q8_groups(float *Y, int ldy, const ml_qtensor *W, const ml_qbatch *X, int row, int r1, int t0,
-                                const int T, const int NG, int (*xsum)[PK_MAX_BLOCKS]) {
+                                const int T, const int NG, int (*xsum)[PK_MAX_BLOCKS], const int f16) {
     const int nb = W->cols / QK;
     const size_t gq = (size_t)nb * (8 * PK * 4), gd = (size_t)nb * PK;
     const uint8_t *p = W->pq + (size_t)(row / PK) * gq;
-    const int f16 = W->pd16;
     const void *d = pk_d(W, (size_t)(row / PK) * gd, f16);
     __m512 acc[2][TILE];
     ML_UNROLL(2) for (int g = 0; g < 2; g++) ML_UNROLL(4) for (int t = 0; t < TILE; t++) acc[g][t] = _mm512_setzero_ps();
@@ -238,26 +237,30 @@ ML_INLINE void matmul_q8_groups(float *Y, int ldy, const ml_qtensor *W, const ml
     ML_UNROLL(2) for (int g = 0; g < NG; g++) store_rows(Y, ldy, t0, T, acc[g], row + g * PK, r1);
 }
 
-ML_INLINE void matmul_q8_tile(float *Y, int ldy, const ml_qtensor *W, const ml_qbatch *X, int r0, int r1, int t0, const int T) {
+ML_INLINE void matmul_q8_tile(float *Y, int ldy, const ml_qtensor *W, const ml_qbatch *X, int r0, int r1, int t0, const int T, const int f16) {
     static ML_THREAD_LOCAL int xsum[TILE][PK_MAX_BLOCKS];
     block_sums_batch(xsum, X, t0, T, W->cols / QK, 128);
     for (int row = r0; row < r1; row += 2 * PK) {
-        if (r1 - row > PK) matmul_q8_groups(Y, ldy, W, X, row, r1, t0, T, 2, xsum);
-        else matmul_q8_groups(Y, ldy, W, X, row, r1, t0, T, 1, xsum);
+        if (r1 - row > PK) matmul_q8_groups(Y, ldy, W, X, row, r1, t0, T, 2, xsum, f16);
+        else matmul_q8_groups(Y, ldy, W, X, row, r1, t0, T, 1, xsum, f16);
     }
 }
 
+/* the scale type as a constant per instance (pk_d8 / pk_d16) */
+#define matmul_q8_tile_h(Y, ldy, W, X, r0, r1, t0, T) matmul_q8_tile(Y, ldy, W, X, r0, r1, t0, T, 1)
+#define matmul_q8_tile_f(Y, ldy, W, X, r0, r1, t0, T) matmul_q8_tile(Y, ldy, W, X, r0, r1, t0, T, 0)
+
 void ml_k_matmul_q8_pk_avx512vnni(float *Y, int ldy, const ml_qtensor *W, const ml_qbatch *X, int r0, int r1) {
-    PK_TILES(matmul_q8_tile, TILE)
+    if (W->pd16) { PK_TILES(matmul_q8_tile_h, TILE) }
+    else { PK_TILES(matmul_q8_tile_f, TILE) }
 }
 
 ML_INLINE void matmul_q4_groups(float *Y, int ldy, const ml_qtensor *W, const ml_qbatch *X, int row, int r1, int t0,
-                                const int T, const int NG, int (*xsum)[PK_MAX_BLOCKS]) {
+                                const int T, const int NG, int (*xsum)[PK_MAX_BLOCKS], const int f16) {
     const int nb = W->cols / QK;
     const size_t gq = (size_t)nb * (4 * PK * 4), gd = (size_t)nb * PK;
     const __m512i m4 = _mm512_set1_epi8(0x0F);
     const uint8_t *p = W->pq + (size_t)(row / PK) * gq;
-    const int f16 = W->pd16;
     const void *d = pk_d(W, (size_t)(row / PK) * gd, f16);
     __m512 acc[2][TILE];
     ML_UNROLL(2) for (int g = 0; g < 2; g++) ML_UNROLL(4) for (int t = 0; t < TILE; t++) acc[g][t] = _mm512_setzero_ps();
@@ -292,17 +295,22 @@ ML_INLINE void matmul_q4_groups(float *Y, int ldy, const ml_qtensor *W, const ml
     ML_UNROLL(2) for (int g = 0; g < NG; g++) store_rows(Y, ldy, t0, T, acc[g], row + g * PK, r1);
 }
 
-ML_INLINE void matmul_q4_tile(float *Y, int ldy, const ml_qtensor *W, const ml_qbatch *X, int r0, int r1, int t0, const int T) {
+ML_INLINE void matmul_q4_tile(float *Y, int ldy, const ml_qtensor *W, const ml_qbatch *X, int r0, int r1, int t0, const int T, const int f16) {
     static ML_THREAD_LOCAL int xsum[TILE][PK_MAX_BLOCKS];
     block_sums_batch(xsum, X, t0, T, W->cols / QK, 8);
     for (int row = r0; row < r1; row += 2 * PK) {
-        if (r1 - row > PK) matmul_q4_groups(Y, ldy, W, X, row, r1, t0, T, 2, xsum);
-        else matmul_q4_groups(Y, ldy, W, X, row, r1, t0, T, 1, xsum);
+        if (r1 - row > PK) matmul_q4_groups(Y, ldy, W, X, row, r1, t0, T, 2, xsum, f16);
+        else matmul_q4_groups(Y, ldy, W, X, row, r1, t0, T, 1, xsum, f16);
     }
 }
 
+/* the scale type as a constant per instance (pk_d8 / pk_d16) */
+#define matmul_q4_tile_h(Y, ldy, W, X, r0, r1, t0, T) matmul_q4_tile(Y, ldy, W, X, r0, r1, t0, T, 1)
+#define matmul_q4_tile_f(Y, ldy, W, X, r0, r1, t0, T) matmul_q4_tile(Y, ldy, W, X, r0, r1, t0, T, 0)
+
 void ml_k_matmul_q4_pk_avx512vnni(float *Y, int ldy, const ml_qtensor *W, const ml_qbatch *X, int r0, int r1) {
-    PK_TILES(matmul_q4_tile, TILE)
+    if (W->pd16) { PK_TILES(matmul_q4_tile_h, TILE) }
+    else { PK_TILES(matmul_q4_tile_f, TILE) }
 }
 
 void ml_k_quantize_q8_avx512vnni(ml_qact *out, const float *x, int k) {

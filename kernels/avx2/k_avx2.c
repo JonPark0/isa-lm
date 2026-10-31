@@ -341,12 +341,11 @@ void ml_k_axpy_q8_avx2(float *y, const float *a, const int8_t *x, const float *d
 
 /* Batched packed kernels: each weight vector feeds up to PK_TILE tokens;
  * per token the arithmetic is the matvec's, so results match it exactly. */
-ML_INLINE void matmul_q8_tile(float *Y, int ldy, const ml_qtensor *W, const ml_qbatch *X, int r0, int r1, int t0, const int T) {
+ML_INLINE void matmul_q8_tile(float *Y, int ldy, const ml_qtensor *W, const ml_qbatch *X, int r0, int r1, int t0, const int T, const int f16) {
     const int nb = W->cols / QK;
     const __m256i ones = _mm256_set1_epi16(1);
     for (int row = r0; row < r1; row += PK) {
         const uint8_t *p = W->pq + (size_t)(row / PK) * nb * (8 * PK * 4);
-        const int f16 = W->pd16;
     const void *d = pk_d(W, (size_t)(row / PK) * nb * PK, f16);
         __m256 acc[PK_TILE];
         ML_UNROLL(4) for (int t = 0; t < PK_TILE; t++) acc[t] = _mm256_setzero_ps();
@@ -371,18 +370,22 @@ ML_INLINE void matmul_q8_tile(float *Y, int ldy, const ml_qtensor *W, const ml_q
     }
 }
 
+/* the scale type as a constant per instance (pk_d8 / pk_d16) */
+#define matmul_q8_tile_h(Y, ldy, W, X, r0, r1, t0, T) matmul_q8_tile(Y, ldy, W, X, r0, r1, t0, T, 1)
+#define matmul_q8_tile_f(Y, ldy, W, X, r0, r1, t0, T) matmul_q8_tile(Y, ldy, W, X, r0, r1, t0, T, 0)
+
 void ml_k_matmul_q8_pk_avx2(float *Y, int ldy, const ml_qtensor *W, const ml_qbatch *X, int r0, int r1) {
-    PK_TILES(matmul_q8_tile, PK_TILE)
+    if (W->pd16) { PK_TILES(matmul_q8_tile_h, PK_TILE) }
+    else { PK_TILES(matmul_q8_tile_f, PK_TILE) }
 }
 
-ML_INLINE void matmul_q4_tile(float *Y, int ldy, const ml_qtensor *W, const ml_qbatch *X, int r0, int r1, int t0, const int T) {
+ML_INLINE void matmul_q4_tile(float *Y, int ldy, const ml_qtensor *W, const ml_qbatch *X, int r0, int r1, int t0, const int T, const int f16) {
     const int nb = W->cols / QK;
     static ML_THREAD_LOCAL int xsum[PK_TILE][PK_MAX_BLOCKS];
     const __m256i m4 = _mm256_set1_epi8(0x0F), ones = _mm256_set1_epi16(1);
     pk_block_sums_batch(xsum, X, t0, T, nb, 8);
     for (int row = r0; row < r1; row += PK) {
         const uint8_t *p = W->pq + (size_t)(row / PK) * nb * (4 * PK * 4);
-        const int f16 = W->pd16;
     const void *d = pk_d(W, (size_t)(row / PK) * nb * PK, f16);
         __m256 acc[PK_TILE];
         ML_UNROLL(4) for (int t = 0; t < PK_TILE; t++) acc[t] = _mm256_setzero_ps();
@@ -411,6 +414,11 @@ ML_INLINE void matmul_q4_tile(float *Y, int ldy, const ml_qtensor *W, const ml_q
     }
 }
 
+/* the scale type as a constant per instance (pk_d8 / pk_d16) */
+#define matmul_q4_tile_h(Y, ldy, W, X, r0, r1, t0, T) matmul_q4_tile(Y, ldy, W, X, r0, r1, t0, T, 1)
+#define matmul_q4_tile_f(Y, ldy, W, X, r0, r1, t0, T) matmul_q4_tile(Y, ldy, W, X, r0, r1, t0, T, 0)
+
 void ml_k_matmul_q4_pk_avx2(float *Y, int ldy, const ml_qtensor *W, const ml_qbatch *X, int r0, int r1) {
-    PK_TILES(matmul_q4_tile, PK_TILE)
+    if (W->pd16) { PK_TILES(matmul_q4_tile_h, PK_TILE) }
+    else { PK_TILES(matmul_q4_tile_f, PK_TILE) }
 }
