@@ -79,6 +79,7 @@ typedef struct {
     /* The scales as stored in an .mlb with f16 scales, or NULL; d then
      * holds them converted (or NULL once packing has made them unneeded). */
     const uint16_t *dh;
+    uint8_t pd16;   /* pd holds f16 values (ml_pack_f16) */
 } ml_qtensor;
 
 /* Q8_0 quantized activation vector of length n. */

@@ -121,7 +121,11 @@ repacks every weight matrix, except the embedding table, into a
   One vector load plus one dot instruction against a 4-byte activation
   broadcast (`vpdpbusd`, `pmaddubsw`+`pmaddwd`, `sdot`) advances all G rows.
 - **Scales:** the block's scales are stored contiguously for the group, so
-  scaling is one vector multiply-add for G rows.
+  scaling is one vector multiply-add for G rows. On the AVX2, AVX-VNNI and
+  AVX-512 VNNI builds, files with f16 scales keep them as f16 in the packed
+  copy (`vcvtph2ps` widens them), which halves the scale bytes a decode step
+  reads. f32 scales stay f32, and both give the same floats as the row-major
+  kernels.
 - **Signedness:** `vpdpbusd` and `pmaddubsw` need an unsigned operand. Q4
   nibbles are used raw (0..15); on VNNI and SSE2, Q8 weights are stored +128. The
   matching `offset × Σx` is subtracted per block in int32, so the result is

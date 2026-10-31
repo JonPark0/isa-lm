@@ -30,6 +30,10 @@
 - `tools/convert.py` writes f16 scales by default (`--scales f32` keeps the
   older files): perplexity changes by at most 0.15% (Qwen2.5 0.5B, Llama 3.2
   1B), and Qwen2.5 0.5B Q4 shrinks from 309 to 278 MB.
+- AVX2, AVX-VNNI and AVX-512 VNNI builds keep f16 scales as f16 in the packed
+  weights, so decoding reads fewer bytes: on GitHub's x86-64 runner
+  (Qwen2.5 0.5B) Q4 decode is 1.04-1.12x faster and Q8 1.05-1.11x. These
+  builds now require F16C, which every AVX2 CPU has.
 - AArch64 dotprod builds (neon_dotprod, neon_i8mm, sve): Q4 nibbles are packed
   in signed form, so no per-block activation sums are subtracted; the dotprod
   batched kernels take 8 tokens per weight block, and the i8mm ones
