@@ -3,7 +3,6 @@
 #ifndef ML_ARM_COMMON_H
 #define ML_ARM_COMMON_H
 #include <arm_neon.h>
-#include "core/ml.h"
 
 static inline float hsum_f32x4(float32x4_t v) {
 #if defined(__aarch64__)
@@ -78,32 +77,6 @@ static inline void unpack_q4_neon(const uint8_t *p, int8x16_t *lo, int8x16_t *hi
     const int8x16_t eight = vdupq_n_s8(8);
     *lo = vsubq_s8(vreinterpretq_s8_u8(vandq_u8(w, vdupq_n_u8(0x0F))), eight);
     *hi = vsubq_s8(vreinterpretq_s8_u8(vshrq_n_u8(w, 4)), eight);
-}
-
-/* xsum[b] = offset * sum of the 32 activation quants of block b. */
-static inline void block_sums(int *xsum, const int8_t *xq, int nb, int offset) {
-    for (int b = 0; b < nb; b++) {
-        const int8x16_t x0 = vld1q_s8(xq + b * QK), x1 = vld1q_s8(xq + b * QK + 16);
-#if defined(__aarch64__)
-        xsum[b] = offset * (vaddlvq_s8(x0) + vaddlvq_s8(x1));
-#else
-        const int32x4_t s4 = vpaddlq_s16(vaddq_s16(vpaddlq_s8(x0), vpaddlq_s8(x1)));
-        const int64x2_t s2 = vpaddlq_s32(s4);
-        xsum[b] = offset * (int)(vgetq_lane_s64(s2, 0) + vgetq_lane_s64(s2, 1));
-#endif
-    }
-}
-
-/* Rows of W per pass of a batched kernel over its tokens: about PK_ROW_BYTES of
- * packed weights, so that the pass stays in L2 while every tile of tokens
- * reads it (without it, each tile streams all of r0..r1 from memory again). */
-#ifndef PK_ROW_BYTES
-#define PK_ROW_BYTES (512 * 1024)
-#endif
-static inline int pk_row_block(const ml_qtensor *W, int group) {
-    const size_t row = (W->type == ML_Q8_0 ? (size_t)W->cols : (size_t)W->cols / 2) + W->cols / QK * sizeof(float);
-    const int rows = (int)(PK_ROW_BYTES / row) / group * group;
-    return rows > group ? rows : group;
 }
 
 /* Row loop shared by the NEON matvecs: 4 rows per pass reuse one activation
