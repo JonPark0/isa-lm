@@ -6,6 +6,7 @@ ml_run -z and ml_tok read (model/bpe.c).
 Supported, and checked before writing:
   - SentencePiece-style BPE with byte fallback (Llama 2, TinyLlama, Mistral):
     a Prepend/Replace normalizer, or a Metaspace pre-tokenizer without split;
+    or a Replace normalizer alone, with no U+2581 before the text (Gemma 3);
   - byte-level BPE with the Llama 3 pre-tokenizer regex (Llama 3, 3.1, 3.2),
     or its single-digit variant after an NFC normalizer (Qwen2, Qwen2.5);
   - byte-level BPE with the GPT-2 regex (ByteLevel use_regex), optionally after
@@ -20,7 +21,7 @@ import sys
 
 SPM, BYTE_BPE = 1, 2
 ADDED, BYTE = 1, 2
-ADD_BOS, IGNORE_MERGES, PREPEND_FIRST, NFC, DIGITS1, GPT2, ISOLATE_DIGITS = 1, 2, 4, 8, 16, 32, 64
+ADD_BOS, IGNORE_MERGES, PREPEND_FIRST, NFC, DIGITS1, GPT2, ISOLATE_DIGITS, NO_PREPEND = 1, 2, 4, 8, 16, 32, 64, 128
 SP = "▁"
 LLAMA3_REGEX = (r"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}{1,3}|"
                 r" ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+")
@@ -99,6 +100,12 @@ def detect(j):
         if norms[0]["prepend"] != SP or norms[1]["pattern"].get("String") != " " or norms[1]["content"] != SP:
             raise Unsupported("normalizer other than Prepend(U+2581) + Replace(' ' -> U+2581)")
         return SPM, flags
+    # Gemma: spaces become U+2581 with no prefix; the Split on " " that follows
+    # never finds a space, so it changes nothing
+    if types == ["Replace"] and all(p["type"] == "Split" and p["pattern"].get("String") == " " for p in pres):
+        if norms[0]["pattern"].get("String") != " " or norms[0]["content"] != SP:
+            raise Unsupported("normalizer other than Replace(' ' -> U+2581)")
+        return SPM, flags | NO_PREPEND
     if not norms and len(pres) == 1 and pres[0]["type"] == "Metaspace":
         p = pres[0]
         if p.get("replacement") != SP or p.get("split", False):
@@ -121,9 +128,10 @@ def special_ids(j, added):
                 bos = p["special_tokens"][name]["ids"][0]
                 add_bos = True
     eos = -1
-    for name in ("</s>", "<|end_of_text|>", "<|endoftext|>"):
-        if name in added:
-            eos = added[name]
+    special = {a["content"]: a["id"] for a in j.get("added_tokens", []) if a.get("special", True)}
+    for name in ("</s>", "<|end_of_text|>", "<|endoftext|>", "<eos>"):   # special ones only (Gemma's "</s>" is text)
+        if name in special:
+            eos = special[name]
             break
     return bos, add_bos, eos
 

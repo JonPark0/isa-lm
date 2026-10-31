@@ -126,10 +126,13 @@ python3 tools/convert.py hf ./TinyLlama-1.1B model.mlb --wtype q4 --max-seq 2048
   their model cards describe) are supported, with transformers' formulas. The
   converter refuses other types (dynamic, longrope) instead of writing a model
   that would compute wrong outputs.
-- **Architectures:** `model_type` must be `llama`, `mistral`, `qwen2` or
-  `qwen3`, with SiLU and no biases other than Qwen2's q/k/v biases. A
-  `head_dim` other than `hidden_size / num_attention_heads` and Qwen3's
-  per-head q/k RMSNorm are supported. Others (Gemma, Phi, …) are refused.
+- **Architectures:** `model_type` must be `llama`, `mistral`, `qwen2`, `qwen3`
+  or `gemma3_text` (Gemma 3 1B), with no biases other than Qwen2's q/k/v
+  biases. A `head_dim` other than `hidden_size / num_attention_heads`, Qwen3's
+  per-head q/k RMSNorm, and Gemma 3's GELU, block output norms, embedding and
+  attention scales and local/global layers are supported; Gemma's `(1 + w)`
+  norm weights are stored with the 1 added. Others (Phi, Gemma 3's multimodal
+  4B and larger checkpoints, logit soft-capping, …) are refused.
 - **Sliding window:** each position of a sliding layer attends to the last
   `sliding_window` positions: every layer for Mistral v0.1, the layers
   `layer_types` or Qwen2's `max_window_layers` select otherwise.
@@ -155,7 +158,7 @@ These kinds are supported, and they encode exactly as the Hugging Face
 
 | Kind | Models | Notes |
 |------|--------|-------|
-| SentencePiece-style BPE with byte fallback | Llama 2, TinyLlama, Mistral, Vicuna | spaces become `▁`, characters outside the vocabulary become `<0xXX>` byte tokens |
+| SentencePiece-style BPE with byte fallback | Llama 2, TinyLlama, Mistral, Vicuna, Gemma 3 | spaces become `▁` (Gemma adds none before the text), characters outside the vocabulary become `<0xXX>` byte tokens |
 | byte-level BPE with the Llama 3 pre-tokenizer | Llama 3, 3.1, 3.2 | text is split by the Llama 3 regex (letters, numbers, contractions, white space) before merging |
 | byte-level BPE with NFC and the Qwen2 pre-tokenizer | Qwen2, Qwen2.5, Qwen3 | text is normalized to NFC, then split as Llama 3 but with one digit per number chunk |
 | byte-level BPE with the GPT-2 pre-tokenizer | SmolLM, SmolLM2, GPT-2 | text is split by the GPT-2 regex, after splitting off every digit if the tokenizer does (SmolLM2) |
@@ -193,6 +196,7 @@ The capital of Germany is Berlin.
 | `llama2` | Llama 2 Chat, Mistral Instruct (without `--system`) | `</s>` |
 | `qwen` | Qwen2.5 Instruct; without `--system` it uses Qwen's default system prompt | `<|im_end|>` |
 | `smollm` | SmolLM2 Instruct; without `--system` it uses SmolLM2's default system prompt | `<|im_end|>` |
+| `gemma` | Gemma 3 Instruct; `--system` goes at the start of the first user turn | `<end_of_turn>` |
 | `chatml` | Qwen3 and other ChatML models; a system turn only with `--system` | `<|im_end|>` |
 
 Qwen3 answers after a `<think>…</think>` section; ending a message with
@@ -257,6 +261,12 @@ Other models on the same text (Q8 against the F32 numpy reference):
 |-------|----:|---:|---:|
 | Qwen3 0.6B | 28.10 | 27.91 | 31.73 |
 | SmolLM2 135M Instruct | 23.44 | 23.52 | 31.67 |
+| Gemma 3 1B Instruct | 42.32 | 42.20 | 53.68 |
+
+Gemma 3 1B loses the most to Q4_0. Keeping `emb,cls,v,down` in Q8 gives
+47.40 at 843 MB (Q4: 625 MB, Q8: 1125 MB). Google's quantization-aware
+checkpoint of it (`gemma-3-1b-it-qat-q4_0-unquantized`, trained for Q4_0)
+converts to Q4 at 47.43 for 625 MB, against 42.53 for its Q8.
 
 The converter fits each Q4 block's scale by weighted least squares over a few
 candidate mappings, rather than dividing the block's maximum by 7 (Llama 3.2
@@ -325,7 +335,7 @@ build/avx2/ml_run model.mlb --tokens 1,450,3681 --dump-logits l.f32
 | `--pack-cache` | Save the packed weights next to the model (`MODEL.pk<G>`, G = pack group) and map them from there on later runs instead of packing again. The cache is checked against the model and the build's layout and rewritten when stale. |
 | `--no-pack` | Keep weights row-major instead of repacking them for the packed kernels. Uses less memory during load, but runs slower. |
 | `--profile` | Print the share of forward-pass time per stage (qkv, attention, wo, ffn, classifier, other). |
-| `--chat TEMPLATE` | Chat with the model: `llama3`, `zephyr`, `llama2`, `qwen`, `smollm` or `chatml`, see [Chat](#chat). Needs `-z`. |
+| `--chat TEMPLATE` | Chat with the model: `llama3`, `zephyr`, `llama2`, `qwen`, `smollm`, `chatml` or `gemma`, see [Chat](#chat). Needs `-z`. |
 | `--system TEXT` | System prompt for `--chat`. |
 | `--eos ID` | Stop as soon as `ID` is generated. Without it, a run with `-z` stops at the tokenizer's BOS or EOS, and a run without `-z` uses every `-n` position. |
 

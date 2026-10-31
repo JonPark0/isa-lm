@@ -75,7 +75,7 @@ $(BUILD)/test_%: $(BUILD)/obj/tests/test_%.o $(GUARD_OBJ) $(LIB_OBJ)
 MODELS := build/models/rand_q8.mlb build/models/rand_q4.mlb build/models/ctx_q4.mlb build/models/mix_q4.mlb \
           build/models/chat_q8.mlb build/models/bias_q4.mlb \
           build/models/qk_q4.mlb build/models/swa_q8.mlb build/models/yarn_q4.mlb \
-          build/models/lwin_q8.mlb
+          build/models/lwin_q8.mlb build/models/gemma_q4.mlb
 build/models/rand_%.mlb: tools/gen_random.py tools/mlb.py
 	@mkdir -p $(dir $@)
 	@$(PYTHON) tools/gen_random.py --out $@ --wtype $* --dump-emb-row 5
@@ -106,6 +106,13 @@ build/models/lwin_q8.mlb: tools/gen_random.py tools/mlb.py
 	@mkdir -p $(dir $@)
 	@$(PYTHON) tools/gen_random.py --out $@ --wtype q8 --layers 4 --sliding-window 5 --layer-pattern 2 \
 		--rope-local-theta 100 --seed 4
+
+# Gemma 3 shape: GELU, post-norms, embedding and attention scales, q/k norm,
+# head_dim 32, local/global layers
+build/models/gemma_q4.mlb: tools/gen_random.py tools/mlb.py
+	@mkdir -p $(dir $@)
+	@$(PYTHON) tools/gen_random.py --out $@ --wtype q4 --layers 4 --head-dim 32 --qk-norm --sliding-window 5 \
+		--layer-pattern 2 --rope-local-theta 100 --gelu --post-norms --embed-scale 8 --attn-scale 0.2 --seed 4
 
 # yarn RoPE scaling (factor 4 over an original context of 8)
 build/models/yarn_q4.mlb: tools/gen_random.py tools/mlb.py

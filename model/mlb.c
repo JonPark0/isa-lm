@@ -1,3 +1,4 @@
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 #include "model/mlb.h"
@@ -75,6 +76,16 @@ static ml_status parse_header(ml_config *cfg, int *shared, const uint8_t *h) {
     cfg->layer_flags = (int)lflags;
     cfg->rope_local_theta = rdf(h + 100);
     if (!(cfg->rope_local_theta >= 0.0f && cfg->rope_local_theta < 1e30f)) return ML_E_FORMAT;
+    const uint32_t act = rd32(h + 104), pn = rd32(h + 108);
+    if (act > ML_ACT_GELU_TANH || pn > 1) return ML_E_FORMAT;
+    cfg->act = (int)act;
+    cfg->post_norms = (int)pn;
+    cfg->embed_scale = rdf(h + 112);
+    cfg->attn_scale = rdf(h + 116);
+    if (!(cfg->embed_scale >= 0.0f && cfg->embed_scale < 1e6f) || !(cfg->attn_scale >= 0.0f && cfg->attn_scale < 1e6f))
+        return ML_E_FORMAT;
+    if (cfg->embed_scale == 0.0f) cfg->embed_scale = 1.0f;
+    if (cfg->attn_scale == 0.0f) cfg->attn_scale = 1.0f / sqrtf((float)cfg->head_dim);
     if (!(cfg->rope_theta > 0.0f) || !(cfg->norm_eps >= 0.0f)) return ML_E_FORMAT;
     cfg->rope_type = (int)rd32(h + 52);
     cfg->rope_factor = rdf(h + 56);
@@ -148,6 +159,10 @@ ml_status ml_model_load(ml_model *m, const char *path) {
         L->w1 = take_mat(&cur, c->hidden_dim, c->dim, WT(ML_Q8M_UP));
         L->w2 = take_mat(&cur, c->dim, c->hidden_dim, WT(ML_Q8M_DOWN));
         L->w3 = take_mat(&cur, c->hidden_dim, c->dim, WT(ML_Q8M_UP));
+        if (c->post_norms) {
+            L->post_attn_norm = take(&cur, normsz);
+            L->post_ffn_norm = take(&cur, normsz);
+        }
     }
     m->final_norm = take(&cur, normsz);
     m->wcls = shared ? m->tok_emb : take_mat(&cur, c->vocab, c->dim, WT(ML_Q8M_CLS));

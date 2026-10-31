@@ -90,12 +90,12 @@ static void test_limits(void) {
         fclose(f);
         TT_EQ_INT(ml_tokenizer_load(&t, tmp, 0), ML_E_FORMAT);
     }
-    buf[28] = 0x80;   /* unknown flag */
+    buf[29] = 0x01;   /* unknown flag (0x100) */
     f = fopen(tmp, "wb");
     fwrite(buf, 1, n, f);
     fclose(f);
     TT_EQ_INT(ml_tokenizer_load(&t, tmp, 0), ML_E_FORMAT);
-    buf[28] = 0;
+    buf[29] = 0;
     buf[4] = 9;   /* version */
     f = fopen(tmp, "wb");
     fwrite(buf, 1, n, f);
@@ -190,6 +190,9 @@ static void test_chat_templates(void) {
                  "<|im_start|>system\nYou are Qwen, created by Alibaba Cloud. You are a helpful assistant.<|im_end|>\n"
                  "<|im_start|>user\nHi<|im_end|>\n<|im_start|>assistant\n");
     check_render(ML_CHAT_QWEN, "Be kind.", "More", 0, "\n<|im_start|>user\nMore<|im_end|>\n<|im_start|>assistant\n");
+    check_render(ML_CHAT_GEMMA, "Be brief.", "Hi", 1,
+                 "<start_of_turn>user\nBe brief.\n\nHi<end_of_turn>\n<start_of_turn>model\n");
+    check_render(ML_CHAT_GEMMA, "Be brief.", "More", 0, "\n<start_of_turn>user\nMore<end_of_turn>\n<start_of_turn>model\n");
     check_render(ML_CHAT_SMOLLM, NULL, "Hi", 1,
                  "<|im_start|>system\nYou are a helpful AI assistant named SmolLM, trained by Hugging Face<|im_end|>\n"
                  "<|im_start|>user\nHi<|im_end|>\n<|im_start|>assistant\n");

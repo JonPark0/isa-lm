@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Gemma 3 text models (Gemma 3 1B): GELU, block output norms, embedding and
+  attention scales (`.mlb` header offsets 104-116), local and global layers;
+  the Gemma tokenizer (no U+2581 before the text, MLT1 flag 128) and
+  `--chat gemma`. Gemma 3 1B Q8 perplexity 42.20 against 42.32 for an F32
+  reference.
+- Per-layer sliding windows and RoPE bases: a flag byte per layer (header
+  offset 96) puts a layer behind the window and on the local RoPE base
+  (offset 100). The converter writes them when only some layers slide
+  (`layer_types`, Qwen2's `max_window_layers`) instead of capping the context.
+
+### Changed
+
+- AArch64 dotprod builds (neon_dotprod, neon_i8mm, sve): Q4 nibbles are packed
+  in signed form, so no per-block activation sums are subtracted; the dotprod
+  batched kernels take 8 tokens per weight block, and the i8mm ones
+  accumulate in smmla's layout. On GitHub's Neoverse N2 runner (Qwen2.5 0.5B)
+  Q4 prefill is 1.16-1.24x faster, Q4 decode 1.07-1.12x, and Q8 prefill on
+  neon_dotprod and sve 1.04x. Pack cache files from earlier builds are
+  rewritten.
+
 ## 0.3.0 — 2026-10-31
 
 ### Added
