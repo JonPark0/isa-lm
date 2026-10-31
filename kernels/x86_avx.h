@@ -76,4 +76,18 @@ static inline __m256i load_q8_block(const int8_t *p) { return _mm256_loadu_si256
 #define LOADW_Q8_256(row, b) load_q8_block(W->q + (size_t)(row) * W->cols + (b) * QK)
 #define LOADW_Q4_256(row, b) unpack_q4_avx2((const uint8_t *)W->q + ((size_t)(row) * nb + (b)) * (QK / 2))
 
+/* Packed scales (core/pack.h): f32, or f16 when the tensor's pd16 is set
+ * (files with f16 scales). d points at element i of either. */
+ML_INLINE const void *pk_d(const ml_qtensor *W, size_t i, const int f16) {
+    return f16 ? (const void *)((const uint16_t *)(const void *)W->pd + i) : (const void *)(W->pd + i);
+}
+ML_INLINE __m256 pk_d8(const void *d, size_t i, const int f16) {
+    return f16 ? _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)((const uint16_t *)d + i))) : _mm256_loadu_ps((const float *)d + i);
+}
+#if defined(__AVX512F__)
+ML_INLINE __m512 pk_d16(const void *d, size_t i, const int f16) {
+    return f16 ? _mm512_cvtph_ps(_mm256_loadu_si256((const __m256i *)((const uint16_t *)d + i))) : _mm512_loadu_ps((const float *)d + i);
+}
+#endif
+
 #endif

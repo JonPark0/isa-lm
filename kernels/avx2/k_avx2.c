@@ -27,12 +27,12 @@ void ml_k_matvec_q4_avx2(float *y, const ml_qtensor *W, const ml_qact *x, int r0
  * int16 (<= 30480) before a single pmaddwd; then 8 * sum(x) is subtracted. */
 #define PK 8
 
-void ml_k_matvec_q8_pk_avx2(float *y, const ml_qtensor *W, const ml_qact *x, int r0, int r1) {
+ML_INLINE void matvec_q8_pk_impl(float *y, const ml_qtensor *W, const ml_qact *x, int r0, int r1, const int f16) {
     const int nb = W->cols / QK;
     const __m256i ones = _mm256_set1_epi16(1);
     for (int row = r0; row < r1; row += PK) {
         const uint8_t *p = W->pq + (size_t)(row / PK) * nb * (8 * PK * 4);
-        const float *d = W->pd + (size_t)(row / PK) * nb * PK;
+        const void *d = pk_d(W, (size_t)(row / PK) * nb * PK, f16);
         __m256 acc = _mm256_setzero_ps();
         for (int b = 0; b < nb; b++, p += 8 * PK * 4) {
             ml_prefetch_ahead(p, 8 * PK * 4);
@@ -44,7 +44,7 @@ void ml_k_matvec_q8_pk_avx2(float *y, const ml_qtensor *W, const ml_qact *x, int
                 const __m256i prod = _mm256_maddubs_epi16(_mm256_sign_epi8(xv, xv), _mm256_sign_epi8(w, xv));
                 s = _mm256_add_epi32(s, _mm256_madd_epi16(prod, ones));
             }
-            acc = _mm256_fmadd_ps(_mm256_cvtepi32_ps(s), _mm256_mul_ps(_mm256_loadu_ps(d + b * PK), _mm256_set1_ps(x->d[b])), acc);
+            acc = _mm256_fmadd_ps(_mm256_cvtepi32_ps(s), _mm256_mul_ps(pk_d8(d, b * PK, f16), _mm256_set1_ps(x->d[b])), acc);
         }
         float t[PK];
         _mm256_storeu_ps(t, acc);
@@ -52,14 +52,20 @@ void ml_k_matvec_q8_pk_avx2(float *y, const ml_qtensor *W, const ml_qact *x, int
     }
 }
 
-void ml_k_matvec_q4_pk_avx2(float *y, const ml_qtensor *W, const ml_qact *x, int r0, int r1) {
+/* f16 is a constant in each instance, so the scale load is chosen at compile time. */
+void ml_k_matvec_q8_pk_avx2(float *y, const ml_qtensor *W, const ml_qact *x, int r0, int r1) {
+    if (W->pd16) matvec_q8_pk_impl(y, W, x, r0, r1, 1);
+    else matvec_q8_pk_impl(y, W, x, r0, r1, 0);
+}
+
+ML_INLINE void matvec_q4_pk_impl(float *y, const ml_qtensor *W, const ml_qact *x, int r0, int r1, const int f16) {
     const int nb = W->cols / QK;
     int xsum[PK_MAX_BLOCKS];
     pk_block_sums(xsum, x, nb, 8);
     const __m256i m4 = _mm256_set1_epi8(0x0F), ones = _mm256_set1_epi16(1);
     for (int row = r0; row < r1; row += PK) {
         const uint8_t *p = W->pq + (size_t)(row / PK) * nb * (4 * PK * 4);
-        const float *d = W->pd + (size_t)(row / PK) * nb * PK;
+        const void *d = pk_d(W, (size_t)(row / PK) * nb * PK, f16);
         __m256 acc = _mm256_setzero_ps();
         for (int b = 0; b < nb; b++, p += 4 * PK * 4) {
             ml_prefetch_ahead(p, 4 * PK * 4);
@@ -72,12 +78,18 @@ void ml_k_matvec_q4_pk_avx2(float *y, const ml_qtensor *W, const ml_qact *x, int
                                                                  _mm256_set1_epi32(xb[v + 4])));
             }
             const __m256i s = _mm256_sub_epi32(_mm256_madd_epi16(s16, ones), _mm256_set1_epi32(xsum[b]));
-            acc = _mm256_fmadd_ps(_mm256_cvtepi32_ps(s), _mm256_mul_ps(_mm256_loadu_ps(d + b * PK), _mm256_set1_ps(x->d[b])), acc);
+            acc = _mm256_fmadd_ps(_mm256_cvtepi32_ps(s), _mm256_mul_ps(pk_d8(d, b * PK, f16), _mm256_set1_ps(x->d[b])), acc);
         }
         float t[PK];
         _mm256_storeu_ps(t, acc);
         pk_store(y, t, row, PK, r1);
     }
+}
+
+/* f16 is a constant in each instance, so the scale load is chosen at compile time. */
+void ml_k_matvec_q4_pk_avx2(float *y, const ml_qtensor *W, const ml_qact *x, int r0, int r1) {
+    if (W->pd16) matvec_q4_pk_impl(y, W, x, r0, r1, 1);
+    else matvec_q4_pk_impl(y, W, x, r0, r1, 0);
 }
 
 void ml_k_quantize_q8_avx2(ml_qact *out, const float *x, int k) {
@@ -334,7 +346,8 @@ ML_INLINE void matmul_q8_tile(float *Y, int ldy, const ml_qtensor *W, const ml_q
     const __m256i ones = _mm256_set1_epi16(1);
     for (int row = r0; row < r1; row += PK) {
         const uint8_t *p = W->pq + (size_t)(row / PK) * nb * (8 * PK * 4);
-        const float *d = W->pd + (size_t)(row / PK) * nb * PK;
+        const int f16 = W->pd16;
+    const void *d = pk_d(W, (size_t)(row / PK) * nb * PK, f16);
         __m256 acc[PK_TILE];
         ML_UNROLL(4) for (int t = 0; t < PK_TILE; t++) acc[t] = _mm256_setzero_ps();
         for (int b = 0; b < nb; b++, p += 8 * PK * 4) {
@@ -347,7 +360,7 @@ ML_INLINE void matmul_q8_tile(float *Y, int ldy, const ml_qtensor *W, const ml_q
                     s[t] = _mm256_add_epi32(s[t], _mm256_madd_epi16(_mm256_maddubs_epi16(_mm256_sign_epi8(xv, xv), _mm256_sign_epi8(w, xv)), ones));
                 }
             }
-            const __m256 dv = _mm256_loadu_ps(d + b * PK);
+            const __m256 dv = pk_d8(d, b * PK, f16);
             ML_UNROLL(4) for (int t = 0; t < T; t++) acc[t] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(s[t]), _mm256_mul_ps(dv, _mm256_set1_ps(X->d[(size_t)(t0 + t) * nb + b])), acc[t]);
         }
         ML_UNROLL(4) for (int t = 0; t < T; t++) {
@@ -369,7 +382,8 @@ ML_INLINE void matmul_q4_tile(float *Y, int ldy, const ml_qtensor *W, const ml_q
     pk_block_sums_batch(xsum, X, t0, T, nb, 8);
     for (int row = r0; row < r1; row += PK) {
         const uint8_t *p = W->pq + (size_t)(row / PK) * nb * (4 * PK * 4);
-        const float *d = W->pd + (size_t)(row / PK) * nb * PK;
+        const int f16 = W->pd16;
+    const void *d = pk_d(W, (size_t)(row / PK) * nb * PK, f16);
         __m256 acc[PK_TILE];
         ML_UNROLL(4) for (int t = 0; t < PK_TILE; t++) acc[t] = _mm256_setzero_ps();
         for (int b = 0; b < nb; b++, p += 4 * PK * 4) {
@@ -383,7 +397,7 @@ ML_INLINE void matmul_q4_tile(float *Y, int ldy, const ml_qtensor *W, const ml_q
                     s16[t] = _mm256_add_epi16(s16[t], _mm256_maddubs_epi16(hi, _mm256_set1_epi32(((const int32_t *)(X->q + (size_t)(t0 + t) * X->k + b * QK))[v + 4])));
                 }
             }
-            const __m256 dv = _mm256_loadu_ps(d + b * PK);
+            const __m256 dv = pk_d8(d, b * PK, f16);
             ML_UNROLL(4) for (int t = 0; t < T; t++) {
                 const __m256i s = _mm256_sub_epi32(_mm256_madd_epi16(s16[t], ones), _mm256_set1_epi32(xsum[t][b]));
                 acc[t] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(s), _mm256_mul_ps(dv, _mm256_set1_ps(X->d[(size_t)(t0 + t) * nb + b])), acc[t]);

@@ -29,7 +29,7 @@ static void bench_matvec(int type, int rows, int cols, int iters) {
     const size_t nq = type == ML_Q8_0 ? (size_t)rows * cols : (size_t)rows * cols / 2;
     float *d = xalloc(sizeof(float) * rows * cols / QK);
     for (int i = 0; i < rows * cols / QK; i++) d[i] = 0.01f;
-    ml_qtensor W = { xalloc(nq), d, rows, cols, (uint8_t)type, NULL, NULL, NULL };
+    ml_qtensor W = { xalloc(nq), d, rows, cols, (uint8_t)type, NULL, NULL, NULL, 0 };
     ml_qact x = { xalloc(cols), xalloc(sizeof(float) * cols / QK), cols };
     for (int i = 0; i < cols / QK; i++) x.d[i] = 0.01f;
     float *y = xalloc(sizeof(float) * rows);
@@ -42,8 +42,8 @@ static void bench_matvec(int type, int rows, int cols, int iters) {
 #if ML_PACK_G
     ml_qtensor P = W;
     uint8_t *pq = ml_aligned_alloc(ml_pack_quant_bytes(&W, ML_PACK_G));
-    float *pd = ml_aligned_alloc(ml_pack_scale_bytes(&W, ML_PACK_G));
-    ml_pack(&W, pq, pd, ML_PACK_G, ML_PACK_Q8_OFFSET);
+    float *pd = ml_aligned_alloc(ml_pack_scale_bytes(&W, ML_PACK_G, ML_PACK_D16));
+    ml_pack(&W, pq, pd, ML_PACK_G, ML_PACK_Q8_OFFSET, ML_PACK_D16);
     P.pq = pq;
     P.pd = pd;
     if (type == ML_Q8_0) TIME_IT(iters, ml_k_matvec_q8_pk(y, &P, &x, 0, rows));

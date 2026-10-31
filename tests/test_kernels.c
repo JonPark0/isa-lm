@@ -18,7 +18,11 @@ static void *xalloc(size_t n) { void *p = ml_aligned_alloc(n); memset(p, 0, n); 
 
 /* ---------- matvec ---------- */
 
-typedef struct { ml_qtensor W; int8_t *q; float *d; } wbuf;
+typedef struct { ml_qtensor W; int8_t *q; float *d; uint16_t *dh; } wbuf;
+
+/* Set: make_w gives W f16 scales too (W->dh, with d their float values), as
+ * a file with f16 scales does; builds with ML_PACK_D16 then pack those. */
+static int f16_scales;
 
 static wbuf make_w(int rows, int cols, int type, int unit_scale) {
     wbuf b;
@@ -30,7 +34,15 @@ static wbuf make_w(int rows, int cols, int type, int unit_scale) {
     /* weight scales of either sign: tools/mlb.py may store negative Q4 scales */
     for (int i = 0; i < rows * cols / QK; i++)
         b.d[i] = unit_scale ? 1.0f : frand(0.001f, 0.05f) * (urand() & 1 ? 1.0f : -1.0f);
-    b.W = (ml_qtensor){ b.q, b.d, rows, cols, (uint8_t)type, NULL, NULL, NULL };
+    b.dh = NULL;
+    if (f16_scales) {
+        b.dh = xalloc(sizeof(uint16_t) * rows * cols / QK);
+        for (int i = 0; i < rows * cols / QK; i++) {
+            b.dh[i] = ml_f32_to_f16(b.d[i]);
+            b.d[i] = ml_f16_to_f32(b.dh[i]);
+        }
+    }
+    b.W = (ml_qtensor){ b.q, b.d, rows, cols, (uint8_t)type, NULL, NULL, b.dh, 0 };
     return b;
 }
 
@@ -91,7 +103,7 @@ static void check_matvec(int type, int unit) {
             if (unit) { TT_ASSERT(y1[r] == (float)ref); TT_ASSERT(y2[r] == (float)ref); }
             else { TT_CLOSE(y1[r], y2[r], 1e-5, ref_scale); TT_CLOSE(y2[r], ref, 1e-5, ref_scale); }
         }
-        free(w.q); free(w.d); free(x.q); free(x.d); free(y1); free(y2);
+        free(w.q); free(w.d); free(w.dh); free(x.q); free(x.d); free(y1); free(y2);
     }
 }
 
@@ -106,9 +118,9 @@ static void check_matvec_pk(int type, int unit) {
         wbuf w = make_w(rows, cols, type, unit);
         ml_qtensor P = w.W;
         uint8_t *pq = xalloc(ml_pack_quant_bytes(&w.W, ML_PACK_G));
-        float *pd = xalloc(ml_pack_scale_bytes(&w.W, ML_PACK_G));
-        ml_pack(&w.W, pq, pd, ML_PACK_G, ML_PACK_Q8_OFFSET);
-        P.pq = pq; P.pd = pd;
+        float *pd = xalloc(ml_pack_scale_bytes(&w.W, ML_PACK_G, ML_PACK_D16));
+        ml_pack(&w.W, pq, pd, ML_PACK_G, ML_PACK_Q8_OFFSET, ML_PACK_D16);
+        P.pq = pq; P.pd = pd; P.pd16 = (uint8_t)ml_pack_f16(&w.W, ML_PACK_D16);
         ml_qact x = make_x(cols, unit);
         float *y1 = xalloc(sizeof(float) * rows), *y2 = xalloc(sizeof(float) * rows);
         for (int i = 0; i < rows; i++) y1[i] = 12345.0f;
@@ -120,7 +132,7 @@ static void check_matvec_pk(int type, int unit) {
             if (unit) TT_ASSERT(y1[r] == y2[r]);
             else TT_CLOSE(y1[r], y2[r], 1e-5, ref_scale);
         }
-        free(w.q); free(w.d); free(pq); free(pd); free(x.q); free(x.d); free(y1); free(y2);
+        free(w.q); free(w.d); free(w.dh); free(pq); free(pd); free(x.q); free(x.d); free(y1); free(y2);
     }
 #else
     (void)type; (void)unit;
@@ -138,9 +150,9 @@ static void check_matmul_pk_cols(int type, int unit, int cols, int rows) {
     wbuf w = make_w(rows, cols, type, unit);
     ml_qtensor P = w.W;
     uint8_t *pq = xalloc(ml_pack_quant_bytes(&w.W, ML_PACK_G));
-    float *pd = xalloc(ml_pack_scale_bytes(&w.W, ML_PACK_G));
-    ml_pack(&w.W, pq, pd, ML_PACK_G, ML_PACK_Q8_OFFSET);
-    P.pq = pq; P.pd = pd;
+    float *pd = xalloc(ml_pack_scale_bytes(&w.W, ML_PACK_G, ML_PACK_D16));
+    ml_pack(&w.W, pq, pd, ML_PACK_G, ML_PACK_Q8_OFFSET, ML_PACK_D16);
+    P.pq = pq; P.pd = pd; P.pd16 = (uint8_t)ml_pack_f16(&w.W, ML_PACK_D16);
     for (int ni = 0; ni < 6; ni++) {
         const int n = ns[ni], ldy = rows + 3;
         ml_qbatch X = { xalloc(n * cols), xalloc(sizeof(float) * n * cols / QK), n, cols };
@@ -165,7 +177,7 @@ static void check_matmul_pk_cols(int type, int unit, int cols, int rows) {
         }
         free(X.q); free(X.d); free(Y); free(yv);
     }
-    free(w.q); free(w.d); free(pq); free(pd);
+    free(w.q); free(w.d); free(w.dh); free(pq); free(pd);
 #else
     (void)type; (void)unit; (void)cols; (void)rows;
 #endif
@@ -183,6 +195,15 @@ static void test_matvec_q8_pk_exact(void)  { check_matvec_pk(ML_Q8_0, 1); }
 static void test_matvec_q8_pk_scaled(void) { check_matvec_pk(ML_Q8_0, 0); }
 static void test_matvec_q4_pk_exact(void)  { check_matvec_pk(ML_Q4_0, 1); }
 static void test_matvec_q4_pk_scaled(void) { check_matvec_pk(ML_Q4_0, 0); }
+/* f16 scales: packed as f16 by builds with ML_PACK_D16, as floats otherwise */
+static void test_pk_f16_scales(void) {
+    f16_scales = 1;
+    check_matvec_pk(ML_Q8_0, 0);
+    check_matvec_pk(ML_Q4_0, 0);
+    check_matmul_pk(ML_Q8_0, 0);
+    check_matmul_pk(ML_Q4_0, 0);
+    f16_scales = 0;
+}
 
 static void test_matvec_q8_exact(void)  { check_matvec(ML_Q8_0, 1); }
 static void test_matvec_q8_scaled(void) { check_matvec(ML_Q8_0, 0); }
@@ -420,7 +441,7 @@ int TT_ENTRY(int argc, char **argv) {
     SHOW(rope); SHOW(silu_mul); SHOW(add); SHOW(dot_f32); SHOW(axpy_f32); SHOW(dot_q8); SHOW(axpy_q8);
 #if ML_PACK_G
     SHOW(matvec_q8_pk); SHOW(matvec_q4_pk); SHOW(matmul_q8_pk); SHOW(matmul_q4_pk);
-    printf("pack: %d rows, q8 offset %d\n", ML_PACK_G, ML_PACK_Q8_OFFSET);
+    printf("pack: %d rows, q8 offset %d, f16 scales %s\n", ML_PACK_G, ML_PACK_Q8_OFFSET, ML_PACK_D16 ? "kept" : "as floats");
 #else
     printf("pack: none\n");
 #endif
@@ -432,6 +453,7 @@ int TT_ENTRY(int argc, char **argv) {
     TT_RUN(test_matvec_q8_pk_scaled);
     TT_RUN(test_matvec_q4_pk_exact);
     TT_RUN(test_matvec_q4_pk_scaled);
+    TT_RUN(test_pk_f16_scales);
     TT_RUN(test_matmul_q8_pk);
     TT_RUN(test_matmul_q4_pk);
     TT_RUN(test_quantize_q8_bitexact);
