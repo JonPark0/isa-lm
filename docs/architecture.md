@@ -127,7 +127,11 @@ repacks every weight matrix, except the embedding table, into a
   matching `offset × Σx` is subtracted per block in int32, so the result is
   exact. AVX2 and SSE4.1 keep Q8 signed and use `psignb`. On those two, a Q4
   block's 8 `pmaddubsw` results are summed in int16 (at most 30480) before a
-  single `pmaddwd`.
+  single `pmaddwd`. The NEON dotprod layout stores Q4 bytes `^ 0x88`, so each
+  nibble is `q − 8` as a signed 4-bit value: a shift left by 4 (low nibble) or
+  a mask (high nibble) gives `16 (q − 8)` as a signed byte for `sdot`/`smmla`,
+  and the conversion to float drops the 16 exactly (`vcvtq_n_f32_s32`), so no
+  per-block sum is subtracted.
 
 After packing, the original mapped pages are released with
 `madvise(MADV_DONTNEED)`, so resident memory stays about the size of the model.
@@ -148,7 +152,7 @@ packed kernels.
 
 `ml_run --pack-cache` writes the packed arrays, exactly as laid out in memory,
 to `MODEL.pk<G>` behind a 512-byte header. The header records the pack group,
-the Q8 offset, the model's size and header, and a hash of bytes sampled across
+the Q8 offset, the Q4 xor, the model's size and header, and a hash of bytes sampled across
 the model file. A later run whose build and model match maps the file instead
 of packing (`ml_model_pack_cached`); otherwise it packs and rewrites it,
 through a temporary file and a rename.
