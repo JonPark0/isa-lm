@@ -93,6 +93,26 @@ def test_refuses_byte_level_variants(change):
         ct.convert(j)
 
 
+def test_gpt2_variant_flags():
+    """ByteLevel with its own GPT-2 regex, optionally after Digits (SmolLM2)."""
+    j = copy.deepcopy(_load("bpe_tiny.json"))
+    bl = {"type": "ByteLevel", "add_prefix_space": False, "trim_offsets": True, "use_regex": True}
+    j["pre_tokenizer"] = bl
+    assert ct.convert(j)[1] & (ct.GPT2 | ct.ISOLATE_DIGITS) == ct.GPT2
+    j["pre_tokenizer"] = {"type": "Sequence", "pretokenizers": [{"type": "Digits", "individual_digits": True}, bl]}
+    assert ct.convert(j)[1] & (ct.GPT2 | ct.ISOLATE_DIGITS) == ct.GPT2 | ct.ISOLATE_DIGITS
+    for bad in ({"type": "Digits", "individual_digits": False}, ):
+        j["pre_tokenizer"]["pretokenizers"][0] = bad
+        with pytest.raises(ct.Unsupported):
+            ct.convert(j)
+    j["pre_tokenizer"] = dict(bl, add_prefix_space=True)
+    with pytest.raises(ct.Unsupported):
+        ct.convert(j)
+    del j["model"]["type"]   # older files: BPE implied by the merges
+    j["pre_tokenizer"] = bl
+    assert ct.convert(j)[0] == ct.BYTE_BPE
+
+
 def test_qwen2_variant_flags():
     """NFC normalizer and the single-digit regex (Qwen2) set their flags."""
     j = copy.deepcopy(_load("bpe_tiny.json"))

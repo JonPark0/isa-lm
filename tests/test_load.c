@@ -172,8 +172,21 @@ static void test_state_huge_kv(void) {
 }
 
 static void test_load_rejects_bad_rope_scaling(void) {
-    TT_EQ_INT(load_patched(0, 52, 2), ML_E_FORMAT);   /* unknown rope type */
+    TT_EQ_INT(load_patched(0, 52, 4), ML_E_FORMAT);   /* unknown rope type */
     TT_EQ_INT(load_patched(0, 52, 1), ML_E_FORMAT);   /* llama3 with zero factor etc. */
+    TT_EQ_INT(load_patched(0, 52, 2), ML_E_FORMAT);   /* linear with zero factor */
+    TT_EQ_INT(load_patched(0, 52, 3), ML_E_FORMAT);   /* yarn with zero factor, betas, attention factor */
+    TT_EQ_INT(load_patched(0, 88, 0x3f800000u), ML_E_FORMAT);   /* attention factor without yarn */
+}
+
+/* head_dim (offset 80), qk_norm (84) and sliding_window (92). Models using
+ * them are covered end to end (qk_q4.mlb, swa_q8.mlb). */
+static void test_load_rejects_bad_attention_fields(void) {
+    TT_EQ_INT(load_patched(0, 80, 3), ML_E_SHAPE);           /* odd head_dim */
+    TT_EQ_INT(load_patched(0, 80, 0x20000u), ML_E_SHAPE);    /* n_heads * head_dim too large */
+    TT_EQ_INT(load_patched(0, 84, 2), ML_E_FORMAT);          /* qk_norm is a 0/1 flag */
+    TT_EQ_INT(load_patched(0, 92, 0x2000000u), ML_E_FORMAT); /* window beyond any context */
+    TT_EQ_INT(load_patched(0, 92, 8), ML_OK);                /* a window alone needs no other data */
 }
 
 /* q8_mask (offset 72): only Q4 models may keep classes in Q8, and only known
@@ -210,6 +223,7 @@ int TT_ENTRY(int argc, char **argv) {
     TT_RUN(test_load_missing_file);
     TT_RUN(test_load_rejects_bad_rope_scaling);
     TT_RUN(test_load_rejects_bad_q8_mask);
+    TT_RUN(test_load_rejects_bad_attention_fields);
     TT_RUN(test_load_rejects_overflowing_dims);
     TT_RUN(test_load_rejects_tiny_vocab);
     TT_RUN(test_load_rejects_q8_minus_128);

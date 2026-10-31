@@ -2,13 +2,14 @@
 
   convert.py llama2c IN.bin OUT.mlb [--wtype q8|q4] [--q8 LIST]   llama2.c legacy (v0) export
   convert.py hf DIR OUT.mlb [--wtype q8|q4] [--q8 LIST] [--max-seq N]
-                                                      HF Llama, Mistral, Qwen2: config.json + *.safetensors
+                                                      HF Llama, Mistral, Qwen2, Qwen3: config.json + *.safetensors
   --imatrix FILE (q4): weight the Q4 fits by an importance matrix from
                        ml_run --imatrix, run on a Q8 conversion of the same model
 """
 import argparse
 import glob
 import json
+import math
 import os
 import struct
 import sys
@@ -86,19 +87,62 @@ def _unrotate(w, n_heads):
     return w.reshape(n_heads, 2, hd // 2, dim).transpose(0, 2, 1, 3).reshape(rows, dim)
 
 
-HF_TYPES = ("llama", "mistral", "qwen2")
+HF_TYPES = ("llama", "mistral", "qwen2", "qwen3")
 
 
 def _window(c):
-    """Sliding-window attention span, or None when every layer attends to the full context."""
+    """-> (window, mixed): the sliding-window span, and whether only some layers use it."""
     w = c.get("sliding_window")
-    if c.get("model_type") == "qwen2" and not c.get("use_sliding_window", False):
+    if not w:
+        return None, False
+    n = c["num_hidden_layers"]
+    if c.get("layer_types"):
+        sliding = [t == "sliding_attention" for t in c["layer_types"]]
+    elif c.get("model_type") in ("qwen2", "qwen3"):   # layers from max_window_layers on, if enabled
+        sliding = [bool(c.get("use_sliding_window")) and i >= c.get("max_window_layers", n) for i in range(n)]
+    else:
+        sliding = [True] * n
+    if not any(sliding):
+        return None, False
+    return int(w), not all(sliding)
+
+
+def _rope_scaling(c, hd):
+    """config.json rope_scaling -> write_mlb's rope_scaling, or None; refuses unknown types."""
+    rs = c.get("rope_scaling")
+    if not rs:
         return None
-    return int(w) if w else None
+    kind = rs.get("rope_type", rs.get("type"))
+    if rs.get("partial_rotary_factor", 1.0) != 1.0:
+        raise ValueError("partial rotary embeddings are not supported")
+    if kind == "llama3":
+        return {"type": "llama3", "factor": float(rs["factor"]),
+                "low_freq_factor": float(rs["low_freq_factor"]),
+                "high_freq_factor": float(rs["high_freq_factor"]),
+                "original_max_position_embeddings": int(rs["original_max_position_embeddings"])}
+    if kind == "linear":
+        return {"type": "linear", "factor": float(rs["factor"])}
+    if kind == "yarn":   # as transformers' _compute_yarn_parameters
+        if not rs.get("truncate", True):
+            raise ValueError("yarn with truncate=false is not supported")
+        orig = int(rs.get("original_max_position_embeddings") or c["max_position_embeddings"])
+        f = float(rs.get("factor") or c["max_position_embeddings"] / orig)
+
+        def mscale(scale, m=1.0):
+            return 1.0 if scale <= 1 else 0.1 * m * math.log(scale) + 1.0
+        af = rs.get("attention_factor")
+        if af is None:
+            ms, msa = rs.get("mscale"), rs.get("mscale_all_dim")
+            af = mscale(f, ms) / mscale(f, msa) if ms and msa else mscale(f)
+        return {"type": "yarn", "factor": f, "beta_fast": float(rs.get("beta_fast") or 32),
+                "beta_slow": float(rs.get("beta_slow") or 1), "original_max_position_embeddings": orig,
+                "attention_factor": float(af)}
+    raise ValueError(f"rope_scaling {rs} is not supported (llama3, linear and yarn are): "
+                     "the converted model would compute wrong outputs")
 
 
 def load_hf(d, max_seq=None):
-    """-> (cfg, float32 weights) from a HF Llama, Mistral or Qwen2 directory."""
+    """-> (cfg, float32 weights) from a HF Llama, Mistral, Qwen2 or Qwen3 directory."""
     with open(os.path.join(d, "config.json")) as fh:
         c = json.load(fh)
     mtype = c.get("model_type", "llama")
@@ -106,33 +150,31 @@ def load_hf(d, max_seq=None):
         raise ValueError(f"model_type {mtype!r} is not supported (only {', '.join(HF_TYPES)})")
     if c.get("hidden_act", "silu") != "silu":
         raise ValueError(f"hidden_act {c['hidden_act']!r} is not supported (only silu)")
-    if c.get("head_dim") not in (None, c["hidden_size"] // c["num_attention_heads"]):
-        raise ValueError("head_dim != hidden_size / num_attention_heads is not supported")
     if c.get("mlp_bias"):
         raise ValueError("MLP biases are not supported")
-    rope_scaling = None
-    rs = c.get("rope_scaling")
-    if rs:
-        kind = rs.get("rope_type", rs.get("type"))
-        if kind != "llama3":
-            raise ValueError(f"rope_scaling {rs} is not supported (only llama3): "
-                             "the converted model would compute wrong outputs")
-        rope_scaling = {"type": "llama3", "factor": float(rs["factor"]),
-                        "low_freq_factor": float(rs["low_freq_factor"]),
-                        "high_freq_factor": float(rs["high_freq_factor"]),
-                        "original_max_position_embeddings": int(rs["original_max_position_embeddings"])}
+    if c.get("partial_rotary_factor", 1.0) != 1.0:
+        raise ValueError("partial rotary embeddings are not supported")
+    nh = c["num_attention_heads"]
+    hd = c.get("head_dim") or c["hidden_size"] // nh
+    rope_scaling = _rope_scaling(c, hd)
     t = {}
     files = sorted(glob.glob(os.path.join(d, "*.safetensors")))
     if not files:
         raise FileNotFoundError(f"no .safetensors in {d}")
     for f in files:
         t.update(read_safetensors(f))
-    nh = c["num_attention_heads"]
     nkv = c.get("num_key_value_heads", nh)
     tied = c.get("tie_word_embeddings", False) or "lm_head.weight" not in t
-    # Within the window, sliding-window attention equals full attention: cap the
-    # context there instead of implementing the window.
-    seq = min(c["max_position_embeddings"], max_seq or c["max_position_embeddings"], _window(c) or 1 << 31)
+    seq = min(c["max_position_embeddings"], max_seq or c["max_position_embeddings"])
+    window, mixed = _window(c)
+    if mixed:   # only some layers slide: within the window that equals full attention
+        seq, window = min(seq, window), None
+    if window and window >= seq:
+        window = None
+    qk_norm = "model.layers.0.self_attn.q_norm.weight" in t
+    if (t["model.layers.0.self_attn.q_proj.weight"].shape[0] != nh * hd or
+            t["model.layers.0.self_attn.k_proj.weight"].shape[0] != nkv * hd):
+        raise ValueError(f"q/k projections do not match {nh} and {nkv} heads of {hd}")
     if any(k.endswith(("o_proj.bias", "mlp.gate_proj.bias", "mlp.up_proj.bias", "mlp.down_proj.bias"))
            for k in t):
         raise ValueError("biases other than on the q/k/v projections are not supported")
@@ -140,7 +182,8 @@ def load_hf(d, max_seq=None):
     cfg = dict(dim=c["hidden_size"], n_layers=c["num_hidden_layers"], n_heads=nh, n_kv_heads=nkv,
                hidden_dim=c["intermediate_size"], vocab=c["vocab_size"], max_seq=seq, qkv_bias=int(bias),
                rope_theta=float(c.get("rope_theta", 10000.0)), norm_eps=float(c.get("rms_norm_eps", 1e-5)),
-               shared_classifier=int(tied), rope_scaling=rope_scaling)
+               shared_classifier=int(tied), rope_scaling=rope_scaling, head_dim=hd, qk_norm=int(qk_norm),
+               sliding_window=window or 0)
     w = {"tok_emb": t["model.embed_tokens.weight"], "final_norm": t["model.norm.weight"], "layers": []}
     for i in range(cfg["n_layers"]):
         p = f"model.layers.{i}."
@@ -159,6 +202,9 @@ def load_hf(d, max_seq=None):
             w["layers"][-1].update(bq=_unrotate(t[p + "self_attn.q_proj.bias"][:, None], nh)[:, 0],
                                    bk=_unrotate(t[p + "self_attn.k_proj.bias"][:, None], nkv)[:, 0],
                                    bv=t[p + "self_attn.v_proj.bias"])
+        if qk_norm:   # per-head weights, permuted as each head's q/k rows are
+            w["layers"][-1].update(q_norm=_unrotate(t[p + "self_attn.q_norm.weight"][:, None], 1)[:, 0],
+                                   k_norm=_unrotate(t[p + "self_attn.k_norm.weight"][:, None], 1)[:, 0])
     if not tied:
         w["wcls"] = t["lm_head.weight"]
     return cfg, w

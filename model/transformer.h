@@ -14,20 +14,21 @@ typedef struct {
     ml_arena arena;
     ml_pool *pool;
     float *x, *xb, *xb2, *hb, *hb2, *q, *logits;
+    float *ao;                     /* attention output [q_dim] (wo's input) */
     float *att;                    /* scores [max(n_heads, threads * ml_attention_batch_heads)][max_seq] */
     int kv_type;                   /* ML_F32 or ML_Q8_0 (see ml_state_init) */
     float *kcache, *vcache;        /* F32: [layer][max_seq][kv_dim] */
     int8_t *kq, *vq;               /* Q8: [layer][max_seq][kv_dim] */
     float *kd, *vd;                /* Q8: [layer][max_seq][n_kv_heads] scales */
     float *kbuf, *vbuf;            /* Q8: this step's K and V before quantization, [ML_BATCH_MAX][kv_dim] */
-    int8_t *qq;                    /* Q8: quantized query heads [ML_BATCH_MAX][dim] */
+    int8_t *qq;                    /* Q8: quantized query heads [ML_BATCH_MAX][q_dim] */
     float *qd;                     /* Q8: their scales [ML_BATCH_MAX][n_heads] */
     float *rope_cos, *rope_sin;    /* [max_seq][head_dim/2] */
-    ml_qact qa_dim, qa_hidden;
+    ml_qact qa_dim, qa_hidden, qa_q;   /* quantized inputs of dim, hidden_dim, q_dim */
     /* prompt prefill: up to ML_BATCH_MAX tokens per batched step */
     int batch;                     /* tokens per step, 1..ML_BATCH_MAX (default max) */
-    float *bx, *bxb, *bxb2, *bq, *bhb, *bhb2;   /* [ML_BATCH_MAX][dim or hidden] */
-    ml_qbatch qb_dim, qb_hidden;
+    float *bx, *bxb, *bxb2, *bq, *bao, *bhb, *bhb2;   /* [ML_BATCH_MAX][dim, q_dim or hidden] */
+    ml_qbatch qb_dim, qb_hidden, qb_q;
     int profile;                   /* set to time each stage of ml_forward */
     double prof[ML_PROF_COUNT];
     /* importance matrix (ml_imatrix_enable): per channel, the sum of squares
@@ -36,7 +37,7 @@ typedef struct {
     unsigned long long imat_tokens, imat_cls_tokens;   /* tokens summed into the layers, the classifier */
 } ml_state;
 
-/* imat layout: per layer [dim] wq/wk/wv input, [dim] wo, [dim] w1/w3,
+/* imat layout: per layer [dim] wq/wk/wv input, [q_dim] wo, [dim] w1/w3,
  * [hidden_dim] w2; then [dim] classifier input. */
 enum { ML_IMAT_QKV, ML_IMAT_WO, ML_IMAT_FFN, ML_IMAT_DOWN };
 size_t ml_imatrix_size(const ml_config *c);

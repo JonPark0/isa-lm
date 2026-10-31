@@ -8,16 +8,21 @@
 
 typedef struct {
     int dim, n_layers, n_heads, n_kv_heads, hidden_dim, vocab, max_seq, head_dim, kv_dim;
+    int q_dim;          /* n_heads * head_dim: dim, unless head_dim is set (offset 80; Qwen3) */
     float rope_theta, norm_eps;
     int wtype;
     unsigned q8_mask;   /* Q4 models: ML_Q8M_* classes stored in Q8 (offset 72) */
     int qkv_bias;       /* Q/K/V projections have biases (offset 76; Qwen2) */
-    /* RoPE scaling (header offsets 52..71): ML_ROPE_NONE or ML_ROPE_LLAMA3 */
+    int qk_norm;        /* RMSNorm of each query and key head before RoPE (offset 84; Qwen3) */
+    int sliding_window; /* attend to the last this many positions; 0: all (offset 92) */
+    /* RoPE scaling (header offsets 52..71, 88): ML_ROPE_*. For yarn the low
+     * and high frequency factors hold beta_fast and beta_slow. */
     int rope_type, rope_orig_max_seq;
     float rope_factor, rope_low_freq_factor, rope_high_freq_factor;
+    float rope_attn_factor;   /* yarn: factor on cos and sin (offset 88) */
 } ml_config;
 
-enum { ML_ROPE_NONE = 0, ML_ROPE_LLAMA3 = 1 };
+enum { ML_ROPE_NONE = 0, ML_ROPE_LLAMA3 = 1, ML_ROPE_LINEAR = 2, ML_ROPE_YARN = 3 };
 enum { ML_Q8M_EMB = 1, ML_Q8M_CLS = 2, ML_Q8M_QK = 4, ML_Q8M_V = 8, ML_Q8M_O = 16,
        ML_Q8M_UP = 32, ML_Q8M_DOWN = 64, ML_Q8M_ALL = 127 };
 
@@ -25,6 +30,7 @@ typedef struct {
     const float *attn_norm, *ffn_norm;
     ml_qtensor wq, wk, wv, wo, w1, w2, w3;
     const float *bq, *bk, *bv;   /* NULL unless cfg.qkv_bias */
+    const float *q_norm, *k_norm;   /* [head_dim]; NULL unless cfg.qk_norm */
 } ml_layer;
 
 typedef struct {

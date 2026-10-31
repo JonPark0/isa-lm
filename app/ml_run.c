@@ -44,7 +44,8 @@ static const char USAGE[] =
     "  --imatrix FILE   add the squares of every matrix input, per channel, to FILE (created if\n"
     "                   missing) for tools/convert.py --imatrix; run on text like the model's use\n"
     "  --chat TEMPLATE  chat with the model: llama3, zephyr (TinyLlama), llama2 (also Mistral),\n"
-    "                   chatml, or qwen (ChatML with Qwen2.5's default system prompt);\n"
+    "                   chatml, qwen or smollm (ChatML with Qwen2.5's or SmolLM2's default\n"
+    "                   system prompt);\n"
     "                   one turn per stdin line, or the single turn -i; -n caps each reply\n"
     "  --system TEXT    system prompt for --chat\n"
     "  -h, --help       show this help\n";
@@ -101,14 +102,16 @@ static int parse_tokens(const char *s, int *out, int max, int vocab) {
 }
 
 /* --imatrix file: 40-byte header "MLI1", version 1, n_layers, dim, hidden_dim,
- * 0 (u32 each), tokens and classifier tokens (u64), then the float64 sums in
+ * q_dim if it differs from dim, else 0 (u32 each), tokens and classifier
+ * tokens (u64), then the float64 sums in
  * ml_state.imat order. Adds this run's sums to the file's: the result goes to
  * PATH.tmp and replaces PATH only once written, so a failed write keeps the
  * sums collected so far. */
 static int imatrix_save(const char *path, const ml_state *s) {
     const ml_config *c = &s->m->cfg;
     const size_t n = ml_imatrix_size(c);
-    uint32_t h[6] = { 0, 1, (uint32_t)c->n_layers, (uint32_t)c->dim, (uint32_t)c->hidden_dim, 0 };
+    uint32_t h[6] = { 0, 1, (uint32_t)c->n_layers, (uint32_t)c->dim, (uint32_t)c->hidden_dim,
+                      c->q_dim != c->dim ? (uint32_t)c->q_dim : 0 };
     uint64_t cnt[2] = { s->imat_tokens, s->imat_cls_tokens };
     memcpy(h, "MLI1", 4);
     if (!s->imat_tokens) {   /* nothing ran (an empty chat): leave the file as it is */

@@ -16,10 +16,18 @@ TINY = np.float32(1e-30)   # blocks with max |x| below this quantize to zero (ML
 ALIGN = 64
 HEADER_SIZE = 256
 WTYPES = {"f32": 0, "q8": 1, "q4": 2}
-_HDR = struct.Struct("<4sIIIIIIIIffIIIfffIII")   # magic .. rope scaling, q8 mask, qkv bias: 80 bytes
-ROPE_TYPES = {None: 0, "llama3": 1}
+# magic .. rope scaling, q8 mask, qkv bias (80 bytes), head_dim, qk_norm,
+# rope attention factor, sliding window: 96 bytes
+_HDR = struct.Struct("<4sIIIIIIIIffIIIfffIIIIIfI")
+ROPE_TYPES = {None: 0, "llama3": 1, "linear": 2, "yarn": 3}
 LAYER_KEYS = ("attn_norm", "wq", "wk", "wv", "wo", "ffn_norm", "w1", "w2", "w3")
 BIAS_KEYS = ("bq", "bk", "bv")   # F32, after wo, when the header's qkv_bias is set (Qwen2)
+QK_NORM_KEYS = ("q_norm", "k_norm")   # F32 [head_dim], after the biases, when qk_norm is set (Qwen3)
+
+
+def head_dim(cfg):
+    """Size of one attention head: cfg["head_dim"], or dim / n_heads when unset."""
+    return cfg.get("head_dim") or cfg["dim"] // cfg["n_heads"]
 
 QT = namedtuple("QT", "type q d shape")   # quantized tensor as stored
 
@@ -48,13 +56,26 @@ def matrix_type(key, wtype, mask, shared=False):
 
 
 def rope_inv_freq(cfg):
-    """float64[head_dim/2] RoPE inverse frequencies, with llama3 scaling if
-    cfg["rope_scaling"] is set (same formula as transformers and the C loader)."""
-    hd = cfg["dim"] // cfg["n_heads"]
+    """float64[head_dim/2] RoPE inverse frequencies, scaled as cfg["rope_scaling"]
+    says (llama3, linear or yarn; the formulas of transformers and the C loader)."""
+    hd = head_dim(cfg)
     inv = 1.0 / float(cfg["rope_theta"]) ** (np.arange(0, hd, 2, dtype=np.float64) / hd)
     rs = cfg.get("rope_scaling")
     if not rs:
         return inv
+    if rs["type"] == "linear":
+        return inv / float(rs["factor"])
+    if rs["type"] == "yarn":
+        f, base, orig = float(rs["factor"]), float(cfg["rope_theta"]), float(rs["original_max_position_embeddings"])
+
+        def corr(rot):   # dimension at which a wavelength fits `rot` rotations into orig
+            return hd * math.log(orig / (rot * 2 * math.pi)) / (2 * math.log(base))
+        lo = max(math.floor(corr(float(rs["beta_fast"]))), 0)
+        hi = min(math.ceil(corr(float(rs["beta_slow"]))), hd - 1)
+        if lo == hi:
+            hi += 0.001
+        ramp = np.clip((np.arange(hd // 2, dtype=np.float64) - lo) / (hi - lo), 0, 1)
+        return inv / f * ramp + inv * (1 - ramp)
     f, lo, hi = float(rs["factor"]), float(rs["low_freq_factor"]), float(rs["high_freq_factor"])
     old = float(rs["original_max_position_embeddings"])
     wavelen = 2 * np.pi / inv
@@ -62,6 +83,12 @@ def rope_inv_freq(cfg):
     smooth = (old / wavelen - lo) / (hi - lo)
     medium = (wavelen >= old / hi) & (wavelen <= old / lo)
     return np.where(medium, (1 - smooth) * out / f + smooth * out, out)
+
+
+def rope_attention_factor(cfg):
+    """Factor on RoPE's cos and sin (yarn's attention scaling), else 1."""
+    rs = cfg.get("rope_scaling") or {}
+    return float(rs.get("attention_factor", 1.0)) if rs.get("type") == "yarn" else 1.0
 
 
 def _round_half_away(v):
@@ -219,6 +246,9 @@ def _order(cfg, w):
             if k == "wo" and cfg.get("qkv_bias"):
                 for b in BIAS_KEYS:
                     yield f"layers.{i}.{b}", "f", layer[b]
+            if k == "wo" and cfg.get("qk_norm"):
+                for b in QK_NORM_KEYS:
+                    yield f"layers.{i}.{b}", "f", layer[b]
     yield "final_norm", "f", w["final_norm"]
     if not cfg.get("shared_classifier", 0):
         yield "wcls", "q", w["wcls"]
@@ -228,6 +258,8 @@ def _check_cfg(cfg):
     for k in ("dim", "hidden_dim"):
         if cfg[k] % QK:
             raise ValueError(f"{k}={cfg[k]} must be a multiple of {QK}")
+    if cfg["n_heads"] * head_dim(cfg) % QK:
+        raise ValueError(f"n_heads * head_dim = {cfg['n_heads'] * head_dim(cfg)} must be a multiple of {QK}")
 
 
 def write_mlb(path, cfg, w, wtype, q8=(), imatrix=None):
@@ -238,12 +270,17 @@ def write_mlb(path, cfg, w, wtype, q8=(), imatrix=None):
     mask = q8_mask(q8) if wtype == "q4" else 0
     shared = bool(cfg.get("shared_classifier", 0))
     rs = cfg.get("rope_scaling") or {}
+    yarn = rs.get("type") == "yarn"   # beta_fast and beta_slow take llama3's frequency factor slots
+    explicit_hd = head_dim(cfg) if head_dim(cfg) != cfg["dim"] // cfg["n_heads"] or cfg["dim"] % cfg["n_heads"] else 0
     hdr = _HDR.pack(b"MLB1", 1, cfg["dim"], cfg["n_layers"], cfg["n_heads"], cfg["n_kv_heads"],
                     cfg["hidden_dim"], cfg["vocab"], cfg["max_seq"], cfg["rope_theta"],
                     cfg["norm_eps"], WTYPES[wtype], int(cfg.get("shared_classifier", 0)),
-                    ROPE_TYPES[rs.get("type")], rs.get("factor", 0.0), rs.get("low_freq_factor", 0.0),
-                    rs.get("high_freq_factor", 0.0), rs.get("original_max_position_embeddings", 0),
-                    mask, int(bool(cfg.get("qkv_bias"))))
+                    ROPE_TYPES[rs.get("type")], rs.get("factor", 0.0),
+                    rs.get("beta_fast" if yarn else "low_freq_factor", 0.0),
+                    rs.get("beta_slow" if yarn else "high_freq_factor", 0.0),
+                    rs.get("original_max_position_embeddings", 0),
+                    mask, int(bool(cfg.get("qkv_bias"))), explicit_hd, int(bool(cfg.get("qk_norm"))),
+                    rs.get("attention_factor", 0.0) if yarn else 0.0, cfg.get("sliding_window") or 0)
     layout = []
     with open(path, "wb") as f:
         f.write(hdr.ljust(HEADER_SIZE, b"\0"))
@@ -268,33 +305,39 @@ def write_mlb(path, cfg, w, wtype, q8=(), imatrix=None):
     return layout
 
 
-_IMAT = struct.Struct("<4sIIIIIQQ")   # magic, version, n_layers, dim, hidden_dim, 0, tokens, classifier tokens
+# magic, version, n_layers, dim, hidden_dim, wo input size if not dim (else 0),
+# tokens, classifier tokens
+_IMAT = struct.Struct("<4sIIIIIQQ")
 _IMAT_INPUT = {"wq": "qkv", "wk": "qkv", "wv": "qkv", "wo": "wo", "w1": "ffn", "w3": "ffn", "w2": "down"}
 
 
 def read_imatrix(path, cfg):
     """ml_run --imatrix file -> {"layers": [{input: mean square [K]}], "cls": [dim]},
-    inputs qkv, wo, ffn (dim) and down (hidden_dim)."""
+    inputs qkv, ffn (dim), wo (n_heads * head_dim) and down (hidden_dim)."""
     data = open(path, "rb").read()
     if len(data) < _IMAT.size:
         raise ValueError(f"{path}: not an importance matrix")
-    magic, ver, nl, dim, hid, zero, ntok, ncls = _IMAT.unpack_from(data)
-    if magic != b"MLI1" or ver != 1 or zero:
+    magic, ver, nl, dim, hid, qd, ntok, ncls = _IMAT.unpack_from(data)
+    if magic != b"MLI1" or ver != 1:
         raise ValueError(f"{path}: not an importance matrix")
-    if (nl, dim, hid) != (cfg["n_layers"], cfg["dim"], cfg["hidden_dim"]):
-        raise ValueError(f"{path}: for a model with {nl} layers, dim {dim}, hidden_dim {hid}")
+    qd = qd or dim
+    want_qd = cfg["n_heads"] * head_dim(cfg)
+    if (nl, dim, hid, qd) != (cfg["n_layers"], cfg["dim"], cfg["hidden_dim"], want_qd):
+        raise ValueError(f"{path}: for a model with {nl} layers, dim {dim}, hidden_dim {hid}, attention width {qd}")
     if not ntok:
         raise ValueError(f"{path}: no tokens")
     s = np.frombuffer(data, np.float64, offset=_IMAT.size)
-    if len(s) != nl * (3 * dim + hid) + dim:
+    per = 2 * dim + qd + hid
+    if len(s) != nl * per + dim:
         raise ValueError(f"{path}: wrong size for this model")
     if ncls > ntok or not np.all(np.isfinite(s) & (s >= 0)):
         raise ValueError(f"{path}: damaged (negative or non-finite sums)")
     layers = []
     for i in range(nl):
-        o = i * (3 * dim + hid)
-        layers.append({"qkv": s[o:o + dim] / ntok, "wo": s[o + dim:o + 2 * dim] / ntok,
-                       "ffn": s[o + 2 * dim:o + 3 * dim] / ntok, "down": s[o + 3 * dim:o + 3 * dim + hid] / ntok})
+        o = i * per
+        layers.append({"qkv": s[o:o + dim] / ntok, "wo": s[o + dim:o + dim + qd] / ntok,
+                       "ffn": s[o + dim + qd:o + 2 * dim + qd] / ntok,
+                       "down": s[o + 2 * dim + qd:o + per] / ntok})
     return {"layers": layers, "cls": s[-dim:] / ncls if ncls else None, "tokens": ntok}
 
 
@@ -319,15 +362,21 @@ def read_mlb(path):
     keys = ("version", "dim", "n_layers", "n_heads", "n_kv_heads", "hidden_dim", "vocab",
             "max_seq", "rope_theta", "norm_eps", "wtype", "shared_classifier")
     cfg = dict(zip(keys, f[1:13]))
-    rtype, rf, rlo, rhi, rorig, cfg["q8_mask"], cfg["qkv_bias"] = f[13:]
-    cfg["rope_scaling"] = None if rtype == 0 else {
-        "type": {v: k for k, v in ROPE_TYPES.items()}[rtype], "factor": rf, "low_freq_factor": rlo,
-        "high_freq_factor": rhi, "original_max_position_embeddings": rorig}
+    (rtype, rf, rlo, rhi, rorig, cfg["q8_mask"], cfg["qkv_bias"], cfg["head_dim"], cfg["qk_norm"],
+     rattn, cfg["sliding_window"]) = f[13:]
+    rname = {v: k for k, v in ROPE_TYPES.items()}[rtype]
+    cfg["rope_scaling"] = None if rtype == 0 else (
+        {"type": "linear", "factor": rf} if rname == "linear" else
+        {"type": "yarn", "factor": rf, "beta_fast": rlo, "beta_slow": rhi,
+         "original_max_position_embeddings": rorig, "attention_factor": rattn} if rname == "yarn" else
+        {"type": rname, "factor": rf, "low_freq_factor": rlo, "high_freq_factor": rhi,
+         "original_max_position_embeddings": rorig})
     cfg["rope_theta"], cfg["norm_eps"] = np.float32(cfg["rope_theta"]), np.float32(cfg["norm_eps"])
     dim, hid, voc = cfg["dim"], cfg["hidden_dim"], cfg["vocab"]
-    kv = dim // cfg["n_heads"] * cfg["n_kv_heads"]
-    shapes = {"tok_emb": (voc, dim), "wq": (dim, dim), "wk": (kv, dim), "wv": (kv, dim),
-              "wo": (dim, dim), "w1": (hid, dim), "w2": (dim, hid), "w3": (hid, dim),
+    hd = head_dim(cfg)
+    qd, kv = hd * cfg["n_heads"], hd * cfg["n_kv_heads"]
+    shapes = {"tok_emb": (voc, dim), "wq": (qd, dim), "wk": (kv, dim), "wv": (kv, dim),
+              "wo": (dim, qd), "w1": (hid, dim), "w2": (dim, hid), "w3": (hid, dim),
               "wcls": (voc, dim)}
     off = HEADER_SIZE
 
@@ -352,7 +401,9 @@ def read_mlb(path):
         for k in LAYER_KEYS:
             layer[k] = take(np.float32, dim) if k.endswith("norm") else mat(k)
             if k == "wo" and cfg["qkv_bias"]:
-                layer["bq"], layer["bk"], layer["bv"] = take(np.float32, dim), take(np.float32, kv), take(np.float32, kv)
+                layer["bq"], layer["bk"], layer["bv"] = take(np.float32, qd), take(np.float32, kv), take(np.float32, kv)
+            if k == "wo" and cfg["qk_norm"]:
+                layer["q_norm"], layer["k_norm"] = take(np.float32, hd), take(np.float32, hd)
         t["layers"].append(layer)
     t["final_norm"] = take(np.float32, dim)
     t["wcls"] = t["tok_emb"] if cfg["shared_classifier"] else mat("wcls")

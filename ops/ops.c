@@ -114,19 +114,22 @@ typedef struct {
 #define ATT_BLOCK 64
 
 /* Query heads [g0, g1), all of KV head kvh, at position pos; att holds
- * max_seq floats per head from g0 on. */
+ * max_seq floats per head from g0 on. With a sliding window the head attends
+ * to the last cfg->sliding_window positions only. */
 static void attend(const ml_config *cfg, const ml_kv_layer *kv, float *out, const float *q, const int8_t *qq,
                    const float *qd, float *att, int g0, int g1, int pos) {
-    const int hd = cfg->head_dim, kvh = g0 / (cfg->n_heads / cfg->n_kv_heads), n = pos + 1;
+    const int hd = cfg->head_dim, kvh = g0 / (cfg->n_heads / cfg->n_kv_heads);
+    const int first = cfg->sliding_window && pos >= cfg->sliding_window ? pos + 1 - cfg->sliding_window : 0;
+    const int n = pos + 1 - first;   /* positions attended, from `first` on */
     const size_t ld = (size_t)cfg->kv_dim, ldd = (size_t)cfg->n_kv_heads, ldatt = (size_t)cfg->max_seq;
-    const size_t off = (size_t)kvh * hd;
+    const size_t off = (size_t)kvh * hd + (size_t)first * ld, offd = (size_t)first * ldd;
     const float scale = 1.0f / sqrtf((float)hd);
     for (int t0 = 0; t0 < n; t0 += ATT_BLOCK) {
         const int m = n - t0 < ATT_BLOCK ? n - t0 : ATT_BLOCK;
         for (int h = g0; h < g1; h++) {
             float *s = att + (h - g0) * ldatt + t0;
             if (kv->k) ml_k_dot_f32(s, q + h * hd, kv->k + t0 * ld + off, ld, m, hd, scale);
-            else ml_k_dot_q8(s, qq + h * hd, qd[h], kv->kq + t0 * ld + off, kv->kd + t0 * ldd + kvh, ld, ldd, m, hd, scale);
+            else ml_k_dot_q8(s, qq + h * hd, qd[h], kv->kq + t0 * ld + off, kv->kd + offd + t0 * ldd + kvh, ld, ldd, m, hd, scale);
         }
     }
     for (int h = g0; h < g1; h++) {
@@ -138,7 +141,7 @@ static void attend(const ml_config *cfg, const ml_kv_layer *kv, float *out, cons
         for (int h = g0; h < g1; h++) {
             const float *a = att + (h - g0) * ldatt + t0;
             if (kv->v) ml_k_axpy_f32(out + h * hd, a, kv->v + t0 * ld + off, ld, m, hd);
-            else ml_k_axpy_q8(out + h * hd, a, kv->vq + t0 * ld + off, kv->vd + t0 * ldd + kvh, ld, ldd, m, hd);
+            else ml_k_axpy_q8(out + h * hd, a, kv->vq + t0 * ld + off, kv->vd + offd + t0 * ldd + kvh, ld, ldd, m, hd);
         }
     }
 }
@@ -192,7 +195,7 @@ typedef struct {
 static void attention_batch_task(void *p, int tid, int nt) {
     const attn_batch_ctx *c = p;
     const ml_config *cfg = c->a.cfg;
-    const int dim = cfg->dim, per = cfg->n_heads / c->heads;
+    const int dim = cfg->q_dim, per = cfg->n_heads / c->heads;
     float *att = c->a.att + (size_t)tid * c->heads * cfg->max_seq;
     for (int i = tid; i < c->n * per; i += nt) {
         const int t = i / per, g0 = i % per * c->heads;
@@ -212,15 +215,15 @@ void ml_attention_batch(ml_pool *pool, float *out, const float *q, const ml_kv_l
         /* too few items to occupy the pool: split each position by heads (with
          * heads == 1 the batch already does, over all positions at once) */
         for (int t = 0; t < n; t++)
-            ml_attention(pool, out + (size_t)t * cfg->dim, q + (size_t)t * cfg->dim, kv, att_scratch,
+            ml_attention(pool, out + (size_t)t * cfg->q_dim, q + (size_t)t * cfg->q_dim, kv, att_scratch,
                          qq, qd, cfg, pos0 + t);
         return;
     }
     if (!kv->k)
         for (int t = 0; t < n; t++)
             for (int h = 0; h < cfg->n_heads; h++)
-                ml_quantize_row(qq + (size_t)t * cfg->dim + h * cfg->head_dim, qd + (size_t)t * cfg->n_heads + h,
-                                q + (size_t)t * cfg->dim + h * cfg->head_dim, cfg->head_dim);
+                ml_quantize_row(qq + (size_t)t * cfg->q_dim + h * cfg->head_dim, qd + (size_t)t * cfg->n_heads + h,
+                                q + (size_t)t * cfg->q_dim + h * cfg->head_dim, cfg->head_dim);
     attn_batch_ctx c = { { out, q, kv, att_scratch, kv->k ? NULL : qq, kv->k ? NULL : qd, cfg, pos0 }, n, heads };
     if (serial) attention_batch_task(&c, 0, 1);
     else ml_pool_run(pool, attention_batch_task, &c);

@@ -16,11 +16,11 @@ operator is bound to the best kernel for it, with no runtime dispatch.
 - **Quantization:** Q8_0, Q4_0, and mixed models that keep chosen matrices in Q8; optional Q8 KV cache
 - **Speed:** row-interleaved weight packing for each ISA's integer dot products, batched prompt prefill,
   software prefetch, blocked GQA attention, a thread pool with bit-identical results, a pack cache for fast start-up
-- **Models:** llama2.c checkpoints and Hugging Face safetensors (Llama 2, Llama 3/3.1/3.2 with RoPE scaling,
-  TinyLlama, Mistral), Hugging Face `tokenizer.json` (SentencePiece-style and Llama 3 byte-level BPE, identical to
-  the `tokenizers` library)
-- **Use:** text generation, chat mode (`llama3`, `zephyr`, `llama2` templates), top-k / top-p / repetition
-  penalty, perplexity measurement
+- **Models:** llama2.c checkpoints and Hugging Face safetensors (Llama 2, Llama 3/3.1/3.2, TinyLlama, SmolLM2,
+  Mistral, Qwen2/2.5, Qwen3; llama3, linear and yarn RoPE scaling; sliding window), Hugging Face `tokenizer.json`
+  (SentencePiece-style, Llama 3, Qwen and GPT-2 byte-level BPE, identical to the `tokenizers` library)
+- **Use:** text generation, chat mode (`llama3`, `zephyr`, `llama2`, `qwen`, `smollm`, `chatml` templates), top-k /
+  top-p / repetition penalty, perplexity measurement, importance matrices for Q4
 - **Verification:** kernel tests against scalar and double-precision references, end-to-end logits against a
   numpy reference, qemu for ARM and old x86 CPUs, native Arm CI
 

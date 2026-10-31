@@ -67,9 +67,9 @@ def softmax(x):
 
 
 def rope_tables(cfg):
-    freq = mlb.rope_inv_freq(cfg)
+    freq, af = mlb.rope_inv_freq(cfg), mlb.rope_attention_factor(cfg)
     ang = np.arange(cfg["max_seq"], dtype=np.float64)[:, None] * freq[None, :]
-    return np.cos(ang).astype(np.float32), np.sin(ang).astype(np.float32)
+    return (np.cos(ang) * af).astype(np.float32), (np.sin(ang) * af).astype(np.float32)
 
 
 def rope(v, c, s, hd):
@@ -80,11 +80,13 @@ def rope(v, c, s, hd):
 
 
 def forward(cfg, t, tokens, kv="f32"):
-    """-> float32 logits [len(tokens), vocab], position p attending to 0..p.
+    """-> float32 logits [len(tokens), vocab], position p attending to 0..p
+    (to the last sliding_window positions, if set).
     kv="q8" emulates the runtime's Q8 KV cache (--kv q8)."""
     m = Model(cfg, t)
     dim, nh, nkv = cfg["dim"], cfg["n_heads"], cfg["n_kv_heads"]
-    hd, eps = dim // nh, float(cfg["norm_eps"])
+    hd, eps = mlb.head_dim(cfg), float(cfg["norm_eps"])
+    win = cfg.get("sliding_window") or 0
     group = nh // nkv
     cos_t, sin_t = rope_tables(cfg)
     emb = mlb.dequant(t["tok_emb"])
@@ -100,6 +102,9 @@ def forward(cfg, t, tokens, kv="f32"):
             v = m.matvec(L["wv"], h)
             if "bq" in L:   # float32 adds, as the runtime does
                 q, k, v = q + L["bq"], k + L["bk"], v + L["bv"]
+            if "q_norm" in L:   # per head, before RoPE (Qwen3)
+                q = np.concatenate([rmsnorm(q[i:i + hd], L["q_norm"], eps) for i in range(0, len(q), hd)])
+                k = np.concatenate([rmsnorm(k[i:i + hd], L["k_norm"], eps) for i in range(0, len(k), hd)])
             q = rope(q, cos_t[pos], sin_t[pos], hd)
             k = rope(k, cos_t[pos], sin_t[pos], hd)
             if kv == "q8":   # per position and KV head: int8 quants, one scale
@@ -111,9 +116,10 @@ def forward(cfg, t, tokens, kv="f32"):
                 q = (qq.astype(np.float64) * qd[:, None].astype(np.float64)).reshape(-1)
             kcache[li].append(k)
             vcache[li].append(v)
-            K = np.stack(kcache[li]).astype(np.float64)   # [pos+1, kv_dim]
-            V = np.stack(vcache[li]).astype(np.float64)
-            o = np.zeros(dim, np.float32)
+            first = max(0, pos + 1 - win) if win else 0
+            K = np.stack(kcache[li][first:]).astype(np.float64)   # [positions attended, kv_dim]
+            V = np.stack(vcache[li][first:]).astype(np.float64)
+            o = np.zeros(nh * hd, np.float32)
             for hh in range(nh):
                 kh = hh // group
                 qh = np.asarray(q[hh * hd:(hh + 1) * hd], np.float64)
