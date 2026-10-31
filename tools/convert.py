@@ -5,6 +5,9 @@
                                                       HF Llama, Mistral, Qwen2, Qwen3, Gemma 3 (text): config.json + *.safetensors
   --imatrix FILE (q4): weight the Q4 fits by an importance matrix from
                        ml_run --imatrix, run on a Q8 conversion of the same model
+  --q4-rule fit|round (q4): fit each block's scale, or llama.cpp's Q4_0 rounding;
+                       the default takes round for Gemma 3 (its QAT checkpoints
+                       expect it) and the fit for the others
 """
 import argparse
 import glob
@@ -190,7 +193,7 @@ def load_hf(d, max_seq=None):
                shared_classifier=int(tied), rope_scaling=rope_scaling, head_dim=hd, qk_norm=int(qk_norm),
                sliding_window=window or 0,
                layer_flags=[mlb.LAYER_SLIDING if sl else 0 for sl in sliding] if sliding else None,
-               act="gelu_tanh" if act == "gelu_pytorch_tanh" else "silu")
+               act="gelu_tanh" if act == "gelu_pytorch_tanh" else "silu", model_type=mtype)
     if gemma:
         # sliding layers rotate with the local base; embeddings scaled by
         # sqrt(dim); scores by query_pre_attn_scalar^-0.5; norms of each block's
@@ -246,17 +249,27 @@ def main(argv=None):
                          "emb, cls, qk, v, o, up, down (e.g. emb,cls,v,down)")
     ap.add_argument("--max-seq", type=int, default=None, help="hf: cap the context length (KV cache size)")
     ap.add_argument("--imatrix", metavar="FILE", help="q4 only: importance matrix from ml_run --imatrix")
+    ap.add_argument("--q4-rule", choices=("auto", "fit", "round"), default="auto",
+                    help="q4 only: fit each block's scale, or round as llama.cpp's Q4_0 does (better for "
+                         "Gemma 3, and what its quantization-aware checkpoints expect); auto: round for "
+                         "Gemma 3, fit otherwise")
     ap.add_argument("--scales", choices=("f16", "f32"), default="f16",
                     help="storage of the block scales (f16: Q4 4.5 bits per weight, Q8 8.5; f32: 5 and 9)")
     a = ap.parse_args(argv)
     if a.imatrix and a.wtype != "q4":
         ap.error("--imatrix needs --wtype q4")
+    if a.imatrix and a.q4_rule == "round":
+        ap.error("--imatrix weights the fitted Q4 rule only, not --q4-rule round")
     cfg, w = load_llama2c(a.src) if a.kind == "llama2c" else load_hf(a.src, a.max_seq)
     imat = mlb.read_imatrix(a.imatrix, cfg) if a.imatrix else None
-    mlb.write_mlb(a.out, cfg, w, a.wtype, [c for c in a.q8.split(",") if c], imat, a.scales)
+    rule = a.q4_rule
+    if rule == "auto":   # an importance matrix asks for the fit
+        rule = "round" if cfg.get("model_type") == "gemma3_text" and not imat else "fit"
+    mlb.write_mlb(a.out, cfg, w, a.wtype, [c for c in a.q8.split(",") if c], imat, a.scales, rule)
     print(f"wrote {a.out}: dim={cfg['dim']} layers={cfg['n_layers']} vocab={cfg['vocab']} "
           f"max_seq={cfg['max_seq']} wtype={a.wtype}{' (q8: ' + a.q8 + ')' if a.q8 and a.wtype == 'q4' else ''} "
-          f"shared_classifier={cfg['shared_classifier']}")
+          f"shared_classifier={cfg['shared_classifier']} scales={a.scales}"
+          f"{' q4_rule=' + rule if a.wtype == 'q4' else ''}")
     if imat:
         print(f"imatrix {a.imatrix}: {imat['tokens']} tokens")
 

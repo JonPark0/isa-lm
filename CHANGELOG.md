@@ -18,6 +18,13 @@
   weight instead of 5, Q8_0 8.5 instead of 9. Both kinds of file load in every
   build.
 
+- `tools/convert.py --q4-rule round`: llama.cpp's Q4_0 rounding, now the
+  default for Gemma 3 (`--q4-rule fit` for the fitted rule). Gemma 3 1B Q4
+  perplexity 49.83 against 53.25 fitted; its quantization-aware checkpoint
+  (`gemma-3-1b-it-qat-q4_0-unquantized`) reaches 40.50, below its Q8 (42.53).
+  The fit stays the default for other models (Qwen2.5 0.5B 21.73 against
+  22.45).
+
 ### Changed
 
 - `tools/convert.py` writes f16 scales by default (`--scales f32` keeps the
