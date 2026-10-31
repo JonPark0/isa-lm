@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- F16 KV cache (`--kv f16`): K and V in half precision, half the memory of
+  the F32 cache at the same speed (Qwen2.5 0.5B Q4, 1500 tokens: prefill 722
+  against 718 tok/s), with perplexity within the rounding (21.71 against
+  21.74; the Q8 cache gives 22.82).
+
 ## 0.4.0 — 2026-10-31
 
 ### Added
