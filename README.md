@@ -24,7 +24,7 @@ make ISA=avx512vnni THREADS=pthread             # with the worker pool
 | `scalar` | any | reference implementation of all ops |
 | `sse2` | any x86-64 | all ops, packed int8 matvec (`pmaddwd`) |
 | `sse41` | Penryn / Nehalem | int8 matvec (`pmaddubsw`) |
-| `avx2` | Haswell / Zen | all ops, FMA |
+| `avx2` | Haswell / Zen | all ops, FMA; f16 packed scales (F16C) |
 | `avxvnni` | Alder Lake / Zen 5 | int8 matvec (`vpdpbusd` ymm) |
 | `avx512vnni` | Cascade Lake / Ice Lake / Zen 4 | matvec, quantize, norms, dot, axpy |
 | `neon` | ARMv7 + NEON, any AArch64 | all ops |
