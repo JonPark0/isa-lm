@@ -44,28 +44,29 @@ Tokens per second; the ratio is isa-lm's decode speed over llama.cpp's.
 
 | ISA level | Weights | Threads | isa-lm prefill | llama.cpp prefill | isa-lm decode | llama.cpp decode | Decode ratio |
 |-----------|---------|--------:|---------------:|------------------:|--------------:|-----------------:|-------------:|
-| AVX-512 VNNI | Q8_0 | 1 | 221.2 | 361.4 | 24.3 | 21.8 | 1.11× |
-| AVX-512 VNNI | Q8_0 | 4 | 674.0 | 1222.8 | 79.0 | 71.0 | 1.11× |
-| AVX-512 VNNI | Q4_0 | 1 | 288.7 | 353.7 | 41.6 | 31.0 | 1.34× |
-| AVX-512 VNNI | Q4_0 | 4 | 890.2 | 857.3 | 156.4 | 105.2 | 1.49× |
-| AVX2 | Q8_0 | 1 | 91.4 | 72.0 | 22.8 | 12.4 | 1.84× |
-| AVX2 | Q8_0 | 4 | 295.8 | 217.3 | 78.0 | 41.3 | 1.89× |
-| AVX2 | Q4_0 | 1 | 167.4 | 83.5 | 43.1 | 18.6 | 2.32× |
-| AVX2 | Q4_0 | 4 | 519.1 | 298.7 | 140.7 | 64.6 | 2.18× |
-| SSE4.1 / SSE4.2 | Q8_0 | 1 | 48.5 | 14.4 | 21.0 | 6.7 | 3.13× |
-| SSE4.1 / SSE4.2 | Q8_0 | 4 | 161.3 | 53.8 | 57.0 | 23.0 | 2.48× |
-| SSE4.1 / SSE4.2 | Q4_0 | 1 | 75.3 | 28.3 | 35.0 | 13.2 | 2.65× |
-| SSE4.1 / SSE4.2 | Q4_0 | 4 | 240.1 | 108.2 | 96.3 | 43.3 | 2.22× |
-| SSE2 | Q8_0 | 1 | 40.9 | 13.9 | 19.1 | 6.5 | 2.94× |
-| SSE2 | Q8_0 | 4 | 130.9 | 53.3 | 56.7 | 21.8 | 2.60× |
-| SSE2 | Q4_0 | 1 | 38.6 | 5.7 | 25.4 | 3.7 | 6.86× |
-| SSE2 | Q4_0 | 4 | 113.6 | 21.9 | 68.8 | 12.6 | 5.46× |
+| AVX-512 VNNI | Q8_0 | 1 | 318.5 | 368.5 | 24.0 | 20.5 | 1.17× |
+| AVX-512 VNNI | Q8_0 | 4 | 870.8 | 935.1 | 72.8 | 60.7 | 1.20× |
+| AVX-512 VNNI | Q4_0 | 1 | 331.4 | 339.8 | 44.0 | 29.0 | 1.52× |
+| AVX-512 VNNI | Q4_0 | 4 | 1118.9 | 1303.9 | 133.4 | 95.7 | 1.39× |
+| AVX2 | Q8_0 | 1 | 95.9 | 70.6 | 22.4 | 11.0 | 2.04× |
+| AVX2 | Q8_0 | 4 | 265.2 | 189.5 | 72.4 | 38.2 | 1.90× |
+| AVX2 | Q4_0 | 1 | 182.6 | 82.7 | 41.6 | 18.0 | 2.31× |
+| AVX2 | Q4_0 | 4 | 541.9 | 309.8 | 128.6 | 60.6 | 2.12× |
+| SSE4.1 / SSE4.2 | Q8_0 | 1 | 47.7 | 13.9 | 20.5 | 6.3 | 3.25× |
+| SSE4.1 / SSE4.2 | Q8_0 | 4 | 161.0 | 57.8 | 59.4 | 22.7 | 2.62× |
+| SSE4.1 / SSE4.2 | Q4_0 | 1 | 64.9 | 26.9 | 33.4 | 12.3 | 2.72× |
+| SSE4.1 / SSE4.2 | Q4_0 | 4 | 226.0 | 111.5 | 90.2 | 42.1 | 2.14× |
+| SSE2 | Q8_0 | 1 | 39.6 | 12.8 | 20.6 | 6.2 | 3.32× |
+| SSE2 | Q8_0 | 4 | 126.0 | 49.8 | 56.4 | 21.2 | 2.66× |
+| SSE2 | Q4_0 | 1 | 36.7 | 5.7 | 25.7 | 3.5 | 7.34× |
+| SSE2 | Q4_0 | 4 | 124.4 | 21.8 | 77.3 | 12.7 | 6.09× |
 
-- **Decode** is faster with isa-lm at every level: 1.1–1.5× with AVX-512
-  VNNI, about 2× with AVX2, and 2.2–7× on the SSE builds.
-- **Prefill** of Q8_0 is 1.6–1.8× faster with llama.cpp on the native build;
-  Q4_0 is 1.2× faster with llama.cpp on one thread and level on four. From
-  AVX2 down, isa-lm prefills faster (1.3–6.8×).
+- **Decode** is faster with isa-lm at every level: 1.2–1.5× with AVX-512
+  VNNI, 1.9–2.3× with AVX2, and 2.1–7.3× on the SSE builds.
+- **Prefill** with AVX-512 VNNI is within 1.07–1.16× of the native llama.cpp
+  build for Q8_0 and level to 1.17× for Q4_0, where llama.cpp led by 1.6–1.8×
+  for Q8_0 before 0.4.0 (prefill steps of 128 tokens). From AVX2 down, isa-lm
+  prefills faster (1.4–6.4×).
 
 The native llama.cpp build owes its prefill to AMX, not to AVX-512 VNNI: its
 weights are repacked for AMX tiles by default. With that off
@@ -102,11 +103,12 @@ Against the first version, the kernels alone got faster:
 On Qwen2.5 0.5B the prefill speed is level with the AVX-512 VNNI build on one
 thread and 15–20% slower on four, so AMX stays out of the build.
 
-Measured with isa-lm at commit `0cb4d16`. Against the previous run (isa-lm
-before the faster prefill), AVX-512 VNNI prefill went from 145 to 221 tok/s
-(Q8_0, 1 thread) and from 484 to 890 (Q4_0, 4 threads); llama.cpp's own numbers
-moved by -3% to +28% between the two runs on the same kind of machine, so
-compare rows of one run.
+Measured with isa-lm at commit `1c6db5a` (the 0.4.0 code; f16 scales, files
+of 500 and 265 MB against llama.cpp's 644 and 343 MB). Against the previous
+run (`0cb4d16`), AVX-512 VNNI prefill went from 221 to 319 tok/s (Q8_0, 1
+thread) and from 890 to 1119 (Q4_0, 4 threads), and decode from 41.6 to 44.0
+(Q4_0, 1 thread); llama.cpp's own numbers move by a few percent between runs
+on the same kind of machine, so compare rows of one run.
 
 ## GitHub runners
 
@@ -164,8 +166,8 @@ classifier to the embedding, and llama.cpp's file stores it twice.
   1.2–1.4× for Q4_0, and with dotprod 1.14× for Q8_0. Only dotprod Q4_0
   prefill is still faster with llama.cpp (its repacked Q4_0 kernels), by
   1.10–1.13× where it was 1.34–1.37× before 0.4.0's signed-nibble kernels.
-- **Quality** is the same on all three machines: isa-lm's Q8_0 scores 13.34–13.35
-  against 13.34 for llama.cpp's F16, and its Q4_0 15.09–15.11 against
+- **Quality** is the same on all three machines: isa-lm's Q8_0 scores 13.32–13.35
+  against 13.34 for llama.cpp's F16, and its Q4_0 15.09–15.14 against
   15.82–15.93 for llama.cpp's.
 
 ## Quality
@@ -174,9 +176,9 @@ classifier to the embedding, and llama.cpp's file stores it twice.
 |---------|---------|-----------:|
 | llama.cpp | F16 | 13.34 |
 | llama.cpp | Q8_0 | 13.44 |
-| isa-lm | Q8_0 | 13.33 |
+| isa-lm | Q8_0 | 13.32 |
 | llama.cpp | Q4_0 | 15.86 |
-| isa-lm | Q4_0 | 15.13 |
+| isa-lm | Q4_0 | 15.14 |
 
 The two runtimes tokenize this text identically (no BOS for Qwen2.5). isa-lm's
 Q8_0 matches F16. Its Q4_0 is closer to F16 because `tools/convert.py` fits
