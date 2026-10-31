@@ -67,7 +67,7 @@ Site: <https://jonpark0.github.io/isa-lm/> · Wiki: <https://github.com/JonPark0
 | [File format](docs/file-format.md) | the `.mlb` model format (header, tensor layout, quantization rule, RoPE scaling) and the `.mlt` tokenizer format |
 | [Writing kernels](docs/kernels.md) | adding a kernel or an ISA, kernel rules, per-ISA idioms, assembly overrides |
 | [Testing](docs/testing.md) | test layers, qemu, sanitizers, CI, benchmarks |
-| [Comparison with llama.cpp](docs/benchmarks.md) | speed per x86 ISA level and perplexity against llama.cpp on the same model and formats |
+| [Comparison with llama.cpp](docs/benchmarks.md) | speed per ISA level (x86-64 and AArch64) and perplexity against llama.cpp on the same model and formats |
 | [Design spec](docs/design/2026-10-22-legacy-isa-ml-runtime-design.md) | original design and implementation plan |
 
 ## Status

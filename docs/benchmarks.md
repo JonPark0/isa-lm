@@ -2,12 +2,16 @@
 
 isa-lm and [llama.cpp](https://github.com/ggml-org/llama.cpp) run the same
 model with the same weight formats on one machine, at four x86 instruction-set
-levels. `scripts/compare_llamacpp.sh` reproduces the run.
+levels; the [GitHub runners](#github-runners) section repeats the comparison
+on an x86-64 machine without AVX-512 and on AArch64 at three levels.
+`scripts/compare_llamacpp.sh` reproduces each run.
 
 ## Setup
 
-- **Machine:** 4 vCPUs of an Intel Xeon at 2.10 GHz with AVX-512 VNNI, 15 GB
-  of RAM; GCC 13.3 for both runtimes.
+- **Machine:** 4 vCPUs of an Intel Xeon at 2.10 GHz (Emerald Rapids) with
+  AVX-512 VNNI and AMX, 15 GB of RAM; GCC 13.3 for both runtimes. llama.cpp's
+  native build uses AMX tiles for prompt processing on this CPU (see below);
+  isa-lm has no AMX kernels.
 - **llama.cpp:** release b11835 (commit `f64a498`), CPU backend, built four
   times:
 
@@ -59,15 +63,82 @@ Tokens per second; the ratio is isa-lm's decode speed over llama.cpp's.
 
 - **Decode** is faster with isa-lm at every level: 1.1–1.5× with AVX-512
   VNNI, about 2× with AVX2, and 2.2–7× on the SSE builds.
-- **Prefill** of Q8_0 is 1.6–1.8× faster with llama.cpp on AVX-512 VNNI; Q4_0
-  is 1.2× faster with llama.cpp on one thread and level on four. From AVX2
-  down, isa-lm prefills faster (1.3–6.8×).
+- **Prefill** of Q8_0 is 1.6–1.8× faster with llama.cpp on the native build;
+  Q4_0 is 1.2× faster with llama.cpp on one thread and level on four. From
+  AVX2 down, isa-lm prefills faster (1.3–6.8×).
+
+The native llama.cpp build owes its prefill to AMX, not to AVX-512 VNNI: its
+weights are repacked for AMX tiles by default. With that off
+(`llama-bench --repack 0`, same machine, later run) it prefills Q8_0 at 93
+tok/s on one thread and 318 on four, and Q4_0 at 83 and 320, about a third of
+isa-lm's AVX-512 VNNI rows. An AMX kernel for isa-lm's packed layout was tried
+(branch `exp/amx`); because every 32-weight block has its own scale, each tile
+product has to be stored and rescaled with AVX-512, and that made it only
+10–20% faster for Q8_0 and slower for Q4_0, so it is not part of the build.
 
 Measured with isa-lm at commit `0cb4d16`. Against the previous run (isa-lm
 before the faster prefill), AVX-512 VNNI prefill went from 145 to 221 tok/s
 (Q8_0, 1 thread) and from 484 to 890 (Q4_0, 4 threads); llama.cpp's own numbers
 moved by -3% to +28% between the two runs on the same kind of machine, so
 compare rows of one run.
+
+## GitHub runners
+
+The `llama.cpp comparison` workflow (`.github/workflows/compare.yml`, run by
+hand) builds both runtimes on GitHub's `ubuntu-24.04` (x86-64, 4 vCPUs with
+AVX2 but no AVX-512, so its native level is AVX2) and `ubuntu-24.04-arm`
+(AArch64, 4 vCPUs with dotprod and i8mm) runners and runs
+`scripts/compare_llamacpp.sh`. On AArch64 the llama.cpp builds are the native
+one (against isa-lm's best build, `neon_i8mm`), `armv8.2-a+dotprod` and
+`armv8-a`. Results of one run (isa-lm `d54e2dd`, whose kernels are the
+main branch's, and llama.cpp b11835):
+
+### x86-64 (AVX2)
+
+| ISA level | Weights | Threads | isa-lm prefill | llama.cpp prefill | isa-lm decode | llama.cpp decode | Decode ratio |
+|-----------|---------|--------:|---------------:|------------------:|--------------:|-----------------:|-------------:|
+| AVX2 | Q8_0 | 1 | 130.8 | 94.1 | 35.1 | 25.8 | 1.36× |
+| AVX2 | Q8_0 | 4 | 258.4 | 179.6 | 59.1 | 59.3 | 1.00× |
+| AVX2 | Q4_0 | 1 | 212.9 | 114.7 | 66.8 | 40.0 | 1.67× |
+| AVX2 | Q4_0 | 4 | 426.9 | 238.3 | 97.4 | 83.8 | 1.16× |
+| SSE4.1 / SSE4.2 | Q8_0 | 1 | 60.8 | 16.7 | 33.4 | 9.5 | 3.52× |
+| SSE4.1 / SSE4.2 | Q8_0 | 4 | 120.5 | 34.9 | 57.2 | 19.5 | 2.93× |
+| SSE4.1 / SSE4.2 | Q4_0 | 1 | 89.3 | 32.0 | 40.9 | 15.8 | 2.59× |
+| SSE4.1 / SSE4.2 | Q4_0 | 4 | 179.8 | 66.8 | 78.1 | 31.9 | 2.45× |
+| SSE2 | Q8_0 | 1 | 45.6 | 16.1 | 29.7 | 9.4 | 3.16× |
+| SSE2 | Q8_0 | 4 | 90.5 | 34.4 | 50.1 | 19.7 | 2.54× |
+| SSE2 | Q4_0 | 1 | 49.5 | 5.0 | 33.0 | 3.3 | 10.00× |
+| SSE2 | Q4_0 | 4 | 98.7 | 10.2 | 63.0 | 6.7 | 9.40× |
+
+### AArch64
+
+| ISA level | Weights | Threads | isa-lm prefill | llama.cpp prefill | isa-lm decode | llama.cpp decode | Decode ratio |
+|-----------|---------|--------:|---------------:|------------------:|--------------:|-----------------:|-------------:|
+| i8mm (native) | Q8_0 | 1 | 156.0 | 125.9 | 31.6 | 32.1 | 0.98× |
+| i8mm (native) | Q8_0 | 4 | 591.2 | 429.4 | 105.9 | 104.9 | 1.01× |
+| i8mm (native) | Q4_0 | 1 | 142.3 | 147.9 | 45.8 | 38.1 | 1.20× |
+| i8mm (native) | Q4_0 | 4 | 518.9 | 482.6 | 125.9 | 109.1 | 1.15× |
+| dotprod | Q8_0 | 1 | 132.8 | 129.7 | 33.4 | 32.4 | 1.03× |
+| dotprod | Q8_0 | 4 | 490.3 | 494.1 | 104.3 | 99.8 | 1.05× |
+| dotprod | Q4_0 | 1 | 117.3 | 156.8 | 46.3 | 40.4 | 1.15× |
+| dotprod | Q4_0 | 4 | 431.6 | 589.2 | 129.3 | 114.7 | 1.13× |
+| NEON (Armv8.0) | Q8_0 | 1 | 36.4 | 26.6 | 20.9 | 15.4 | 1.36× |
+| NEON (Armv8.0) | Q8_0 | 4 | 140.4 | 105.6 | 65.2 | 49.7 | 1.31× |
+| NEON (Armv8.0) | Q4_0 | 1 | 41.1 | 24.4 | 26.5 | 15.8 | 1.68× |
+| NEON (Armv8.0) | Q4_0 | 4 | 153.8 | 96.1 | 81.7 | 53.7 | 1.52× |
+
+- **x86-64 without AVX-512:** isa-lm is ahead or level everywhere: decode 1.0–1.7×
+  with AVX2 and 2.5–10× on SSE builds, prefill 1.4–1.9× with AVX2 and 2.6–10×
+  on SSE builds.
+- **AArch64:** decode is level with llama.cpp for Q8_0 at dotprod and i8mm and
+  1.1–1.2× faster for Q4_0; on plain Armv8.0 NEON isa-lm is 1.3–1.7× faster
+  in both prefill and decode. Prefill with i8mm is 1.2–1.4× faster for Q8_0
+  and level for Q4_0, but with dotprod llama.cpp prefills Q4_0 1.3–1.4× faster
+  (its repacked Q4_0 dotprod kernels): isa-lm's Q4_0 dotprod matmul has room
+  to grow.
+- **Quality** is the same on all three machines: isa-lm's Q8_0 scores 13.33–13.37
+  against 13.34 for llama.cpp's F16, and its Q4_0 15.13–15.17 against
+  15.82–15.93 for llama.cpp's.
 
 ## Quality
 
@@ -102,6 +173,12 @@ scripts/compare_llamacpp.sh ../llama.cpp ./Qwen2.5-0.5B-Instruct \
 ```
 
 The script converts the model for isa-lm, quantizes the GGUF, runs both
-benchmarks and writes `build/compare/results.md`. A missing llama.cpp build
-directory skips that row; `THREADS`, `TOKENS`, `REPS`, `CTX` and `CHUNKS`
-change the settings.
+benchmarks and writes `build/compare/results.md`. It picks the ISA levels
+from the host: on AArch64 the llama.cpp build directories are `build-native`,
+`build-dotprod` (`-DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH=armv8.2-a+dotprod`) and
+`build-base` (`armv8-a`). A missing llama.cpp build directory skips that row;
+`THREADS`, `TOKENS`, `REPS`, `CTX` and `CHUNKS` change the settings.
+
+On GitHub, run the `llama.cpp comparison` workflow (Actions tab, Run
+workflow); it reports each machine's table in the run summary, as an artifact
+and as an annotation.
