@@ -90,8 +90,8 @@ AVX2 but no AVX-512, so its native level is AVX2) and `ubuntu-24.04-arm`
 (AArch64, 4 vCPUs with dotprod and i8mm) runners and runs
 `scripts/compare_llamacpp.sh`. On AArch64 the llama.cpp builds are the native
 one (against isa-lm's best build, `neon_i8mm`), `armv8.2-a+dotprod` and
-`armv8-a`. Results of one run (isa-lm `69a6b52` with the main branch's
-kernels, llama.cpp b11835):
+`armv8-a`. Results of one run (isa-lm `d54e2dd`, whose kernels are the
+main branch's, and llama.cpp b11835):
 
 ### x86-64 (AVX2)
 
@@ -128,16 +128,16 @@ kernels, llama.cpp b11835):
 | NEON (Armv8.0) | Q4_0 | 4 | 153.8 | 96.1 | 81.7 | 53.7 | 1.52× |
 
 - **x86-64 without AVX-512:** isa-lm is ahead everywhere: decode 1.0–1.7×
-  with AVX2 and 2.5–10× on SSE builds, prefill 1.4–1.9× with AVX2 and 2.9–10×
+  with AVX2 and 2.5–10× on SSE builds, prefill 1.4–1.9× with AVX2 and 2.6–10×
   on SSE builds.
 - **AArch64:** decode is level with llama.cpp for Q8_0 at dotprod and i8mm and
   1.1–1.2× faster for Q4_0; on plain Armv8.0 NEON isa-lm is 1.3–1.7× faster
   in both prefill and decode. Prefill with i8mm is 1.2–1.4× faster for Q8_0
-  and level for Q4_0, but with dotprod llama.cpp prefills Q4_0 1.3× faster
+  and level for Q4_0, but with dotprod llama.cpp prefills Q4_0 1.3–1.4× faster
   (its repacked Q4_0 dotprod kernels): isa-lm's Q4_0 dotprod matmul has room
   to grow.
 - **Quality** is the same on all three machines: isa-lm's Q8_0 scores 13.33–13.37
-  against 13.34 for llama.cpp's F16, and its Q4_0 15.15–15.17 against
+  against 13.34 for llama.cpp's F16, and its Q4_0 15.13–15.17 against
   15.82–15.93 for llama.cpp's.
 
 ## Quality
