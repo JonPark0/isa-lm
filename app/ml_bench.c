@@ -43,7 +43,7 @@ static void bench_matvec(int type, int rows, int cols, int iters) {
     ml_qtensor P = W;
     uint8_t *pq = ml_aligned_alloc(ml_pack_quant_bytes(&W, ML_PACK_G));
     float *pd = ml_aligned_alloc(ml_pack_scale_bytes(&W, ML_PACK_G));
-    ml_pack(&W, pq, pd, ML_PACK_G, ML_PACK_Q8_OFFSET);
+    ml_pack(&W, pq, pd, ML_PACK_G, ML_PACK_Q8_OFFSET, ML_PACK_Q4_XOR);
     P.pq = pq;
     P.pd = pd;
     if (type == ML_Q8_0) TIME_IT(iters, ml_k_matvec_q8_pk(y, &P, &x, 0, rows));
