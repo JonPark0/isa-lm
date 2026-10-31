@@ -78,7 +78,7 @@ Site: <https://jonpark0.github.io/isa-lm/> · Wiki: <https://github.com/JonPark0
 | ARM builds | tested under qemu (ARMv7 NEON, AArch64 NEON, dotprod, i8mm, SVE at 128-bit and 512-bit vector length) and on real Arm hardware in CI (GitHub `ubuntu-24.04-arm`: scalar, neon, neon with threads, dotprod, i8mm, sve) |
 | Real model | CI downloads llama2.c `stories15M`, converts it to Q8, generates text, and checks scalar and avx2 logits (packed and row-major) against the numpy reference: same argmax, top-5 agreement, KL ≤ 1e-2 |
 | ISA guard | rejects unsupported CPUs with exit code 3, checked under qemu on core2duo/Nehalem/SandyBridge/Haswell and cortex-a53/a76/neoverse-n2 |
-| Performance | weights repacked into row-interleaved layouts for every SIMD build from SSE2 and ARMv7 NEON up (Q4 decoding up to 2.2× faster); prompts prefilled in batches of up to 128 tokens (2–6× faster), on `smmla` with i8mm; software prefetch of the weight stream on x86 (decoding 1.3–2.5× faster on one core); attention 2.4× faster on long contexts, 3.4× with the optional Q8 KV cache (`--kv q8`); numbers in [Testing](docs/testing.md#benchmarking) |
+| Performance | weights repacked into row-interleaved layouts for every SIMD build from SSE2 and ARMv7 NEON up (Q4 decoding up to 2.2× faster); prompts prefilled in batches of up to 128 tokens (2–6× faster), on `smmla` with i8mm; software prefetch of the weight stream on x86 (decoding 1.3–2.5× faster on one core); attention 2.4× faster on long contexts, 3.4× with the optional Q8 KV cache (`--kv q8`); an F16 KV cache (`--kv f16`) halves its memory at the same speed; numbers in [Testing](docs/testing.md#benchmarking) |
 | Thread pool | bit-identical results for any thread count; ThreadSanitizer clean; a 4-layer dim-2048 Q4 model decodes at 140 tok/s with `-t 1` and 503 tok/s with `-t 4` (avx512vnni, 4 vCPUs) |
 | Windows | MSVC builds (scalar, SSE2, AVX2) pass the unit tests and match the numpy reference in CI; the MinGW-built release binaries are checked under Wine before publishing |
 | Quantization | Q8_0, Q4_0, and Q4 with chosen matrix classes in Q8 (`--q8 v,o,down`: Llama 3.2 1B perplexity 17.89 at 831 MB, against 17.27 for Q8 at 1252 MB and 19.91 for Q4 at 663 MB); f16 block scales by default (Q4 at 4.5 bits per weight); each Q4 block's scale is fitted rather than rounded from its maximum (Qwen2.5 0.5B: 15.14 against 15.86 for llama.cpp's Q4_0, see the [comparison](docs/benchmarks.md)), except for Gemma 3, whose checkpoints do better with llama.cpp's rounding (its quantization-aware 1B checkpoint: Q4 perplexity 40.50, below its Q8); `tools/perplexity.py` measures it |
@@ -110,7 +110,7 @@ Please also cite the models you run; their licenses are separate from this one.
 - **지원 명령어 집합:** x86-64는 SSE2부터 SSE4.1, AVX2, AVX-VNNI, AVX-512 VNNI까지, ARM은 ARMv7 NEON부터
   NEON dotprod, i8mm, SVE까지 지원합니다. 빌드할 때 명령어 집합을 고르면 연산마다 그에 맞는 커널이 컴파일 단계에서
   묶입니다. 지원하지 않는 CPU에서 실행하면 비정상 종료 대신 오류 코드 3과 누락된 기능을 알려 줍니다.
-- **양자화:** Q8_0, Q4_0, 그리고 일부 행렬만 Q8로 두는 혼합 정밀도를 지원합니다. KV 캐시도 Q8로 줄일 수 있습니다.
+- **양자화:** Q8_0, Q4_0, 그리고 일부 행렬만 Q8로 두는 혼합 정밀도를 지원합니다. KV 캐시도 F16이나 Q8로 줄일 수 있습니다.
 - **속도:** 명령어 집합별 정수 내적에 맞춘 가중치 재배치, 프롬프트 일괄 처리, 소프트웨어 프리페치, GQA 블록
   어텐션을 씁니다. 스레드 수를 바꿔도 결과는 비트 단위로 같습니다.
 - **모델과 토크나이저:** llama2.c 체크포인트와 Hugging Face safetensors(Llama 2, Llama 3/3.1/3.2, TinyLlama,
