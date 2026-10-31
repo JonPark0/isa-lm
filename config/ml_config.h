@@ -290,6 +290,7 @@
 #define ML_PACK_G 16
 #define ML_PACK_Q8_OFFSET 128
 #define ML_PACK_Q8 1
+#define ML_PACK_Q4_XOR 0
 #define ML_PACK_D16 1
 #elif defined(ML_HAS_MATVEC_PK_AVXVNNI)
 #define ml_k_matvec_q8_pk ml_k_matvec_q8_pk_avxvnni
@@ -297,6 +298,7 @@
 #define ML_PACK_G 8
 #define ML_PACK_Q8_OFFSET 128
 #define ML_PACK_Q8 1
+#define ML_PACK_Q4_XOR 0
 #define ML_PACK_D16 1
 #elif defined(ML_HAS_MATVEC_PK_AVX2)
 #define ml_k_matvec_q8_pk ml_k_matvec_q8_pk_avx2
@@ -304,6 +306,7 @@
 #define ML_PACK_G 8
 #define ML_PACK_Q8_OFFSET 0
 #define ML_PACK_Q8 1
+#define ML_PACK_Q4_XOR 0
 #define ML_PACK_D16 1
 #elif defined(ML_HAS_MATVEC_PK_SSE41)
 #define ml_k_matvec_q8_pk ml_k_matvec_q8_pk_sse41
@@ -311,6 +314,7 @@
 #define ML_PACK_G 4
 #define ML_PACK_Q8_OFFSET 0
 #define ML_PACK_Q8 1
+#define ML_PACK_Q4_XOR 0
 #define ML_PACK_D16 0
 #elif defined(ML_HAS_MATVEC_PK_SSE2)
 #define ml_k_matvec_q8_pk ml_k_matvec_q8_pk_sse2
@@ -318,6 +322,7 @@
 #define ML_PACK_G 4
 #define ML_PACK_Q8_OFFSET 128
 #define ML_PACK_Q8 1
+#define ML_PACK_Q4_XOR 0
 #define ML_PACK_D16 0
 #elif defined(ML_HAS_MATVEC_PK_NEON_DOTPROD)
 #define ml_k_matvec_q8_pk ml_k_matvec_q8_pk_neon_dotprod
@@ -325,6 +330,7 @@
 #define ML_PACK_G 4
 #define ML_PACK_Q8_OFFSET 0
 #define ML_PACK_Q8 1
+#define ML_PACK_Q4_XOR 0x88
 #define ML_PACK_D16 0
 #elif defined(ML_HAS_MATVEC_PK_NEON)
 #define ml_k_matvec_q8_pk ml_k_matvec_q8_pk_neon
@@ -332,11 +338,13 @@
 #define ML_PACK_G 4
 #define ML_PACK_Q8_OFFSET 0
 #define ML_PACK_Q8 1
+#define ML_PACK_Q4_XOR 0
 #define ML_PACK_D16 0
 #else
 #define ML_PACK_G 0
 #define ML_PACK_Q8_OFFSET 0
 #define ML_PACK_Q8 0
+#define ML_PACK_Q4_XOR 0
 #define ML_PACK_D16 0
 #endif
 

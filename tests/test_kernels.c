@@ -119,7 +119,7 @@ static void check_matvec_pk(int type, int unit) {
         ml_qtensor P = w.W;
         uint8_t *pq = xalloc(ml_pack_quant_bytes(&w.W, ML_PACK_G));
         float *pd = xalloc(ml_pack_scale_bytes(&w.W, ML_PACK_G, ML_PACK_D16));
-        ml_pack(&w.W, pq, pd, ML_PACK_G, ML_PACK_Q8_OFFSET, ML_PACK_D16);
+        ml_pack(&w.W, pq, pd, ML_PACK_G, ML_PACK_Q8_OFFSET, ML_PACK_Q4_XOR, ML_PACK_D16);
         P.pq = pq; P.pd = pd; P.pd16 = (uint8_t)ml_pack_f16(&w.W, ML_PACK_D16);
         ml_qact x = make_x(cols, unit);
         float *y1 = xalloc(sizeof(float) * rows), *y2 = xalloc(sizeof(float) * rows);
@@ -151,7 +151,7 @@ static void check_matmul_pk_cols(int type, int unit, int cols, int rows) {
     ml_qtensor P = w.W;
     uint8_t *pq = xalloc(ml_pack_quant_bytes(&w.W, ML_PACK_G));
     float *pd = xalloc(ml_pack_scale_bytes(&w.W, ML_PACK_G, ML_PACK_D16));
-    ml_pack(&w.W, pq, pd, ML_PACK_G, ML_PACK_Q8_OFFSET, ML_PACK_D16);
+    ml_pack(&w.W, pq, pd, ML_PACK_G, ML_PACK_Q8_OFFSET, ML_PACK_Q4_XOR, ML_PACK_D16);
     P.pq = pq; P.pd = pd; P.pd16 = (uint8_t)ml_pack_f16(&w.W, ML_PACK_D16);
     for (int ni = 0; ni < 6; ni++) {
         const int n = ns[ni], ldy = rows + 3;
@@ -441,7 +441,8 @@ int TT_ENTRY(int argc, char **argv) {
     SHOW(rope); SHOW(silu_mul); SHOW(add); SHOW(dot_f32); SHOW(axpy_f32); SHOW(dot_q8); SHOW(axpy_q8);
 #if ML_PACK_G
     SHOW(matvec_q8_pk); SHOW(matvec_q4_pk); SHOW(matmul_q8_pk); SHOW(matmul_q4_pk);
-    printf("pack: %d rows, q8 offset %d, f16 scales %s\n", ML_PACK_G, ML_PACK_Q8_OFFSET, ML_PACK_D16 ? "kept" : "as floats");
+    printf("pack: %d rows, q8 offset %d, q4 xor 0x%x, f16 scales %s\n", ML_PACK_G, ML_PACK_Q8_OFFSET, ML_PACK_Q4_XOR,
+           ML_PACK_D16 ? "kept" : "as floats");
 #else
     printf("pack: none\n");
 #endif

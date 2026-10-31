@@ -84,7 +84,8 @@ for the ISA to both packed `#if` chains in `config/ml_config.h`:
 
 - `ML_HAS_MATVEC_PK_<ISA>` and, if the matmul exists, `ML_HAS_MATMUL_PK_<ISA>`;
 - the group size `ML_PACK_G`, the Q8 offset `ML_PACK_Q8_OFFSET` (128 if the dot
-  instruction needs unsigned weights), `ML_PACK_Q8`, set to 0 to leave Q8
+  instruction needs unsigned weights), the Q4 xor `ML_PACK_Q4_XOR` (`0x88` to
+  read nibbles as signed `q − 8`, else 0), `ML_PACK_Q8`, set to 0 to leave Q8
   row-major, and `ML_PACK_D16`, set to 1 if the kernels read f16 scales when a
   tensor's `pd16` is set (files with f16 scales).
 
