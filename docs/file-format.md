@@ -40,7 +40,8 @@ straight into it without copying. Everything is little-endian.
 | 108 | `u32` | `post_norms` | 0 or 1: the attention and FFN outputs are RMS-normalized before the residual (Gemma 3) |
 | 112 | `f32` | `embed_scale` | ≥ 0: factor on the embedding rows; 0 means 1 (Gemma: `sqrt(dim)`) |
 | 116 | `f32` | `attn_scale` | ≥ 0: attention score factor; 0 means `1/sqrt(head_dim)` |
-| 120 | | padding | zero up to offset 256 |
+| 120 | `u32` | `scale_f16` | 0 or 1: every quantized matrix stores its scales `d` as IEEE `f16` instead of `f32` |
+| 124 | | padding | zero up to offset 256 |
 
 `dim`, `n_layers`, `n_heads`, `n_kv_heads` and `hidden_dim` are limited to
 65536. `vocab` and `max_seq` are limited to 2^24. Files written before RoPE
@@ -100,8 +101,10 @@ one after the other:
 1. **`q`**: the quants.
    - Q8_0: `rows × cols` bytes of `int8`.
    - Q4_0: `rows × cols / 2` bytes.
-2. **`d`**: `rows × cols / 32` `f32` scales, one per block of 32 consecutive
-   weights in a row.
+2. **`d`**: `rows × cols / 32` scales, one per block of 32 consecutive
+   weights in a row: `f32`, or `f16` when `scale_f16` is 1 (Q4_0 then takes
+   4.5 bits per weight instead of 5, Q8_0 8.5 instead of 9). The runtime
+   converts `f16` scales to `f32` exactly when it loads the file.
 
 Each array is zero-padded to a multiple of 64 bytes, so the next array starts
 aligned. The padding after the last array is optional.
@@ -131,14 +134,20 @@ else:              d = amax / 127,  q = trunc(x * (127/amax) + copysign(0.5, x))
 
 Every SIMD implementation is bit-identical to the scalar one.
 
+With `f16` scales, a Q8_0 weight block's `d = amax / 127` is first rounded to
+the nearest `f16`, and the quants are `trunc(x × (1/d) + copysign(0.5, x))`
+against that rounded `d`, clamped to ±127. A scale above 65504 cannot be
+stored, and the writer refuses it.
+
 Q4_0 weights are written once, so `tools/mlb.py` fits each block instead: the
 element of largest magnitude goes to a level between -6 and -8.4 (clamped to
 [-8, 7]) in steps of 0.2, the scale `d` is the least-squares fit for those
 levels with each element weighted by x², and the candidate with the least
 weighted error is kept. A block whose largest magnitude is below 1e-6 is
 fitted scaled up to 1 and its `d` scaled back, so that float32 squares and
-cubes do not underflow. `d` can be negative. Any `d` and nibbles are valid
-input to the runtime.
+cubes do not underflow. `d` can be negative. With `f16` scales the fitted `d`
+is rounded to the nearest `f16`. Any `d` and nibbles are valid input to the
+runtime.
 
 With `tools/convert.py --imatrix`, each element's weight is instead, as in
 llama.cpp, `imp × sqrt(s² + x²)`: `s²` is the mean x² of the element's row,
@@ -193,7 +202,7 @@ converter takes `attention_factor` from the config, or computes
 | Problem | Status |
 |---------|--------|
 | file cannot be opened | `ML_E_IO` |
-| empty file, file shorter than the header, bad magic or version, unknown `wtype` or `rope_type`, invalid llama3, linear or yarn parameters, a `rope_attn_factor` without yarn, `qkv_bias`, `qk_norm` or `layer_flags` other than 0 or 1, unknown layer flag bits, a negative `rope_local_theta` or a local-RoPE layer without one, `sliding_window` above 2^24, file shorter than the arrays the header implies, a Q8 quant equal to −128 | `ML_E_FORMAT` |
+| empty file, file shorter than the header, bad magic or version, unknown `wtype` or `rope_type`, invalid llama3, linear or yarn parameters, a `rope_attn_factor` without yarn, `qkv_bias`, `qk_norm`, `layer_flags`, `post_norms` or `scale_f16` other than 0 or 1, an unknown `act`, a negative or non-finite `embed_scale` or `attn_scale`, unknown layer flag bits, a negative `rope_local_theta` or a local-RoPE layer without one, `sliding_window` above 2^24, file shorter than the arrays the header implies, a Q8 quant equal to −128 | `ML_E_FORMAT` |
 | zero or over-limit dimension, `dim` or `hidden_dim` not a multiple of 32, `dim % n_heads ≠ 0` without `head_dim`, `n_heads % n_kv_heads ≠ 0`, odd `head_dim`, `q_dim` not a multiple of 32 or above 65536, `vocab < 3` | `ML_E_SHAPE` |
 
 All size arithmetic is overflow-checked, which matters on 32-bit targets.

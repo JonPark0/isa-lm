@@ -21,6 +21,7 @@ typedef struct {
     int post_norms;     /* RMSNorm of the attention and FFN outputs before the residual (108; Gemma 3) */
     float embed_scale;  /* factor on embedding rows; 1 when the header has 0 (offset 112) */
     float attn_scale;   /* attention score factor; 1/sqrt(head_dim) when the header has 0 (116) */
+    int scale_f16;      /* matrix scales are stored as f16 (offset 120) */
     /* RoPE scaling (header offsets 52..71, 88): ML_ROPE_*. For yarn the low
      * and high frequency factors hold beta_fast and beta_slow. */
     int rope_type, rope_orig_max_seq;
@@ -55,9 +56,13 @@ typedef struct {
     void *pack_mem;   /* row-interleaved weight copies (ml_model_pack), or NULL */
     ml_file pack_file;   /* or the same, mapped from a pack cache file */
     int packed;          /* the matrices point at packed copies */
+    float *scales;       /* f16-scale files: the matrices' scales as floats */
 } ml_model;
 
 ml_status ml_model_load(ml_model *m, const char *path);
 void ml_model_free(ml_model *m);
+/* f16-scale files: keeps the float scales only where still read (the
+ * embedding table, and matrices without packed copies). */
+ml_status ml_model_trim_scales(ml_model *m);
 
 #endif

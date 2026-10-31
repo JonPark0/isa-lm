@@ -76,6 +76,9 @@ typedef struct {
     /* Row-interleaved copy for the packed kernels (core/pack.h), or NULL. */
     const uint8_t *pq;
     const float *pd;
+    /* The scales as stored in an .mlb with f16 scales, or NULL; d then
+     * holds them converted (or NULL once packing has made them unneeded). */
+    const uint16_t *dh;
 } ml_qtensor;
 
 /* Q8_0 quantized activation vector of length n. */
@@ -103,6 +106,9 @@ static inline int ml_mul_size(size_t a, size_t b, size_t *r) {
 
 /* 64 B-aligned allocation (C11 aligned_alloc is missing on MSVC/MinGW). */
 void *ml_aligned_alloc(size_t n);
+/* IEEE binary16 <-> float32; f32 -> f16 rounds to nearest even. */
+uint16_t ml_f32_to_f16(float f);
+float ml_f16_to_f32(uint16_t h);
 void ml_aligned_free(void *p);
 
 #endif
