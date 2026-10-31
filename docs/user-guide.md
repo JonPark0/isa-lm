@@ -273,6 +273,11 @@ Q4 with the default rule):
 | Qwen3 0.6B | 28.10 | 27.90 | 31.69 |
 | SmolLM2 135M Instruct | 23.44 | 23.62 | 31.60 |
 | Gemma 3 1B Instruct | 42.32 | 41.97 | 49.83 |
+| Gemma 3 4B Instruct | — | 24.30 | 23.31 |
+
+The F32 reference was not run over the whole text for Gemma 3 4B; on its
+first 96 tokens the Q8 logits are within KL 0.0021 of it (same argmax at 97%
+of the positions). Its Q8 file takes 3932 MiB, Q4 2083 MiB.
 
 Gemma 3 1B loses the most to Q4_0. With the fitted rule it reaches 53.25,
 and keeping `emb,cls,v,down` in Q8 gives 47.97 at 783 MB. llama.cpp's plain
