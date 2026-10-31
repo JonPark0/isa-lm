@@ -51,12 +51,18 @@ static inline void q4_operands(int8x16_t w01[4], int8x16_t w23[4], const int8_t 
  * tokens 2q and 2q + 1 (an odd last token is paired with itself), and entry
  * 4b + j holds bytes 8j..8j+7 of block b of both. */
 static ML_THREAD_LOCAL int8x16_t xpair[PK_TILE / 2][PK_MAX_BLOCKS * 4];
+/* and their scales as smmla lays out its 2x2 results: (x_2q, x_2q+1) twice */
+static ML_THREAD_LOCAL float32x4_t xdpair[PK_TILE / 2][PK_MAX_BLOCKS];
 
 static void make_pairs(const ml_qbatch *X, int t0, int T, int nb) {
     for (int q = 0; 2 * q < T; q++) {
-        const int8_t *xa = X->q + (size_t)(t0 + 2 * q) * X->k;
-        const int8_t *xb = X->q + (size_t)(t0 + (2 * q + 1 < T ? 2 * q + 1 : 2 * q)) * X->k;
+        const int ta = t0 + 2 * q, tb = t0 + (2 * q + 1 < T ? 2 * q + 1 : 2 * q);
+        const int8_t *xa = X->q + (size_t)ta * X->k;
+        const int8_t *xb = X->q + (size_t)tb * X->k;
         for (int b = 0; b < nb; b++) {
+            const float da = X->d[(size_t)ta * nb + b], db = X->d[(size_t)tb * nb + b];
+            const float xd[4] = { da, db, da, db };
+            xdpair[q][b] = vld1q_f32(xd);
             const int64x2_t a0 = vreinterpretq_s64_s8(vld1q_s8(xa + b * QK)), a1 = vreinterpretq_s64_s8(vld1q_s8(xa + b * QK + 16));
             const int64x2_t b0 = vreinterpretq_s64_s8(vld1q_s8(xb + b * QK)), b1 = vreinterpretq_s64_s8(vld1q_s8(xb + b * QK + 16));
             int8x16_t *o = xpair[q] + 4 * b;
@@ -69,7 +75,10 @@ static void make_pairs(const ml_qbatch *X, int t0, int T, int nb) {
 }
 
 /* One row group against NP token pairs. Called with a constant NP, so the
- * accumulators stay in registers. */
+ * accumulators stay in registers. They keep smmla's layout, rows 0-1 and rows
+ * 2-3 of both tokens of a pair ([r0 t0, r0 t1, r1 t0, r1 t1]), with the
+ * scales in the same layout, and are separated into tokens at the end: per
+ * token and row the operations are still the matvec's. */
 #define GROUP_TILE(OPERANDS, STEPS, CVT, NP)                                \
     do {                                                                          \
         float32x4_t acc[2 * (NP)];                                                \
@@ -78,6 +87,7 @@ static void make_pairs(const ml_qbatch *X, int t0, int T, int nb) {
         const int8_t *pp = p;                                                     \
         for (int b = 0; b < nb; b++, pp += STEPS * PK * 4) {                      \
             const float32x4_t dv = vld1q_f32(d + b * PK);                         \
+            const float32x4_t d01 = vzip1q_f32(dv, dv), d23 = vzip2q_f32(dv, dv); \
             int8x16_t w01[4], w23[4];                                             \
             OPERANDS(w01, w23, pp);                                               \
             _Pragma("GCC unroll 4")                                               \
@@ -88,14 +98,18 @@ static void make_pairs(const ml_qbatch *X, int t0, int T, int nb) {
                 m01 = vmmlaq_s32(m01, w01[1], xx[1]); m23 = vmmlaq_s32(m23, w23[1], xx[1]); \
                 m01 = vmmlaq_s32(m01, w01[2], xx[2]); m23 = vmmlaq_s32(m23, w23[2], xx[2]); \
                 m01 = vmmlaq_s32(m01, w01[3], xx[3]); m23 = vmmlaq_s32(m23, w23[3], xx[3]); \
-                const int32x4_t s0 = vuzp1q_s32(m01, m23), s1 = vuzp2q_s32(m01, m23); \
-                const int u0 = 2 * q, u1 = 2 * q + 1 < T ? 2 * q + 1 : 2 * q;     \
-                acc[2 * q] = vfmaq_f32(acc[2 * q], CVT(s0), vmulq_n_f32(dv, X->d[(size_t)(t0 + u0) * nb + b])); \
-                acc[2 * q + 1] = vfmaq_f32(acc[2 * q + 1], CVT(s1), vmulq_n_f32(dv, X->d[(size_t)(t0 + u1) * nb + b])); \
+                const float32x4_t xd = xdpair[q][b];                              \
+                acc[2 * q] = vfmaq_f32(acc[2 * q], CVT(m01), vmulq_f32(d01, xd));  \
+                acc[2 * q + 1] = vfmaq_f32(acc[2 * q + 1], CVT(m23), vmulq_f32(d23, xd)); \
             }                                                                     \
         }                                                                         \
-        _Pragma("GCC unroll 8")                                                   \
-        for (int t = 0; t < 2 * (NP); t++) if (t < T) pk_store(Y + (size_t)(t0 + t) * ldy, acc[t], row, r1); \
+        _Pragma("GCC unroll 4")                                                   \
+        for (int q = 0; q < (NP); q++) {                                          \
+            const float32x4_t a0 = vuzp1q_f32(acc[2 * q], acc[2 * q + 1]);        \
+            const float32x4_t a1 = vuzp2q_f32(acc[2 * q], acc[2 * q + 1]);        \
+            pk_store(Y + (size_t)(t0 + 2 * q) * ldy, a0, row, r1);                \
+            if (2 * q + 1 < T) pk_store(Y + (size_t)(t0 + 2 * q + 1) * ldy, a1, row, r1); \
+        }                                                                         \
     } while (0)
 
 /* int32 sums -> float (exact): Q4's are 16x the sums. */
