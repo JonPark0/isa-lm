@@ -14,8 +14,15 @@
   (offset 100). The converter writes them when only some layers slide
   (`layer_types`, Qwen2's `max_window_layers`) instead of capping the context.
 
+- f16 block scales (`.mlb` header offset 120): Q4_0 takes 4.5 bits per
+  weight instead of 5, Q8_0 8.5 instead of 9. Both kinds of file load in every
+  build.
+
 ### Changed
 
+- `tools/convert.py` writes f16 scales by default (`--scales f32` keeps the
+  older files): perplexity changes by at most 0.15% (Qwen2.5 0.5B, Llama 3.2
+  1B), and Qwen2.5 0.5B Q4 shrinks from 309 to 278 MB.
 - Prompt prefill takes up to 128 tokens per batched step (was 32; `--batch`
   1-128), so each step's pass over the weights serves 4x the tokens: prefill
   up to 1.4x faster on the AVX-512 reference VM (Qwen2.5 0.5B, 4 threads) and

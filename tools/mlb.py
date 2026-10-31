@@ -20,7 +20,7 @@ WTYPES = {"f32": 0, "q8": 1, "q4": 2}
 # rope attention factor, sliding window (96), per-layer flags present, local
 # RoPE theta (104), FFN activation, post-norms, embedding scale, attention
 # scale: 120 bytes
-_HDR = struct.Struct("<4sIIIIIIIIffIIIfffIIIIIfIIfIIff")
+_HDR = struct.Struct("<4sIIIIIIIIffIIIfffIIIIIfIIfIIffI")
 ACTS = {"silu": 0, "gelu_tanh": 1}
 POST_NORM_KEYS = ("post_attn_norm", "post_ffn_norm")   # F32 [dim], after w3, when post_norms is set (Gemma 3)
 LAYER_SLIDING, LAYER_LOCAL_ROPE = 1, 2   # per-layer flag bits (Gemma 3, Qwen2 with some sliding layers)
@@ -114,15 +114,30 @@ def _round_half_away(v):
     return np.trunc(v + np.copysign(np.float32(0.5), v).astype(np.float32))
 
 
-def quantize_q8(x):
-    """x[..., K] float32 -> (q int8[..., K], d float32[..., K/32])."""
+def to_f16(d):
+    """float32 scales -> float16, refusing values f16 cannot hold."""
+    h = np.asarray(d, np.float32).astype(np.float16)
+    if not np.isfinite(h).all():
+        raise ValueError("a scale is too large for f16 (above 65504); use f32 scales")
+    return h
+
+
+def quantize_q8(x, f16=False):
+    """x[..., K] float32 -> (q int8[..., K], d float32[..., K/32]), or d
+    float16 with f16: the scale is rounded to f16 first and the quants are
+    taken against the rounded scale."""
     x = np.asarray(x, np.float32)
     b = x.reshape(*x.shape[:-1], -1, QK)
     amax = np.abs(b).max(axis=-1)
     amax = np.where(amax < TINY, np.float32(0), amax).astype(np.float32)
-    with np.errstate(divide="ignore"):
-        idv = np.where(amax != 0, np.float32(127) / amax, np.float32(0)).astype(np.float32)
     d = (amax / np.float32(127)).astype(np.float32)
+    with np.errstate(divide="ignore"):
+        if f16:
+            d = to_f16(d)
+            df = d.astype(np.float32)
+            idv = np.where(df != 0, np.float32(1) / np.where(df != 0, df, 1), np.float32(0)).astype(np.float32)
+        else:
+            idv = np.where(amax != 0, np.float32(127) / amax, np.float32(0)).astype(np.float32)
     q = np.clip(_round_half_away((b * idv[..., None]).astype(np.float32)), -127, 127)
     return q.astype(np.int8).reshape(x.shape), d
 
@@ -196,8 +211,9 @@ def _importance(imp):
     return np.maximum((imp / mean).astype(np.float32), IMP_FLOOR)
 
 
-def quantize_q4(x, imp=None):
-    """x[..., K] float32 -> (packed uint8[..., K/2], d float32[..., K/32]).
+def quantize_q4(x, imp=None, f16=False):
+    """x[..., K] float32 -> (packed uint8[..., K/2], d float32[..., K/32]);
+    with f16, d is float16, each fitted scale rounded to nearest.
     Byte j of a block holds element j (low nibble) and j+16 (high nibble).
 
     Per block, the element of largest magnitude is mapped to level -8 - step
@@ -241,7 +257,7 @@ def quantize_q4(x, imp=None):
         parts = list(ex.map(search, range(0, len(b), 4096)))
     lv = np.concatenate([p[0] for p in parts]).reshape(*x.shape[:-1], -1, QK)
     d = np.concatenate([p[1] for p in parts]).reshape(*x.shape[:-1], -1)
-    return _pack_q4(lv), d
+    return _pack_q4(lv), (to_f16(d) if f16 else d)
 
 
 def dequant(t):
@@ -287,10 +303,14 @@ def _check_cfg(cfg):
         raise ValueError(f"n_heads * head_dim = {cfg['n_heads'] * head_dim(cfg)} must be a multiple of {QK}")
 
 
-def write_mlb(path, cfg, w, wtype, q8=(), imatrix=None):
+def write_mlb(path, cfg, w, wtype, q8=(), imatrix=None, scales="f32"):
     """Writes the model; returns [(array name, offset, nbytes)] for every array.
     q8: matrix classes (Q8_CLASSES) kept in Q8 when wtype is q4.
-    imatrix: read_imatrix's result, weighting the Q4 fits."""
+    imatrix: read_imatrix's result, weighting the Q4 fits.
+    scales: "f32" or "f16", the storage of every matrix's block scales."""
+    if scales not in ("f32", "f16"):
+        raise ValueError(f"scales must be f32 or f16, not {scales!r}")
+    f16 = scales == "f16"
     _check_cfg(cfg)
     mask = q8_mask(q8) if wtype == "q4" else 0
     shared = bool(cfg.get("shared_classifier", 0))
@@ -308,7 +328,7 @@ def write_mlb(path, cfg, w, wtype, q8=(), imatrix=None):
                     rs.get("attention_factor", 0.0) if yarn else 0.0, cfg.get("sliding_window") or 0,
                     int(cfg.get("layer_flags") is not None), float(cfg.get("rope_local_theta") or 0.0),
                     ACTS[cfg.get("act") or "silu"], int(bool(cfg.get("post_norms"))),
-                    float(cfg.get("embed_scale") or 0.0), float(cfg.get("attn_scale") or 0.0))
+                    float(cfg.get("embed_scale") or 0.0), float(cfg.get("attn_scale") or 0.0), int(f16))
     layout = []
     with open(path, "wb") as f:
         f.write(hdr.ljust(HEADER_SIZE, b"\0"))
@@ -331,7 +351,7 @@ def write_mlb(path, cfg, w, wtype, q8=(), imatrix=None):
             key = name.split(".")[-1]
             t = matrix_type(key, WTYPES[wtype], mask, shared)
             imp = imatrix_for(imatrix, name, shared) if imatrix else None
-            q, d = quantize_q8(arr) if t == WTYPES["q8"] else quantize_q4(arr, imp)
+            q, d = quantize_q8(arr, f16) if t == WTYPES["q8"] else quantize_q4(arr, imp, f16)
             put(name + ".q", q)
             put(name + ".d", d)
     return layout
@@ -396,7 +416,8 @@ def read_mlb(path):
     cfg = dict(zip(keys, f[1:13]))
     (rtype, rf, rlo, rhi, rorig, cfg["q8_mask"], cfg["qkv_bias"], cfg["head_dim"], cfg["qk_norm"],
      rattn, cfg["sliding_window"], has_flags, cfg["rope_local_theta"], act, cfg["post_norms"],
-     cfg["embed_scale"], cfg["attn_scale"]) = f[13:]
+     cfg["embed_scale"], cfg["attn_scale"], f16) = f[13:]
+    cfg["scales"] = "f16" if f16 else "f32"
     cfg["act"] = {v: k for k, v in ACTS.items()}[act]
     rname = {v: k for k, v in ROPE_TYPES.items()}[rtype]
     cfg["rope_scaling"] = None if rtype == 0 else (
@@ -426,7 +447,7 @@ def read_mlb(path):
         t = matrix_type(key, cfg["wtype"], cfg["q8_mask"], bool(cfg["shared_classifier"]))
         nq = r * c if t == 1 else r * c // 2
         q = take(np.int8 if t == 1 else np.uint8, nq)
-        d = take(np.float32, r * c // QK).reshape(r, c // QK)
+        d = take(np.float16 if f16 else np.float32, r * c // QK).astype(np.float32).reshape(r, c // QK)
         return QT(t, q.reshape(r, -1), d, (r, c))
 
     cfg["layer_flags"] = [int(v) for v in take(np.uint8, cfg["n_layers"])] if has_flags else None

@@ -47,6 +47,35 @@ def test_random_model_layout(tmp_path):
         np.testing.assert_array_equal(t["layers"][0]["attn_norm"], w["layers"][0]["attn_norm"])
 
 
+def test_f16_scales(tmp_path):
+    cfg, w = gen_random.generate(dict(SMALL), 3)
+    for wtype in ("q8", "q4"):
+        p32, p16 = str(tmp_path / f"{wtype}32.mlb"), str(tmp_path / f"{wtype}16.mlb")
+        mlb.write_mlb(p32, cfg, w, wtype)
+        mlb.write_mlb(p16, cfg, w, wtype, scales="f16")
+        c32, t32 = mlb.read_mlb(p32)
+        c16, t16 = mlb.read_mlb(p16)
+        assert c32["scales"] == "f32" and c16["scales"] == "f16"
+        assert os.path.getsize(p16) < os.path.getsize(p32)
+        for key in ("wq", "w2"):
+            a, b = t32["layers"][1][key], t16["layers"][1][key]
+            # every scale is an f16 value; the weights stay as close as with f32
+            np.testing.assert_array_equal(b.d, b.d.astype(np.float16).astype(np.float32))
+            orig = w["layers"][1][key]
+            e32, e16 = np.abs(mlb.dequant(a) - orig).mean(), np.abs(mlb.dequant(b) - orig).mean()
+            assert e16 < e32 * 1.05, (wtype, key, e32, e16)
+    # Q8 quants are taken against the rounded scale
+    x = np.linspace(-1, 1, 32, dtype=np.float32)[None]
+    q, d = mlb.quantize_q8(x, f16=True)
+    assert d.dtype == np.float16 and np.abs(q).max() == 127
+    np.testing.assert_allclose(q * d.astype(np.float32), x, atol=float(d[0, 0]) / 2 + 1e-7)
+    try:
+        mlb.quantize_q8(np.full((1, 32), 1e7, np.float32), f16=True)
+        raise AssertionError("f16 overflow accepted")
+    except ValueError:
+        pass
+
+
 def test_quantize_q8_rounding():
     x = np.zeros((1, 32), np.float32)
     x[0, :6] = [127.0, 0.5, -0.5, 1.5, 2.5, -2.5]
@@ -154,7 +183,7 @@ def test_llama2c_roundtrip(tmp_path):
     out = str(tmp_path / "m.mlb")
     convert.main(["llama2c", src, out, "--wtype", "q8"])
     direct = str(tmp_path / "d.mlb")
-    mlb.write_mlb(direct, cfg, w, "q8")
+    mlb.write_mlb(direct, cfg, w, "q8", scales="f16")   # the converter's default
     with open(out, "rb") as a, open(direct, "rb") as b:
         assert a.read() == b.read()   # same weights, same order -> identical file
 

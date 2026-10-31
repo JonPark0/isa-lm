@@ -57,6 +57,7 @@ def main():
     ap.add_argument("--vocab", type=int, default=96)
     ap.add_argument("--max-seq", type=int, default=32)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--scales", choices=("f32", "f16"), default="f32", help="storage of the block scales")
     ap.add_argument("--qkv-bias", action="store_true", help="Q/K/V projection biases (Qwen2)")
     ap.add_argument("--head-dim", type=int, default=0, help="head size other than dim / heads (Qwen3)")
     ap.add_argument("--qk-norm", action="store_true", help="RMSNorm of each query and key head (Qwen3)")
@@ -99,7 +100,7 @@ def main():
                                "original_max_position_embeddings": int(orig),
                                "attention_factor": 0.1 * np.log(float(f)) + 1.0}
     cfg, w = generate(cfg, a.seed)
-    mlb.write_mlb(a.out, cfg, w, a.wtype, [c for c in a.q8.split(",") if c])
+    mlb.write_mlb(a.out, cfg, w, a.wtype, [c for c in a.q8.split(",") if c], scales=a.scales)
     if a.dump_emb_row is not None:
         _, t = mlb.read_mlb(a.out)
         row = mlb.dequant(t["tok_emb"])[a.dump_emb_row].astype(np.float32)
