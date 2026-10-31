@@ -127,6 +127,10 @@ static ml_status parse_header(ml_config *cfg, int *shared, const uint8_t *h) {
     const uint32_t f16 = rd32(h + 120);
     if (f16 > 1) return ML_E_FORMAT;
     cfg->scale_f16 = (int)f16;
+    cfg->attn_softcap = rdf(h + 124);
+    cfg->final_softcap = rdf(h + 128);
+    if (!(cfg->attn_softcap >= 0.0f && cfg->attn_softcap < 1e6f) || !(cfg->final_softcap >= 0.0f && cfg->final_softcap < 1e6f))
+        return ML_E_FORMAT;
     if (!(cfg->rope_theta > 0.0f) || !(cfg->norm_eps >= 0.0f)) return ML_E_FORMAT;
     cfg->rope_type = (int)rd32(h + 52);
     cfg->rope_factor = rdf(h + 56);

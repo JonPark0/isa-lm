@@ -70,6 +70,8 @@ def main():
     ap.add_argument("--post-norms", action="store_true", help="RMSNorm of each block's output (Gemma 3)")
     ap.add_argument("--embed-scale", type=float, default=0.0, help="factor on the embedding rows (Gemma: sqrt(dim))")
     ap.add_argument("--attn-scale", type=float, default=0.0, help="attention score factor instead of 1/sqrt(head_dim)")
+    ap.add_argument("--attn-softcap", type=float, default=0.0, help="soft-cap attention scores at this value (Gemma 2)")
+    ap.add_argument("--final-softcap", type=float, default=0.0, help="soft-cap the logits at this value (Gemma 2)")
     ap.add_argument("--rope-scaling", default=None, metavar="F,LO,HI,ORIG",
                     help="llama3 RoPE scaling: factor, low/high freq factors, original context")
     ap.add_argument("--rope-linear", type=float, default=None, metavar="F", help="linear RoPE scaling")
@@ -82,7 +84,8 @@ def main():
                hidden_dim=a.hidden, vocab=a.vocab, max_seq=a.max_seq,
                rope_theta=10000.0, norm_eps=1e-5, qkv_bias=int(a.qkv_bias), head_dim=a.head_dim or None,
                qk_norm=int(a.qk_norm), sliding_window=a.sliding_window, act="gelu_tanh" if a.gelu else "silu",
-               post_norms=int(a.post_norms), embed_scale=a.embed_scale, attn_scale=a.attn_scale)
+               post_norms=int(a.post_norms), embed_scale=a.embed_scale, attn_scale=a.attn_scale,
+               attn_softcap=a.attn_softcap, final_softcap=a.final_softcap)
     if a.layer_pattern:   # layer i slides unless (i + 1) % N == 0
         sl = [(i + 1) % a.layer_pattern != 0 for i in range(a.layers)]
         cfg["layer_flags"] = [(mlb.LAYER_SLIDING if s else 0) | (mlb.LAYER_LOCAL_ROPE if s and a.rope_local_theta else 0)

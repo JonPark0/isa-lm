@@ -463,7 +463,7 @@ def test_hf_rope_scaling_types(tmp_path):
                                rtol=1e-6)
 
 
-def _gemma3_hf(tmp_path):
+def _gemma3_hf(tmp_path, gemma2=False):
     """A small Gemma 3 text checkpoint: HF names, norms stored as w - 1, every
     second layer local (window 4, base 100) -> (dir, config, float64 weights)."""
     rng = np.random.default_rng(9)
@@ -483,14 +483,18 @@ def _gemma3_hf(tmp_path):
     def mat(r, k):
         return rng.standard_normal((r, k)) / np.sqrt(k)
 
+    if gemma2:   # no q/k norm; soft-capped scores and logits (the logits reach about 15
+        # uncapped, the scores about 3: both caps bite)
+        c.update(model_type="gemma2", attn_logit_softcapping=1.5, final_logit_softcapping=6.0)
     put("model.embed_tokens.weight", 0.3 * rng.standard_normal((V, D)))
     for i in range(NL):
         p = f"model.layers.{i}."
         for n in ("input_layernorm", "post_attention_layernorm", "pre_feedforward_layernorm",
                   "post_feedforward_layernorm"):
             put(p + n + ".weight", 0.1 * rng.standard_normal(D))
-        put(p + "self_attn.q_norm.weight", 0.3 * rng.standard_normal(hd))
-        put(p + "self_attn.k_norm.weight", 0.3 * rng.standard_normal(hd))
+        if not gemma2:
+            put(p + "self_attn.q_norm.weight", 0.3 * rng.standard_normal(hd))
+            put(p + "self_attn.k_norm.weight", 0.3 * rng.standard_normal(hd))
         put(p + "self_attn.q_proj.weight", mat(H * hd, D))
         put(p + "self_attn.k_proj.weight", mat(KV * hd, D))
         put(p + "self_attn.v_proj.weight", mat(KV * hd, D))
@@ -507,18 +511,24 @@ def _gemma3_hf(tmp_path):
 
 
 def _gemma3_forward(c, w, toks):
-    """Gemma 3 as transformers computes it (rotate_half RoPE, (1 + w) norms)."""
+    """Gemma 3 (or Gemma 2) as transformers computes it (rotate_half RoPE,
+    (1 + w) norms; Gemma 2: even layers slide, one RoPE base, no q/k norm,
+    soft-capped scores and logits)."""
+    g2 = c["model_type"] == "gemma2"
+    cap = lambda x, v: v * np.tanh(x / v) if v else x
     D, H, KV, hd = c["hidden_size"], c["num_attention_heads"], c["num_key_value_heads"], c["head_dim"]
     rms = lambda x, g: x / np.sqrt((x * x).mean(-1, keepdims=True) + c["rms_norm_eps"]) * (1 + g)
     T = len(toks)
     x = w["model.embed_tokens.weight"][toks] * np.float32(np.sqrt(D))
     for i in range(c["num_hidden_layers"]):
         p = f"model.layers.{i}."
-        local = (i + 1) % c["sliding_window_pattern"] != 0
-        theta = c["rope_local_base_freq"] if local else c["rope_theta"]
+        local = i % 2 == 0 if g2 else (i + 1) % c["sliding_window_pattern"] != 0
+        theta = c["rope_local_base_freq"] if local and not g2 else c["rope_theta"]
         h = rms(x, w[p + "input_layernorm.weight"])
-        q = rms((h @ w[p + "self_attn.q_proj.weight"].T).reshape(T, H, hd), w[p + "self_attn.q_norm.weight"])
-        k = rms((h @ w[p + "self_attn.k_proj.weight"].T).reshape(T, KV, hd), w[p + "self_attn.k_norm.weight"])
+        q = (h @ w[p + "self_attn.q_proj.weight"].T).reshape(T, H, hd)
+        k = (h @ w[p + "self_attn.k_proj.weight"].T).reshape(T, KV, hd)
+        if not g2:
+            q, k = rms(q, w[p + "self_attn.q_norm.weight"]), rms(k, w[p + "self_attn.k_norm.weight"])
         v = (h @ w[p + "self_attn.v_proj.weight"].T).reshape(T, KV, hd)
         q = np.stack([_hf_rope(q[t].reshape(-1), t, hd, theta) for t in range(T)])
         k = np.stack([_hf_rope(k[t].reshape(-1), t, hd, theta) for t in range(T)])
@@ -527,7 +537,8 @@ def _gemma3_forward(c, w, toks):
             first = max(0, t + 1 - c["sliding_window"]) if local else 0
             for hh in range(H):
                 kv = hh // (H // KV)
-                sc = k[first:t + 1, kv] @ q[t, hh] * c["query_pre_attn_scalar"] ** -0.5
+                sc = cap(k[first:t + 1, kv] @ q[t, hh] * c["query_pre_attn_scalar"] ** -0.5,
+                         c.get("attn_logit_softcapping"))
                 pr = np.exp(sc - sc.max())
                 o[t, hh] = (pr / pr.sum()) @ v[first:t + 1, kv]
         x = x + rms(o.reshape(T, -1) @ w[p + "self_attn.o_proj.weight"].T, w[p + "post_attention_layernorm.weight"])
@@ -536,7 +547,7 @@ def _gemma3_forward(c, w, toks):
         gg = 0.5 * gg * (1 + np.tanh(np.sqrt(2 / np.pi) * (gg + 0.044715 * gg ** 3)))
         x = x + rms((gg * (h @ w[p + "mlp.up_proj.weight"].T)) @ w[p + "mlp.down_proj.weight"].T,
                     w[p + "post_feedforward_layernorm.weight"])
-    return rms(x, w["model.norm.weight"]) @ w["model.embed_tokens.weight"].T
+    return cap(rms(x, w["model.norm.weight"]) @ w["model.embed_tokens.weight"].T, c.get("final_logit_softcapping"))
 
 
 def test_hf_gemma3(tmp_path):
@@ -558,6 +569,29 @@ def test_hf_gemma3(tmp_path):
                    check=True)
     got = np.fromfile(tmp_path / "c.f32", np.float32).reshape(len(toks), -1)
     ref = _gemma3_forward(c, orig, toks)
+    assert (got.argmax(-1) == ref.argmax(-1)).mean() >= 0.8
+    assert np.abs(got - ref).max() <= 5e-2 * np.abs(ref).max()
+
+
+def test_hf_gemma2(tmp_path):
+    """Gemma 2: soft-capped attention scores and logits, even layers sliding
+    with the one RoPE base; the converted model run in C against transformers'
+    arithmetic."""
+    d, c, orig = _gemma3_hf(tmp_path, gemma2=True)
+    cfg, w = convert.load_hf(d)
+    assert cfg["attn_softcap"] == 1.5 and cfg["final_softcap"] == 6.0 and cfg["qk_norm"] == 0
+    assert cfg["layer_flags"] == [1, 0, 1, 0] and not cfg.get("rope_local_theta")
+    exe = os.path.join(ROOT, "build", "scalar", "ml_run")
+    if not os.path.exists(exe):
+        return
+    out = str(tmp_path / "g2.mlb")
+    convert.main(["hf", d, out])
+    toks = [2, 7, 1, 30, 44, 5, 9, 61, 3, 12]
+    subprocess.run([exe, out, "--tokens", ",".join(map(str, toks)), "--dump-logits", str(tmp_path / "c.f32")],
+                   check=True)
+    got = np.fromfile(tmp_path / "c.f32", np.float32).reshape(len(toks), -1)
+    ref = _gemma3_forward(c, orig, toks)
+    assert np.abs(got).max() <= 6.0
     assert (got.argmax(-1) == ref.argmax(-1)).mean() >= 0.8
     assert np.abs(got - ref).max() <= 5e-2 * np.abs(ref).max()
 

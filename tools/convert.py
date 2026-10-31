@@ -120,7 +120,7 @@ def _unrotate(w, n_heads):
     return w.reshape(n_heads, 2, hd // 2, dim).transpose(0, 2, 1, 3).reshape(rows, dim)
 
 
-HF_TYPES = ("llama", "mistral", "qwen2", "qwen3", "gemma3_text")
+HF_TYPES = ("llama", "mistral", "qwen2", "qwen3", "gemma2", "gemma3_text")
 
 
 def _window(c):
@@ -134,6 +134,8 @@ def _window(c):
     elif c.get("model_type") == "gemma3_text":   # every sliding_window_pattern-th layer attends to all
         pat = c.get("sliding_window_pattern", 6)
         sliding = [(i + 1) % pat != 0 for i in range(n)]
+    elif c.get("model_type") == "gemma2":   # even layers slide, odd ones attend to all
+        sliding = [i % 2 == 0 for i in range(n)]
     elif c.get("model_type") in ("qwen2", "qwen3"):   # layers from max_window_layers on, if enabled
         sliding = [bool(c.get("use_sliding_window")) and i >= c.get("max_window_layers", n) for i in range(n)]
     else:
@@ -190,12 +192,10 @@ def load_hf(d, max_seq=None):
     mtype = c.get("model_type", "llama")
     if mtype not in HF_TYPES:
         raise ValueError(f"model_type {mtype!r} is not supported (only {', '.join(HF_TYPES)})")
-    gemma = mtype == "gemma3_text"
+    gemma = mtype in ("gemma2", "gemma3_text")
     act = c.get("hidden_activation", c.get("hidden_act", "silu"))
     if act not in ("silu", "gelu_pytorch_tanh"):
         raise ValueError(f"activation {act!r} is not supported (silu and gelu_pytorch_tanh are)")
-    if c.get("final_logit_softcapping") or c.get("attn_logit_softcapping"):
-        raise ValueError("logit soft-capping is not supported")
     if c.get("mlp_bias"):
         raise ValueError("MLP biases are not supported")
     if c.get("partial_rotary_factor", 1.0) != 1.0:
@@ -235,15 +235,19 @@ def load_hf(d, max_seq=None):
         # sqrt(dim); scores by query_pre_attn_scalar^-0.5; norms of each block's
         # output. Gemma's RMSNorm multiplies by (1 + w): the +1 goes into the
         # stored weights.
-        n = cfg["n_layers"]
-        local = ([t == "sliding_attention" for t in c["layer_types"]] if c.get("layer_types") else
-                 [(i + 1) % c.get("sliding_window_pattern", 6) != 0 for i in range(n)])
-        # the local layers keep their RoPE base even when the context fits the window
-        cfg.update(layer_flags=[(mlb.LAYER_LOCAL_ROPE | (mlb.LAYER_SLIDING if window else 0)) if x else 0
-                                for x in local],
-                   rope_local_theta=float(c.get("rope_local_base_freq", 10000.0)),
-                   embed_scale=float(np.float32(math.sqrt(c["hidden_size"]))),
-                   attn_scale=float(c.get("query_pre_attn_scalar", hd)) ** -0.5, post_norms=1)
+        # Gemma 2 soft-caps the attention scores and the logits.
+        cfg.update(embed_scale=float(np.float32(math.sqrt(c["hidden_size"]))),
+                   attn_scale=float(c.get("query_pre_attn_scalar", hd)) ** -0.5, post_norms=1,
+                   attn_softcap=float(c.get("attn_logit_softcapping") or 0.0),
+                   final_softcap=float(c.get("final_logit_softcapping") or 0.0))
+        if mtype == "gemma3_text":
+            n = cfg["n_layers"]
+            local = ([t == "sliding_attention" for t in c["layer_types"]] if c.get("layer_types") else
+                     [(i + 1) % c.get("sliding_window_pattern", 6) != 0 for i in range(n)])
+            # the local layers keep their RoPE base even when the context fits the window
+            cfg.update(layer_flags=[(mlb.LAYER_LOCAL_ROPE | (mlb.LAYER_SLIDING if window else 0)) if x else 0
+                                    for x in local],
+                       rope_local_theta=float(c.get("rope_local_base_freq", 10000.0)))
     norm = (lambda v: v + 1.0) if gemma else (lambda v: v)
     w = {"tok_emb": t[pre + "embed_tokens.weight"], "final_norm": norm(t[pre + "norm.weight"]), "layers": []}
     for i in range(cfg["n_layers"]):

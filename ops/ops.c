@@ -95,6 +95,11 @@ void ml_quantize_row(int8_t *q, float *d, const float *x, int n) {
     }
 }
 
+void ml_softcap_rows(float *x, size_t ld, int rows, int n, float cap) {
+    for (int r = 0; r < rows; r++)
+        for (int i = 0; i < n; i++) x[(size_t)r * ld + i] = cap * tanhf(x[(size_t)r * ld + i] / cap);
+}
+
 typedef struct {
     float *out;
     const float *q;
@@ -132,6 +137,7 @@ static void attend(const ml_config *cfg, const ml_kv_layer *kv, float *out, cons
             else ml_k_dot_q8(s, qq + h * hd, qd[h], kv->kq + t0 * ld + off, kv->kd + offd + t0 * ldd + kvh, ld, ldd, m, hd, scale);
         }
     }
+    if (cfg->attn_softcap > 0.0f) ml_softcap_rows(att, ldatt, g1 - g0, n, cfg->attn_softcap);
     for (int h = g0; h < g1; h++) {
         ml_k_softmax(att + (h - g0) * ldatt, n);
         memset(out + h * hd, 0, sizeof(float) * hd);

@@ -288,6 +288,7 @@ float *ml_forward(ml_state *s, int token, int pos) {
     IMAT(c->n_layers, 0, s->xb, 1, c->dim);
     if (s->imat) { s->imat_tokens++; s->imat_cls_tokens++; }
     PROF(ML_PROF_CLS, ml_matvec(s->pool, s->logits, &m->wcls, &s->qa_dim));
+    if (c->final_softcap > 0.0f) ml_softcap_rows(s->logits, (size_t)c->vocab, 1, c->vocab, c->final_softcap);
     return s->logits;
 }
 
@@ -407,6 +408,7 @@ static void prefill_step(ml_state *s, const int *tok, int n, int pos0, float *lo
     IMAT(c->n_layers, 0, s->bxb, n, D);
     if (s->imat) s->imat_cls_tokens += n;
     PROF(ML_PROF_CLS, ml_matmul(s->pool, logits, c->vocab, &m->wcls, &s->qb_dim));
+    if (c->final_softcap > 0.0f) ml_softcap_rows(logits, (size_t)c->vocab, n, c->vocab, c->final_softcap);
 }
 
 ml_status ml_prefill(ml_state *s, const int *tokens, int n, int pos0, float *logits) {
