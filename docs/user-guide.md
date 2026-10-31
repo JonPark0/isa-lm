@@ -261,6 +261,12 @@ Other models on the same text (Q8 against the F32 numpy reference):
 |-------|----:|---:|---:|
 | Qwen3 0.6B | 28.10 | 27.91 | 31.73 |
 | SmolLM2 135M Instruct | 23.44 | 23.52 | 31.67 |
+| Gemma 3 1B Instruct | 42.32 | 42.20 | 53.68 |
+
+Gemma 3 1B loses the most to Q4_0. Keeping `emb,cls,v,down` in Q8 gives
+47.40 at 843 MB (Q4: 625 MB, Q8: 1125 MB). Google's quantization-aware
+checkpoint of it (`gemma-3-1b-it-qat-q4_0-unquantized`, trained for Q4_0)
+converts to Q4 at 47.43 for 625 MB, against 42.53 for its Q8.
 
 The converter fits each Q4 block's scale by weighted least squares over a few
 candidate mappings, rather than dividing the block's maximum by 7 (Llama 3.2
