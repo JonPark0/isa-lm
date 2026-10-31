@@ -12,6 +12,8 @@ void ml_k_softmax_scalar(float *x, int n);
 void ml_k_rope_scalar(float *q, float *k, const float *cos_t, const float *sin_t,
                       int head_dim, int n_heads, int n_kv_heads);
 void ml_k_silu_mul_scalar(float *g, const float *u, int n);
+/* g = gelu(g) * u with the tanh approximation (Gemma's gelu_pytorch_tanh). */
+void ml_k_gelu_mul_scalar(float *g, const float *u, int n);
 void ml_k_add_scalar(float *y, const float *x, int n);
 void ml_k_dot_f32_scalar(float *s, const float *q, const float *k, size_t ldk, int rows, int n, float scale);
 void ml_k_axpy_f32_scalar(float *y, const float *a, const float *x, size_t ldx, int rows, int n);

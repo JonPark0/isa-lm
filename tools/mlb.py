@@ -17,8 +17,13 @@ ALIGN = 64
 HEADER_SIZE = 256
 WTYPES = {"f32": 0, "q8": 1, "q4": 2}
 # magic .. rope scaling, q8 mask, qkv bias (80 bytes), head_dim, qk_norm,
-# rope attention factor, sliding window: 96 bytes
-_HDR = struct.Struct("<4sIIIIIIIIffIIIfffIIIIIfI")
+# rope attention factor, sliding window (96), per-layer flags present, local
+# RoPE theta (104), FFN activation, post-norms, embedding scale, attention
+# scale: 120 bytes
+_HDR = struct.Struct("<4sIIIIIIIIffIIIfffIIIIIfIIfIIff")
+ACTS = {"silu": 0, "gelu_tanh": 1}
+POST_NORM_KEYS = ("post_attn_norm", "post_ffn_norm")   # F32 [dim], after w3, when post_norms is set (Gemma 3)
+LAYER_SLIDING, LAYER_LOCAL_ROPE = 1, 2   # per-layer flag bits (Gemma 3, Qwen2 with some sliding layers)
 ROPE_TYPES = {None: 0, "llama3": 1, "linear": 2, "yarn": 3}
 LAYER_KEYS = ("attn_norm", "wq", "wk", "wv", "wo", "ffn_norm", "w1", "w2", "w3")
 BIAS_KEYS = ("bq", "bk", "bv")   # F32, after wo, when the header's qkv_bias is set (Qwen2)
@@ -28,6 +33,20 @@ QK_NORM_KEYS = ("q_norm", "k_norm")   # F32 [head_dim], after the biases, when q
 def head_dim(cfg):
     """Size of one attention head: cfg["head_dim"], or dim / n_heads when unset."""
     return cfg.get("head_dim") or cfg["dim"] // cfg["n_heads"]
+
+
+def layer_window(cfg, layer):
+    """Positions layer `layer` attends to at most (0: all): the sliding window
+    for every layer, or for the layers whose flags say so."""
+    win = cfg.get("sliding_window") or 0
+    flags = cfg.get("layer_flags")
+    return win if flags is None or flags[layer] & LAYER_SLIDING else 0
+
+
+def layer_local_rope(cfg, layer):
+    """Whether layer `layer` uses the local RoPE base (rope_local_theta, unscaled)."""
+    flags = cfg.get("layer_flags")
+    return flags is not None and bool(flags[layer] & LAYER_LOCAL_ROPE)
 
 QT = namedtuple("QT", "type q d shape")   # quantized tensor as stored
 
@@ -249,6 +268,9 @@ def _order(cfg, w):
             if k == "wo" and cfg.get("qk_norm"):
                 for b in QK_NORM_KEYS:
                     yield f"layers.{i}.{b}", "f", layer[b]
+            if k == "w3" and cfg.get("post_norms"):
+                for b in POST_NORM_KEYS:
+                    yield f"layers.{i}.{b}", "f", layer[b]
     yield "final_norm", "f", w["final_norm"]
     if not cfg.get("shared_classifier", 0):
         yield "wcls", "q", w["wcls"]
@@ -258,6 +280,9 @@ def _check_cfg(cfg):
     for k in ("dim", "hidden_dim"):
         if cfg[k] % QK:
             raise ValueError(f"{k}={cfg[k]} must be a multiple of {QK}")
+    flags = cfg.get("layer_flags")
+    if flags is not None and any(f & LAYER_LOCAL_ROPE for f in flags) and not cfg.get("rope_local_theta"):
+        raise ValueError("layers with the local RoPE base need rope_local_theta")
     if cfg["n_heads"] * head_dim(cfg) % QK:
         raise ValueError(f"n_heads * head_dim = {cfg['n_heads'] * head_dim(cfg)} must be a multiple of {QK}")
 
@@ -280,10 +305,17 @@ def write_mlb(path, cfg, w, wtype, q8=(), imatrix=None):
                     rs.get("beta_slow" if yarn else "high_freq_factor", 0.0),
                     rs.get("original_max_position_embeddings", 0),
                     mask, int(bool(cfg.get("qkv_bias"))), explicit_hd, int(bool(cfg.get("qk_norm"))),
-                    rs.get("attention_factor", 0.0) if yarn else 0.0, cfg.get("sliding_window") or 0)
+                    rs.get("attention_factor", 0.0) if yarn else 0.0, cfg.get("sliding_window") or 0,
+                    int(cfg.get("layer_flags") is not None), float(cfg.get("rope_local_theta") or 0.0),
+                    ACTS[cfg.get("act") or "silu"], int(bool(cfg.get("post_norms"))),
+                    float(cfg.get("embed_scale") or 0.0), float(cfg.get("attn_scale") or 0.0))
     layout = []
     with open(path, "wb") as f:
         f.write(hdr.ljust(HEADER_SIZE, b"\0"))
+        if cfg.get("layer_flags") is not None:   # n_layers bytes, padded like every array
+            flags = bytes(int(v) for v in cfg["layer_flags"])
+            assert len(flags) == cfg["n_layers"]
+            f.write(flags + b"\0" * (-len(flags) % ALIGN))
 
         def put(name, arr):
             raw = np.ascontiguousarray(arr).tobytes()
@@ -363,7 +395,9 @@ def read_mlb(path):
             "max_seq", "rope_theta", "norm_eps", "wtype", "shared_classifier")
     cfg = dict(zip(keys, f[1:13]))
     (rtype, rf, rlo, rhi, rorig, cfg["q8_mask"], cfg["qkv_bias"], cfg["head_dim"], cfg["qk_norm"],
-     rattn, cfg["sliding_window"]) = f[13:]
+     rattn, cfg["sliding_window"], has_flags, cfg["rope_local_theta"], act, cfg["post_norms"],
+     cfg["embed_scale"], cfg["attn_scale"]) = f[13:]
+    cfg["act"] = {v: k for k, v in ACTS.items()}[act]
     rname = {v: k for k, v in ROPE_TYPES.items()}[rtype]
     cfg["rope_scaling"] = None if rtype == 0 else (
         {"type": "linear", "factor": rf} if rname == "linear" else
@@ -395,6 +429,7 @@ def read_mlb(path):
         d = take(np.float32, r * c // QK).reshape(r, c // QK)
         return QT(t, q.reshape(r, -1), d, (r, c))
 
+    cfg["layer_flags"] = [int(v) for v in take(np.uint8, cfg["n_layers"])] if has_flags else None
     t = {"tok_emb": mat("tok_emb"), "layers": []}
     for _ in range(cfg["n_layers"]):
         layer = {}
@@ -404,6 +439,8 @@ def read_mlb(path):
                 layer["bq"], layer["bk"], layer["bv"] = take(np.float32, qd), take(np.float32, kv), take(np.float32, kv)
             if k == "wo" and cfg["qk_norm"]:
                 layer["q_norm"], layer["k_norm"] = take(np.float32, hd), take(np.float32, hd)
+            if k == "w3" and cfg["post_norms"]:
+                layer["post_attn_norm"], layer["post_ffn_norm"] = take(np.float32, dim), take(np.float32, dim)
         t["layers"].append(layer)
     t["final_norm"] = take(np.float32, dim)
     t["wcls"] = t["tok_emb"] if cfg["shared_classifier"] else mat("wcls")

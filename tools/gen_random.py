@@ -31,6 +31,8 @@ def generate(cfg, seed=0):
             w["layers"][-1].update(bq=(0.2 * rng.standard_normal(qd)).astype(np.float32),
                                    bk=(0.2 * rng.standard_normal(kv)).astype(np.float32),
                                    bv=(0.2 * rng.standard_normal(kv)).astype(np.float32))
+        if cfg.get("post_norms"):
+            w["layers"][-1].update(post_attn_norm=norm(), post_ffn_norm=norm())
         if cfg.get("qk_norm"):   # spread out, so that a wrong permutation shows
             w["layers"][-1].update(q_norm=(1.0 + 0.3 * rng.standard_normal(hd)).astype(np.float32),
                                    k_norm=(1.0 + 0.3 * rng.standard_normal(hd)).astype(np.float32))
@@ -59,6 +61,14 @@ def main():
     ap.add_argument("--head-dim", type=int, default=0, help="head size other than dim / heads (Qwen3)")
     ap.add_argument("--qk-norm", action="store_true", help="RMSNorm of each query and key head (Qwen3)")
     ap.add_argument("--sliding-window", type=int, default=0, help="attend to this many positions at most")
+    ap.add_argument("--layer-pattern", type=int, default=0, metavar="N",
+                    help="with --sliding-window: only layers other than every N-th slide (Gemma 3), "
+                         "and with --rope-local-theta use that base")
+    ap.add_argument("--rope-local-theta", type=float, default=0.0, help="RoPE base of the sliding layers")
+    ap.add_argument("--gelu", action="store_true", help="GELU (tanh) FFN activation instead of SiLU (Gemma)")
+    ap.add_argument("--post-norms", action="store_true", help="RMSNorm of each block's output (Gemma 3)")
+    ap.add_argument("--embed-scale", type=float, default=0.0, help="factor on the embedding rows (Gemma: sqrt(dim))")
+    ap.add_argument("--attn-scale", type=float, default=0.0, help="attention score factor instead of 1/sqrt(head_dim)")
     ap.add_argument("--rope-scaling", default=None, metavar="F,LO,HI,ORIG",
                     help="llama3 RoPE scaling: factor, low/high freq factors, original context")
     ap.add_argument("--rope-linear", type=float, default=None, metavar="F", help="linear RoPE scaling")
@@ -70,7 +80,13 @@ def main():
     cfg = dict(dim=a.dim, n_layers=a.layers, n_heads=a.heads, n_kv_heads=a.kv_heads,
                hidden_dim=a.hidden, vocab=a.vocab, max_seq=a.max_seq,
                rope_theta=10000.0, norm_eps=1e-5, qkv_bias=int(a.qkv_bias), head_dim=a.head_dim or None,
-               qk_norm=int(a.qk_norm), sliding_window=a.sliding_window)
+               qk_norm=int(a.qk_norm), sliding_window=a.sliding_window, act="gelu_tanh" if a.gelu else "silu",
+               post_norms=int(a.post_norms), embed_scale=a.embed_scale, attn_scale=a.attn_scale)
+    if a.layer_pattern:   # layer i slides unless (i + 1) % N == 0
+        sl = [(i + 1) % a.layer_pattern != 0 for i in range(a.layers)]
+        cfg["layer_flags"] = [(mlb.LAYER_SLIDING if s else 0) | (mlb.LAYER_LOCAL_ROPE if s and a.rope_local_theta else 0)
+                              for s in sl]
+        cfg["rope_local_theta"] = a.rope_local_theta or None
     if a.rope_scaling:
         f, lo, hi, orig = a.rope_scaling.split(",")
         cfg["rope_scaling"] = {"type": "llama3", "factor": float(f), "low_freq_factor": float(lo),

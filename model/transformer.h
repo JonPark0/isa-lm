@@ -24,6 +24,7 @@ typedef struct {
     int8_t *qq;                    /* Q8: quantized query heads [ML_BATCH_MAX][q_dim] */
     float *qd;                     /* Q8: their scales [ML_BATCH_MAX][n_heads] */
     float *rope_cos, *rope_sin;    /* [max_seq][head_dim/2] */
+    float *rope_cos_local, *rope_sin_local;   /* same for rope_local_theta, or NULL */
     ml_qact qa_dim, qa_hidden, qa_q;   /* quantized inputs of dim, hidden_dim, q_dim */
     /* prompt prefill: up to ML_BATCH_MAX tokens per batched step */
     int batch;                     /* tokens per step, 1..ML_BATCH_MAX (default max) */

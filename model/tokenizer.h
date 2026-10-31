@@ -37,8 +37,9 @@ typedef struct {
     uint64_t *merge_key;           /* (left << 32 | right) -> rank, merged id */
     int32_t *merge_rank, *merge_out;
     unsigned merge_mask;
-    int *added;                    /* tokens matched literally in text, longest first */
+    int *added;                    /* tokens matched literally in text, by first byte, longest first */
     int n_added;
+    int added_from[257];           /* added[added_from[c] .. added_from[c + 1]) start with byte c */
 } ml_tokenizer;
 
 enum { ML_TOKA_ADDED = 1, ML_TOKA_BYTE = 2 };
@@ -47,7 +48,8 @@ enum { ML_TOKF_ADD_BOS = 1, ML_TOKF_IGNORE_MERGES = 2, ML_TOKF_PREPEND_FIRST = 4
        ML_TOKF_DIGITS1 = 16,     /* byte-level: \p{N} chunks of one digit (Qwen2), not 1-3 */
        ML_TOKF_GPT2 = 32,        /* byte-level: the GPT-2 pre-tokenizer regex, not Llama 3's */
        ML_TOKF_ISOLATE_DIGITS = 64,   /* byte-level: each \p{N} split off before the regex (SmolLM2) */
-       ML_TOKF_ALL = 127 };
+       ML_TOKF_NO_PREPEND = 128,   /* SentencePiece-style: no U+2581 before the text (Gemma) */
+       ML_TOKF_ALL = 255 };
 
 /* Loads either format (detected by the "MLT1" magic). vocab: the model's
  * vocabulary size; llama2.c files hold exactly that many tokens, MLT1 files

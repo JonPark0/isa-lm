@@ -66,7 +66,9 @@ def softmax(x):
     return e / e.sum()
 
 
-def rope_tables(cfg):
+def rope_tables(cfg, local=False):
+    if local:   # the local RoPE base, without scaling (Gemma 3's sliding layers)
+        cfg = dict(cfg, rope_theta=cfg["rope_local_theta"], rope_scaling=None)
     freq, af = mlb.rope_inv_freq(cfg), mlb.rope_attention_factor(cfg)
     ang = np.arange(cfg["max_seq"], dtype=np.float64)[:, None] * freq[None, :]
     return (np.cos(ang) * af).astype(np.float32), (np.sin(ang) * af).astype(np.float32)
@@ -86,16 +88,21 @@ def forward(cfg, t, tokens, kv="f32"):
     m = Model(cfg, t)
     dim, nh, nkv = cfg["dim"], cfg["n_heads"], cfg["n_kv_heads"]
     hd, eps = mlb.head_dim(cfg), float(cfg["norm_eps"])
-    win = cfg.get("sliding_window") or 0
+    local = rope_tables(cfg, True) if cfg.get("rope_local_theta") else None
     group = nh // nkv
     cos_t, sin_t = rope_tables(cfg)
     emb = mlb.dequant(t["tok_emb"])
+    escale = np.float32(cfg.get("embed_scale") or 1.0)
+    ascale = float(cfg.get("attn_scale") or 0.0) or 1.0 / np.sqrt(hd)
+    gelu = cfg.get("act") == "gelu_tanh"
     kcache = [[] for _ in t["layers"]]
     vcache = [[] for _ in t["layers"]]
     out = []
     for pos, tok in enumerate(tokens):
-        x = emb[tok].astype(np.float32).copy()
+        x = (emb[tok].astype(np.float32) * escale).astype(np.float32)
         for li, L in enumerate(t["layers"]):
+            win = mlb.layer_window(cfg, li)
+            ct, st = local if mlb.layer_local_rope(cfg, li) else (cos_t, sin_t)
             h = rmsnorm(x, L["attn_norm"], eps)
             q = m.matvec(L["wq"], h)
             k = m.matvec(L["wk"], h)
@@ -105,8 +112,8 @@ def forward(cfg, t, tokens, kv="f32"):
             if "q_norm" in L:   # per head, before RoPE (Qwen3)
                 q = np.concatenate([rmsnorm(q[i:i + hd], L["q_norm"], eps) for i in range(0, len(q), hd)])
                 k = np.concatenate([rmsnorm(k[i:i + hd], L["k_norm"], eps) for i in range(0, len(k), hd)])
-            q = rope(q, cos_t[pos], sin_t[pos], hd)
-            k = rope(k, cos_t[pos], sin_t[pos], hd)
+            q = rope(q, ct[pos], st[pos], hd)
+            k = rope(k, ct[pos], st[pos], hd)
             if kv == "q8":   # per position and KV head: int8 quants, one scale
                 kq, kd = quantize_rows(k, hd)
                 vq, vd = quantize_rows(v, hd)
@@ -123,15 +130,24 @@ def forward(cfg, t, tokens, kv="f32"):
             for hh in range(nh):
                 kh = hh // group
                 qh = np.asarray(q[hh * hd:(hh + 1) * hd], np.float64)
-                sc = K[:, kh * hd:(kh + 1) * hd] @ qh / np.sqrt(hd)
+                sc = K[:, kh * hd:(kh + 1) * hd] @ qh * ascale
                 p = softmax(sc)
                 o[hh * hd:(hh + 1) * hd] = p @ V[:, kh * hd:(kh + 1) * hd]
-            x = (x + m.matvec(L["wo"], o)).astype(np.float32)
+            a = m.matvec(L["wo"], o)
+            if "post_attn_norm" in L:   # Gemma 3: the block's output is normalized before the residual
+                a = rmsnorm(a, L["post_attn_norm"], eps)
+            x = (x + a).astype(np.float32)
             h = rmsnorm(x, L["ffn_norm"], eps)
             g = m.matvec(L["w1"], h).astype(np.float64)
             u = m.matvec(L["w3"], h).astype(np.float64)
-            g = (g / (1.0 + np.exp(-g)) * u).astype(np.float32)
-            x = (x + m.matvec(L["w2"], g)).astype(np.float32)
+            if gelu:   # tanh approximation (gelu_pytorch_tanh)
+                g = (0.5 * g * (1.0 + np.tanh(0.7978845608028654 * (g + 0.044715 * g * g * g))) * u).astype(np.float32)
+            else:
+                g = (g / (1.0 + np.exp(-g)) * u).astype(np.float32)
+            f = m.matvec(L["w2"], g)
+            if "post_ffn_norm" in L:
+                f = rmsnorm(f, L["post_ffn_norm"], eps)
+            x = (x + f).astype(np.float32)
         out.append(m.matvec(t["wcls"], rmsnorm(x, t["final_norm"], eps)))
     return np.stack(out).astype(np.float32)
 

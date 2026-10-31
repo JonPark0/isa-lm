@@ -115,15 +115,15 @@ typedef struct {
 
 /* Query heads [g0, g1), all of KV head kvh, at position pos; att holds
  * max_seq floats per head from g0 on. With a sliding window the head attends
- * to the last cfg->sliding_window positions only. */
+ * to the last kv->window positions only. */
 static void attend(const ml_config *cfg, const ml_kv_layer *kv, float *out, const float *q, const int8_t *qq,
                    const float *qd, float *att, int g0, int g1, int pos) {
     const int hd = cfg->head_dim, kvh = g0 / (cfg->n_heads / cfg->n_kv_heads);
-    const int first = cfg->sliding_window && pos >= cfg->sliding_window ? pos + 1 - cfg->sliding_window : 0;
+    const int first = kv->window && pos >= kv->window ? pos + 1 - kv->window : 0;
     const int n = pos + 1 - first;   /* positions attended, from `first` on */
     const size_t ld = (size_t)cfg->kv_dim, ldd = (size_t)cfg->n_kv_heads, ldatt = (size_t)cfg->max_seq;
     const size_t off = (size_t)kvh * hd + (size_t)first * ld, offd = (size_t)first * ldd;
-    const float scale = 1.0f / sqrtf((float)hd);
+    const float scale = cfg->attn_scale;
     for (int t0 = 0; t0 < n; t0 += ATT_BLOCK) {
         const int m = n - t0 < ATT_BLOCK ? n - t0 : ATT_BLOCK;
         for (int h = g0; h < g1; h++) {

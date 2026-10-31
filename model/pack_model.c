@@ -21,7 +21,7 @@ static void pack_task(void *p, int tid, int nt) {
     for (int i = 0; i < j->n; i++) {
         ml_qtensor *W = j->mats[i];
         const int ng = (W->rows + ML_PACK_G - 1) / ML_PACK_G;
-        ml_pack_groups(W, (uint8_t *)W->pq, (float *)W->pd, ML_PACK_G, ML_PACK_Q8_OFFSET,
+        ml_pack_groups(W, (uint8_t *)W->pq, (float *)W->pd, ML_PACK_G, ML_PACK_Q8_OFFSET, ML_PACK_Q4_XOR,
                        (int)((long long)ng * tid / nt), (int)((long long)ng * (tid + 1) / nt));
     }
 }
@@ -95,7 +95,7 @@ ml_status ml_model_pack(ml_model *m, ml_pool *pool) {
 #define CACHE_HDR 512
 typedef struct {
     char magic[4];               /* "MLPK" */
-    uint32_t version, group, q8_offset, pack_q8, pad;
+    uint32_t version, group, q8_offset, pack_q8, q4_xor;
     uint64_t total, model_size, model_hash;
     uint8_t model_header[ML_MLB_HEADER_SIZE];
 } cache_header;
@@ -116,6 +116,7 @@ static void make_header(cache_header *h, const ml_model *m, size_t total) {
     h->group = ML_PACK_G;
     h->q8_offset = ML_PACK_Q8_OFFSET;
     h->pack_q8 = ML_PACK_Q8;
+    h->q4_xor = ML_PACK_Q4_XOR;
     h->total = total;
     h->model_size = m->file.size;
     h->model_hash = model_hash(&m->file);

@@ -4,6 +4,30 @@
 
 ### Added
 
+- Gemma 3 text models (Gemma 3 1B): GELU, block output norms, embedding and
+  attention scales (`.mlb` header offsets 104-116), local and global layers;
+  the Gemma tokenizer (no U+2581 before the text, MLT1 flag 128) and
+  `--chat gemma`. Gemma 3 1B Q8 perplexity 42.20 against 42.32 for an F32
+  reference.
+- Per-layer sliding windows and RoPE bases: a flag byte per layer (header
+  offset 96) puts a layer behind the window and on the local RoPE base
+  (offset 100). The converter writes them when only some layers slide
+  (`layer_types`, Qwen2's `max_window_layers`) instead of capping the context.
+
+### Changed
+
+- AArch64 dotprod builds (neon_dotprod, neon_i8mm, sve): Q4 nibbles are packed
+  in signed form, so no per-block activation sums are subtracted; the dotprod
+  batched kernels take 8 tokens per weight block, and the i8mm ones
+  accumulate in smmla's layout. On GitHub's Neoverse N2 runner (Qwen2.5 0.5B)
+  Q4 prefill is 1.16-1.24x faster, Q4 decode 1.07-1.12x, and Q8 prefill on
+  neon_dotprod and sve 1.04x. Pack cache files from earlier builds are
+  rewritten.
+
+## 0.3.0 — 2026-10-31
+
+### Added
+
 - Qwen3: a `head_dim` other than `dim / n_heads` and per-head q/k RMSNorm
   (`.mlb` header offsets 80 and 84). Qwen3 0.6B Q8 perplexity 27.91 against
   28.10 for an F32 reference.
@@ -16,6 +40,14 @@
   v0.1 has, is kept instead of capping the context.
 - Windows: CI builds the scalar, SSE2 and AVX2 configurations with MSVC and
   checks them against the numpy reference.
+- `scripts/compare_llamacpp.sh` runs on AArch64 too (native, dotprod and Armv8.0
+  levels), and the manual `llama.cpp comparison` workflow runs it on GitHub's
+  x86-64 and AArch64 runners. [The comparison](https://github.com/JonPark0/isa-lm/blob/main/docs/benchmarks.md)
+  now covers both: on x86-64 without AVX-512 isa-lm is ahead or level
+  everywhere; on AArch64 decode is level to 1.2× faster with dotprod and i8mm
+  and 1.3–1.7× faster on Armv8.0, while llama.cpp prefills Q4_0 faster with
+  dotprod. On the reference machine llama.cpp's AVX-512 prefill lead comes
+  from AMX; without it llama.cpp prefills at about a third of isa-lm's speed.
 
 ### Changed
 

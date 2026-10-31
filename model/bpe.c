@@ -53,10 +53,11 @@ static int find_merge(const ml_tokenizer *t, int a, int b, int *out) {
 static int read_u32(FILE *f, uint32_t *v) { return fread(v, 4, 1, f) == 1; }
 
 
-typedef struct { int len, id; } added_key;
+typedef struct { int first, len, id; } added_key;
 
 static int cmp_added(const void *a, const void *b) {
     const added_key *x = a, *y = b;
+    if (x->first != y->first) return x->first - y->first;
     return x->len != y->len ? y->len - x->len : x->id - y->id;
 }
 
@@ -70,7 +71,10 @@ ml_status ml_bpe_load(ml_tokenizer *t, FILE *f, int vocab) {
         nm > (1u << 24) || bos < -1 || bos >= (int32_t)nv || eos < -1 || eos >= (int32_t)nv ||
         (flags & ~(uint32_t)ML_TOKF_ALL))
         return ML_E_FORMAT;
-    if (vocab > 0 && nv > (uint32_t)vocab) return ML_E_SHAPE;
+    /* ids from the model's vocabulary on may only be added tokens, which are
+     * then never produced (Gemma 3's tokenizer has an image token past it) */
+    const uint32_t usable = vocab > 0 && nv > (uint32_t)vocab ? (uint32_t)vocab : nv;
+    if (bos >= (int32_t)usable || eos >= (int32_t)usable) return ML_E_SHAPE;
     t->kind = (int)kind;
     t->vocab_size = (int)nv;
     t->bos = bos;
@@ -104,6 +108,10 @@ ml_status ml_bpe_load(ml_tokenizer *t, FILE *f, int vocab) {
         p[len] = '\0';
         t->piece_len[i] = (int)len;
         t->attr[i] = a;
+        if (i >= usable) {
+            if (!(a & ML_TOKA_ADDED) || (a & ML_TOKA_BYTE)) return ML_E_SHAPE;
+            continue;   /* past the model's vocabulary: kept for decoding only */
+        }
         if (a & ML_TOKA_BYTE) {
             if (len != 1) return ML_E_FORMAT;
             t->byte_id[(unsigned char)p[0]] = (int)i;
@@ -119,6 +127,7 @@ ml_status ml_bpe_load(ml_tokenizer *t, FILE *f, int vocab) {
     for (uint32_t r = 0; r < nm; r++) {
         uint32_t m[3];
         if (fread(m, 4, 3, f) != 3 || m[0] >= nv || m[1] >= nv || m[2] >= nv) return ML_E_FORMAT;
+        if (m[0] >= usable || m[1] >= usable || m[2] >= usable) return ML_E_SHAPE;
         const uint64_t key = ((uint64_t)m[0] << 32) | m[1];
         uint32_t h = hash64(key) & t->merge_mask;
         while (t->merge_rank[h] >= 0 && t->merge_key[h] != key) h = (h + 1) & t->merge_mask;
@@ -141,17 +150,23 @@ ml_status ml_bpe_load(ml_tokenizer *t, FILE *f, int vocab) {
         *o = '\0';
         t->text[i] = q;
     }
-    /* added tokens, longest first, so the longest match wins at a position */
+    /* added tokens by first byte, longest first, so the longest match wins at
+     * a position; a text position checks only those starting with its byte
+     * (Gemma has thousands) */
     added_key *keys = malloc(sizeof(added_key) * (size_t)(t->n_added ? t->n_added : 1));
     t->added = malloc(sizeof(int) * (size_t)(t->n_added ? t->n_added : 1));
     if (!keys || !t->added) { free(keys); return ML_E_NOMEM; }
     int k = 0;
-    for (uint32_t i = 0; i < nv; i++)
+    for (uint32_t i = 0; i < usable; i++)
         if ((t->attr[i] & ML_TOKA_ADDED) && !(t->attr[i] & ML_TOKA_BYTE) && t->piece_len[i] > 0)
-            keys[k++] = (added_key){ t->piece_len[i], (int)i };
+            keys[k++] = (added_key){ (unsigned char)t->vocab[i][0], t->piece_len[i], (int)i };
     qsort(keys, (size_t)k, sizeof *keys, cmp_added);
     for (int i = 0; i < k; i++) t->added[i] = keys[i].id;
     t->n_added = k;
+    for (int c = 0, i = 0; c <= 256; c++) {
+        while (i < k && keys[i].first < c) i++;
+        t->added_from[c] = i;
+    }
     free(keys);
     return ML_OK;
 }
@@ -394,9 +409,9 @@ static int needs_nfc(const unsigned char *s, int n) {
 /* Earliest added token in s[0, n): its position, or n; *id gets the token. */
 static int find_added(const ml_tokenizer *t, const unsigned char *s, int n, int *id) {
     for (int i = 0; i < n; i++)
-        for (int a = 0; a < t->n_added; a++) {
+        for (int a = t->added_from[s[i]]; a < t->added_from[s[i] + 1]; a++) {
             const int k = t->added[a], len = t->piece_len[k];
-            if (len <= n - i && (unsigned char)t->vocab[k][0] == s[i] && !memcmp(t->vocab[k], s + i, (size_t)len)) {
+            if (len <= n - i && !memcmp(t->vocab[k], s + i, (size_t)len)) {
                 *id = k;
                 return i;
             }
@@ -421,7 +436,9 @@ int ml_bpe_encode(const ml_tokenizer *t, const char *text, int bos, int eos, int
         int id = -1;
         const int a = i + find_added(t, s + i, n - i, &id);
         if (a > i && t->kind == ML_TOK_SPM)
-            rc = encode_spm(t, s + i, a - i, !(t->flags & ML_TOKF_PREPEND_FIRST) || i == 0, sym, buf, &e);
+            rc = encode_spm(t, s + i, a - i,
+                            !(t->flags & ML_TOKF_NO_PREPEND) && (!(t->flags & ML_TOKF_PREPEND_FIRST) || i == 0),
+                            sym, buf, &e);
         else if (a > i && (t->flags & ML_TOKF_NFC) && needs_nfc(s + i, a - i)) {
             const int len = ml_uni_nfc(s + i, a - i, buf);   /* buf is free in byte-level BPE */
             rc = len < 0 ? -1 : encode_byte_bpe(t, buf, len, sym, cp, off, &e);

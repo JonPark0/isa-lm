@@ -10,6 +10,7 @@ int ml_chat_template(const char *name) {
     if (!strcmp(name, "chatml")) return ML_CHAT_CHATML;
     if (!strcmp(name, "qwen")) return ML_CHAT_QWEN;
     if (!strcmp(name, "smollm")) return ML_CHAT_SMOLLM;
+    if (!strcmp(name, "gemma")) return ML_CHAT_GEMMA;
     return -1;
 }
 
@@ -17,6 +18,7 @@ int ml_chat_bos_each_turn(int tpl) { return tpl == ML_CHAT_LLAMA2; }
 
 const char *ml_chat_stop(int tpl) {
     if (tpl == ML_CHAT_LLAMA3) return "<|eot_id|>";
+    if (tpl == ML_CHAT_GEMMA) return "<end_of_turn>";
     return tpl == ML_CHAT_CHATML || tpl == ML_CHAT_QWEN || tpl == ML_CHAT_SMOLLM ? "<|im_end|>" : "</s>";
 }
 
@@ -55,6 +57,11 @@ char *ml_chat_render(int tpl, const char *system, const char *user, int first) {
         if (!first) strcpy(out, "\n");
         if (sys) snprintf(out + strlen(out), n - strlen(out), "<|im_start|>system\n%s<|im_end|>\n", system);
         snprintf(out + strlen(out), n - strlen(out), "<|im_start|>user\n%s<|im_end|>\n<|im_start|>assistant\n", user);
+        break;
+    case ML_CHAT_GEMMA:   /* a reply is "...<end_of_turn>\n"; no system role */
+        if (!first) strcpy(out, "\n");
+        snprintf(out + strlen(out), n - strlen(out), "<start_of_turn>user\n%s%s%s<end_of_turn>\n<start_of_turn>model\n",
+                 sys ? system : "", sys ? "\n\n" : "", user);
         break;
     default:
         free(out);
