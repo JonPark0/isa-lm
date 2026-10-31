@@ -66,7 +66,9 @@ def softmax(x):
     return e / e.sum()
 
 
-def rope_tables(cfg):
+def rope_tables(cfg, local=False):
+    if local:   # the local RoPE base, without scaling (Gemma 3's sliding layers)
+        cfg = dict(cfg, rope_theta=cfg["rope_local_theta"], rope_scaling=None)
     freq, af = mlb.rope_inv_freq(cfg), mlb.rope_attention_factor(cfg)
     ang = np.arange(cfg["max_seq"], dtype=np.float64)[:, None] * freq[None, :]
     return (np.cos(ang) * af).astype(np.float32), (np.sin(ang) * af).astype(np.float32)
@@ -86,7 +88,7 @@ def forward(cfg, t, tokens, kv="f32"):
     m = Model(cfg, t)
     dim, nh, nkv = cfg["dim"], cfg["n_heads"], cfg["n_kv_heads"]
     hd, eps = mlb.head_dim(cfg), float(cfg["norm_eps"])
-    win = cfg.get("sliding_window") or 0
+    local = rope_tables(cfg, True) if cfg.get("rope_local_theta") else None
     group = nh // nkv
     cos_t, sin_t = rope_tables(cfg)
     emb = mlb.dequant(t["tok_emb"])
@@ -96,6 +98,8 @@ def forward(cfg, t, tokens, kv="f32"):
     for pos, tok in enumerate(tokens):
         x = emb[tok].astype(np.float32).copy()
         for li, L in enumerate(t["layers"]):
+            win = mlb.layer_window(cfg, li)
+            ct, st = local if mlb.layer_local_rope(cfg, li) else (cos_t, sin_t)
             h = rmsnorm(x, L["attn_norm"], eps)
             q = m.matvec(L["wq"], h)
             k = m.matvec(L["wk"], h)
@@ -105,8 +109,8 @@ def forward(cfg, t, tokens, kv="f32"):
             if "q_norm" in L:   # per head, before RoPE (Qwen3)
                 q = np.concatenate([rmsnorm(q[i:i + hd], L["q_norm"], eps) for i in range(0, len(q), hd)])
                 k = np.concatenate([rmsnorm(k[i:i + hd], L["k_norm"], eps) for i in range(0, len(k), hd)])
-            q = rope(q, cos_t[pos], sin_t[pos], hd)
-            k = rope(k, cos_t[pos], sin_t[pos], hd)
+            q = rope(q, ct[pos], st[pos], hd)
+            k = rope(k, ct[pos], st[pos], hd)
             if kv == "q8":   # per position and KV head: int8 quants, one scale
                 kq, kd = quantize_rows(k, hd)
                 vq, vd = quantize_rows(v, hd)

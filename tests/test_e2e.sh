@@ -35,8 +35,9 @@ $RUN $B/ml_run $M/bias_q4.mlb --tokens $TOKENS --dump-logits $T/bias.f32 \
     && cmp -s $T/bias.f32 $T/bias.b1.f32 && ok || bad "Q/K/V bias model"
 
 # head_dim other than dim / n_heads with per-head q/k norm (Qwen3), a sliding
-# window, yarn RoPE scaling: reference, row-major, batched prefill
-for mm in qk_q4 swa_q8 yarn_q4; do
+# window, yarn RoPE scaling, per-layer windows and RoPE bases (Gemma 3):
+# reference, row-major, batched prefill
+for mm in qk_q4 swa_q8 yarn_q4 lwin_q8; do
     $RUN $B/ml_run $M/$mm.mlb --tokens $TOKENS --dump-logits $T/$mm.f32 \
         && python3 tools/ref_forward.py $M/$mm.mlb --tokens $TOKENS --out $T/$mm.ref.f32 \
         && python3 tests/compare_logits.py $T/$mm.f32 $T/$mm.ref.f32 96 1e-3 >/dev/null \

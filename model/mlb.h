@@ -15,6 +15,8 @@ typedef struct {
     int qkv_bias;       /* Q/K/V projections have biases (offset 76; Qwen2) */
     int qk_norm;        /* RMSNorm of each query and key head before RoPE (offset 84; Qwen3) */
     int sliding_window; /* attend to the last this many positions; 0: all (offset 92) */
+    int layer_flags;    /* 1: per-layer ML_LAYER_* bytes follow the header (offset 96) */
+    float rope_local_theta;   /* RoPE base of ML_LAYER_LOCAL_ROPE layers, unscaled (offset 100) */
     /* RoPE scaling (header offsets 52..71, 88): ML_ROPE_*. For yarn the low
      * and high frequency factors hold beta_fast and beta_slow. */
     int rope_type, rope_orig_max_seq;
@@ -23,6 +25,9 @@ typedef struct {
 } ml_config;
 
 enum { ML_ROPE_NONE = 0, ML_ROPE_LLAMA3 = 1, ML_ROPE_LINEAR = 2, ML_ROPE_YARN = 3 };
+/* Per-layer flags: the layer uses the sliding window; the local RoPE base.
+ * Without per-layer flags the window applies to every layer. */
+enum { ML_LAYER_SLIDING = 1, ML_LAYER_LOCAL_ROPE = 2, ML_LAYER_ALL = 3 };
 enum { ML_Q8M_EMB = 1, ML_Q8M_CLS = 2, ML_Q8M_QK = 4, ML_Q8M_V = 8, ML_Q8M_O = 16,
        ML_Q8M_UP = 32, ML_Q8M_DOWN = 64, ML_Q8M_ALL = 127 };
 
@@ -31,6 +36,8 @@ typedef struct {
     ml_qtensor wq, wk, wv, wo, w1, w2, w3;
     const float *bq, *bk, *bv;   /* NULL unless cfg.qkv_bias */
     const float *q_norm, *k_norm;   /* [head_dim]; NULL unless cfg.qk_norm */
+    int window;          /* positions attended at most; 0: all */
+    int local_rope;      /* uses the RoPE tables of rope_local_theta */
 } ml_layer;
 
 typedef struct {

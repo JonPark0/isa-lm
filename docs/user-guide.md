@@ -130,10 +130,9 @@ python3 tools/convert.py hf ./TinyLlama-1.1B model.mlb --wtype q4 --max-seq 2048
   `qwen3`, with SiLU and no biases other than Qwen2's q/k/v biases. A
   `head_dim` other than `hidden_size / num_attention_heads` and Qwen3's
   per-head q/k RMSNorm are supported. Others (Gemma, Phi, …) are refused.
-- **Sliding window:** a window on every layer (Mistral v0.1) is kept: each
-  position attends to the last `sliding_window` positions. When only some
-  layers slide (Qwen2 with `use_sliding_window`), the context is capped at the
-  window instead, where it equals full attention.
+- **Sliding window:** each position of a sliding layer attends to the last
+  `sliding_window` positions: every layer for Mistral v0.1, the layers
+  `layer_types` or Qwen2's `max_window_layers` select otherwise.
 - **Context length:** `--max-seq` caps the context, and with it the KV cache.
   Without it the converter uses `max_position_embeddings`, which is often
   131072 for Llama 3.
@@ -388,5 +387,5 @@ On a 4-vCPU VM with the avx512vnni build, `-t 4` decodes a 4-layer dim-2048 Q4 m
   with `out of memory` instead of crashing.
 - **Architecture:** Llama-family decoders (Llama, Mistral, Qwen2, Qwen3):
   RMSNorm, SwiGLU, GQA, RoPE, biases only on the q, k and v projections
-  (Qwen2), optional per-head q/k RMSNorm (Qwen3) and one sliding window for
-  every layer. `tools/convert.py` refuses other architectures.
+  (Qwen2), optional per-head q/k RMSNorm (Qwen3), and a sliding window and a
+  second RoPE base for chosen layers. `tools/convert.py` refuses other architectures.

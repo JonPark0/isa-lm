@@ -75,7 +75,7 @@ ml_status ml_state_init(ml_state *s, ml_model *m, int nthreads, int kv_type) {
         { att_rows, f * c->max_seq }, { 2, q8 ? kv : f * kv }, { 2, q8 ? f * ks : 0 },
         { 2, q8 ? f * ML_BATCH_MAX * c->kv_dim : 0 }, { 1, q8 ? (size_t)ML_BATCH_MAX * c->q_dim : 0 },
         { 1, q8 ? f * ML_BATCH_MAX * c->n_heads : 0 },
-        { 2, f * half },
+        { 4, f * half },
         { 1, (size_t)c->dim }, { 1, f * c->dim / QK }, { 1, (size_t)c->hidden_dim }, { 1, f * c->hidden_dim / QK },
         { 1, (size_t)c->q_dim }, { 1, f * c->q_dim / QK },
         { 3, f * ML_BATCH_MAX * c->dim }, { 2, f * ML_BATCH_MAX * c->q_dim }, { 2, f * ML_BATCH_MAX * c->hidden_dim },
@@ -116,6 +116,10 @@ ml_status ml_state_init(ml_state *s, ml_model *m, int nthreads, int kv_type) {
     }
     s->rope_cos = ml_arena_alloc(a, f * half);
     s->rope_sin = ml_arena_alloc(a, f * half);
+    if (c->rope_local_theta > 0.0f) {
+        s->rope_cos_local = ml_arena_alloc(a, f * half);
+        s->rope_sin_local = ml_arena_alloc(a, f * half);
+    }
     s->qa_dim = (ml_qact){ ml_arena_alloc(a, c->dim), ml_arena_alloc(a, f * c->dim / QK), c->dim };
     s->qa_hidden = (ml_qact){ ml_arena_alloc(a, c->hidden_dim),
                               ml_arena_alloc(a, f * c->hidden_dim / QK), c->hidden_dim };
@@ -139,10 +143,16 @@ ml_status ml_state_init(ml_state *s, ml_model *m, int nthreads, int kv_type) {
     const double af = c->rope_type == ML_ROPE_YARN ? c->rope_attn_factor : 1.0;
     for (int i = 0; i < h2; i++) {
         const double freq = rope_inv_freq(c, i);
+        /* the local base is used unscaled (Gemma 3's sliding layers) */
+        const double lfreq = s->rope_cos_local ? pow((double)c->rope_local_theta, -2.0 * i / c->head_dim) : 0.0;
         for (int p = 0; p < c->max_seq; p++) {
             const double ang = p * freq;
             s->rope_cos[(size_t)p * h2 + i] = (float)(cos(ang) * af);
             s->rope_sin[(size_t)p * h2 + i] = (float)(sin(ang) * af);
+            if (s->rope_cos_local) {
+                s->rope_cos_local[(size_t)p * h2 + i] = (float)cos(p * lfreq);
+                s->rope_sin_local[(size_t)p * h2 + i] = (float)sin(p * lfreq);
+            }
         }
     }
     st = ml_pool_create(&s->pool, nthreads);
@@ -154,10 +164,18 @@ ml_status ml_state_init(ml_state *s, ml_model *m, int nthreads, int kv_type) {
 static ml_kv_layer kv_layer(const ml_state *s, int l) {
     const ml_config *c = &s->m->cfg;
     const size_t rows = (size_t)l * c->max_seq;
+    const int win = s->m->layers[l].window;
     if (s->kv_type == ML_F32)
-        return (ml_kv_layer){ s->kcache + rows * c->kv_dim, s->vcache + rows * c->kv_dim, NULL, NULL, NULL, NULL };
+        return (ml_kv_layer){ s->kcache + rows * c->kv_dim, s->vcache + rows * c->kv_dim, NULL, NULL, NULL, NULL, win };
     return (ml_kv_layer){ NULL, NULL, s->kq + rows * c->kv_dim, s->vq + rows * c->kv_dim,
-                          s->kd + rows * c->n_kv_heads, s->vd + rows * c->n_kv_heads };
+                          s->kd + rows * c->n_kv_heads, s->vd + rows * c->n_kv_heads, win };
+}
+
+/* Layer l's RoPE tables at position pos: the local base's, if the layer uses it. */
+static void rope_at(const ml_state *s, const ml_layer *L, int pos, const float **cs, const float **sn) {
+    const size_t o = (size_t)pos * (s->m->cfg.head_dim / 2);
+    *cs = (L->local_rope ? s->rope_cos_local : s->rope_cos) + o;
+    *sn = (L->local_rope ? s->rope_sin_local : s->rope_sin) + o;
 }
 
 /* Q8 cache: quantizes position pos's K and V, per KV head, into layer l.
@@ -207,15 +225,14 @@ float *ml_forward(ml_state *s, int token, int pos) {
     const ml_model *m = s->m;
     const ml_config *c = &m->cfg;
     if (pos < 0 || pos >= c->max_seq || token < 0 || token >= c->vocab) return NULL;
-    const int h2 = c->head_dim / 2;
-    const float *cs = s->rope_cos + (size_t)pos * h2, *sn = s->rope_sin + (size_t)pos * h2;
-
     PROF(ML_PROF_OTHER, ml_dequant_row(s->x, &m->tok_emb, token));
     for (int l = 0; l < c->n_layers; l++) {
         const ml_layer *L = &m->layers[l];
         const ml_kv_layer kv = kv_layer(s, l);
         float *k = s->kbuf ? s->kbuf : s->kcache + ((size_t)l * c->max_seq + pos) * c->kv_dim;
         float *v = s->vbuf ? s->vbuf : s->vcache + ((size_t)l * c->max_seq + pos) * c->kv_dim;
+        const float *cs, *sn;
+        rope_at(s, L, pos, &cs, &sn);
 
         PROF(ML_PROF_OTHER, ml_k_rmsnorm(s->xb, s->x, L->attn_norm, c->dim, c->norm_eps);
                             ml_k_quantize_q8(&s->qa_dim, s->xb, c->dim));
@@ -274,7 +291,7 @@ static void token_stage(const tok_ctx *c, int t) {
     ml_state *s = c->s;
     const ml_config *cfg = &s->m->cfg;
     const ml_layer *L = c->L;
-    const int D = cfg->dim, H = cfg->hidden_dim, KV = cfg->kv_dim, QD = cfg->q_dim, h2 = cfg->head_dim / 2;
+    const int D = cfg->dim, H = cfg->hidden_dim, KV = cfg->kv_dim, QD = cfg->q_dim;
     float *x = s->bx + (size_t)t * D, *xb = s->bxb + (size_t)t * D;
     switch (c->stage) {
     case TOK_ATTN_IN:
@@ -285,8 +302,9 @@ static void token_stage(const tok_ctx *c, int t) {
         float *q = s->bq + (size_t)t * QD, *k = c->kc + (size_t)t * KV, *v = c->vc + (size_t)t * KV;
         if (L->bq) { ml_k_add(q, L->bq, QD); ml_k_add(k, L->bk, KV); ml_k_add(v, L->bv, KV); }
         if (L->q_norm) { heads_norm(q, L->q_norm, cfg->n_heads, cfg); heads_norm(k, L->k_norm, cfg->n_kv_heads, cfg); }
-        ml_k_rope(q, k, s->rope_cos + (size_t)(c->pos0 + t) * h2, s->rope_sin + (size_t)(c->pos0 + t) * h2,
-                  cfg->head_dim, cfg->n_heads, cfg->n_kv_heads);
+        const float *cs, *sn;
+        rope_at(s, L, c->pos0 + t, &cs, &sn);
+        ml_k_rope(q, k, cs, sn, cfg->head_dim, cfg->n_heads, cfg->n_kv_heads);
         store_kv(s, c->l, c->pos0 + t, k, v);
         break;
     }

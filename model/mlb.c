@@ -70,6 +70,11 @@ static ml_status parse_header(ml_config *cfg, int *shared, const uint8_t *h) {
     if (qkn > 1 || win > MAX_TOKENS) return ML_E_FORMAT;
     cfg->qk_norm = (int)qkn;
     cfg->sliding_window = (int)win;
+    const uint32_t lflags = rd32(h + 96);
+    if (lflags > 1) return ML_E_FORMAT;
+    cfg->layer_flags = (int)lflags;
+    cfg->rope_local_theta = rdf(h + 100);
+    if (!(cfg->rope_local_theta >= 0.0f && cfg->rope_local_theta < 1e30f)) return ML_E_FORMAT;
     if (!(cfg->rope_theta > 0.0f) || !(cfg->norm_eps >= 0.0f)) return ML_E_FORMAT;
     cfg->rope_type = (int)rd32(h + 52);
     cfg->rope_factor = rdf(h + 56);
@@ -114,9 +119,17 @@ ml_status ml_model_load(ml_model *m, const char *path) {
 
     cursor cur = { m->file.data, ML_MLB_HEADER_SIZE, m->file.size, 1 };
     const size_t normsz = (size_t)c->dim * sizeof(float);
+    const uint8_t *lf = c->layer_flags ? take(&cur, (size_t)c->n_layers) : NULL;
+    for (int l = 0; lf && cur.ok && l < c->n_layers; l++)
+        if ((lf[l] & ~ML_LAYER_ALL) || ((lf[l] & ML_LAYER_LOCAL_ROPE) && !(c->rope_local_theta > 0.0f))) {
+            ml_model_free(m);
+            return ML_E_FORMAT;
+        }
     m->tok_emb = take_mat(&cur, c->vocab, c->dim, WT(ML_Q8M_EMB | (shared ? ML_Q8M_CLS : 0)));
     for (int l = 0; l < c->n_layers; l++) {
         ml_layer *L = &m->layers[l];
+        L->window = !lf || (lf[l] & ML_LAYER_SLIDING) ? c->sliding_window : 0;
+        L->local_rope = lf && (lf[l] & ML_LAYER_LOCAL_ROPE);
         L->attn_norm = take(&cur, normsz);
         L->wq = take_mat(&cur, c->q_dim, c->dim, WT(ML_Q8M_QK));
         L->wk = take_mat(&cur, c->kv_dim, c->dim, WT(ML_Q8M_QK));

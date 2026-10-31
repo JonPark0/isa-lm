@@ -34,7 +34,9 @@ straight into it without copying. Everything is little-endian.
 | 84 | `u32` | `qk_norm` | 0 or 1: per-head RMSNorm of q and k before RoPE (Qwen3) |
 | 88 | `f32` | `rope_attn_factor` | yarn only: > 0, multiplies RoPE's cos and sin; 0 otherwise |
 | 92 | `u32` | `sliding_window` | 0: full attention; else each position attends to the last this many |
-| 96 | | padding | zero up to offset 256 |
+| 96 | `u32` | `layer_flags` | 0 or 1: a byte of flags per layer follows the header (below) |
+| 100 | `f32` | `rope_local_theta` | ≥ 0: RoPE base of the layers flagged for it, used unscaled (Gemma 3) |
+| 104 | | padding | zero up to offset 256 |
 
 `dim`, `n_layers`, `n_heads`, `n_kv_heads` and `hidden_dim` are limited to
 65536. `vocab` and `max_seq` are limited to 2^24. Files written before RoPE
@@ -56,11 +58,18 @@ have 0 at offset 76. With `qk_norm` set, each layer then stores `q_norm` and
 `k_norm` (`head_dim` floats each), applied to every query and key head after
 the biases and before RoPE, with `norm_eps`.
 
+With `layer_flags` set, `n_layers` bytes (padded to 64 like every array)
+come first in the body, one per layer: bit 0, the layer attends through the
+sliding window; bit 1, it rotates with `rope_local_theta` instead of
+`rope_theta` and its scaling; other bits must be 0. Without them the window,
+if any, applies to every layer.
+
 ## Body
 
 The arrays start at offset 256 and come in this order:
 
 ```
+layer flags                 n_layers            (u8; only if layer_flags)
 tok_emb                     vocab × dim         (wtype, or Q8_0 per q8_mask; same below)
 for each layer:
   attn_norm                 dim                 (F32)
