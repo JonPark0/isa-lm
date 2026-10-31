@@ -4,8 +4,6 @@ name: llama.cpp comparison
 # runners (Qwen2.5 0.5B Instruct, Q8_0 and Q4_0, wikitext-2 perplexity). The
 # results table goes to the run's summary, an artifact and one annotation.
 on:
-  push:
-    branches: [bench/arm-compare]   # temporary: a first run before the workflow is on main
   workflow_dispatch:
     inputs:
       llama_cpp:
@@ -49,7 +47,9 @@ jobs:
           .github/scripts/apt-install.sh python3-numpy
           pip install --user --break-system-packages "pyarrow<18"   # the last before NumPy 2
       - name: CPU
-        run: lscpu | grep -E 'Model name|^CPU\(s\)|Flags' | cut -c1-400
+        run: |
+          lscpu | grep -E 'Model name|^CPU\(s\)|Flags' | cut -c1-400
+          echo "::notice title=cpu ${{ matrix.name }}::$(lscpu | sed -n 's/^Model name: *//p' | head -n 1), $(nproc) CPUs"
       - name: Build llama.cpp
         env:
           TAG: ${{ inputs.llama_cpp || 'b11835' }}
