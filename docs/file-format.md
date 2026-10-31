@@ -173,7 +173,7 @@ All size arithmetic is overflow-checked, which matters on 32-bit targets.
 | 16 | `u32` | `n_merges` | merge rules |
 | 20 | `i32` | `bos` | BOS id, or −1 |
 | 24 | `i32` | `eos` | EOS id, or −1 |
-| 28 | `u32` | `flags` | 1: prepend BOS when encoding; 2: `ignore_merges` (a whole pre-token found in the vocabulary is one token); 4: SentencePiece prefix `▁` only at the start of the text, not after each added token; 8: byte-level, NFC-normalize the text between added tokens; 16: byte-level, numbers are split into single digits (`\p{N}` instead of `\p{N}{1,3}`); other bits must be 0 |
+| 28 | `u32` | `flags` | 1: prepend BOS when encoding; 2: `ignore_merges` (a whole pre-token found in the vocabulary is one token); 4: SentencePiece prefix `▁` only at the start of the text, not after each added token; 8: byte-level, NFC-normalize the text between added tokens; 16: byte-level, numbers are split into single digits (`\p{N}` instead of `\p{N}{1,3}`); 32: byte-level, the GPT-2 regex instead of the Llama 3 one; 64: byte-level, every `\p{N}` is split off before the regex (a `Digits(individual_digits)` pre-tokenizer); other bits must be 0 |
 
 Then `n_vocab` tokens, each `u8 attr`, `u32 len` and `len` bytes:
 

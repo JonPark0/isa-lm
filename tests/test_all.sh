@@ -73,7 +73,7 @@ else skip "stories15M generate" "download blocked"; rm -f $M/stories15M.bin; fi
 
 # Hugging Face tokenizers: real tokenizer.json files (network), checked against
 # the tokenizers library when it is installed (check_tokenizer.py exits 77 if not)
-for spec in "tinyllama TinyLlama/TinyLlama-1.1B-Chat-v1.0" "llama3 unsloth/Llama-3.2-1B" "qwen2 Qwen/Qwen2.5-0.5B-Instruct"; do
+for spec in "tinyllama TinyLlama/TinyLlama-1.1B-Chat-v1.0" "llama3 unsloth/Llama-3.2-1B" "qwen2 Qwen/Qwen2.5-0.5B-Instruct" "smollm2 HuggingFaceTB/SmolLM2-135M-Instruct"; do
     name=${spec%% *}; repo=${spec#* }
     [ -f $M/$name.json ] || curl -sfL -o $M/$name.json https://huggingface.co/$repo/resolve/main/tokenizer.json || rm -f $M/$name.json
     if [ ! -f $M/$name.json ]; then skip "tokenizer $name vs tokenizers lib" "download blocked"; continue; fi

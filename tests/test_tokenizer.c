@@ -90,7 +90,7 @@ static void test_limits(void) {
         fclose(f);
         TT_EQ_INT(ml_tokenizer_load(&t, tmp, 0), ML_E_FORMAT);
     }
-    buf[28] = 0x20;   /* unknown flag */
+    buf[28] = 0x80;   /* unknown flag */
     f = fopen(tmp, "wb");
     fwrite(buf, 1, n, f);
     fclose(f);
@@ -130,6 +130,23 @@ static void test_qwen2_flags(void) {
     const int na = ml_encode(&t, "naive cafe\xCC\x81", 1, 0, a, 16), nb = ml_encode(&t, "naive caf\xC3\xA9", 1, 0, b, 16);
     TT_ASSERT(na == nb && na > 0 && !memcmp(a, b, sizeof(int) * (size_t)na));
     check_ids(&t, "123", IDS(0, 18, 19, 20));
+    ml_tokenizer_free(&t);
+}
+
+/* The GPT-2 regex, alone and after a Digits(individual_digits) split
+ * (SmolLM2): ids from the tokenizers library with bpe_tiny.json's
+ * pre-tokenizer replaced accordingly. */
+static void test_gpt2_flags(void) {
+    ml_tokenizer t;
+    TT_EQ_INT(ml_tokenizer_load(&t, bpe_path, 0), ML_OK);
+    t.flags |= ML_TOKF_GPT2;
+    check_ids(&t, "it's what They'll do", IDS(0, 287, 272, 313, 222, 53, 258, 90, 273, 308));
+    check_ids(&t, "  a  b ", IDS(0, 222, 222, 66, 222, 222, 67, 222));
+    check_ids(&t, "x 123 4567", IDS(0, 89, 222, 318, 222, 319, 24));
+    check_ids(&t, "tabs\tand\nnewlines\n\n", IDS(0, 321, 199, 279, 69, 200, 329, 304));
+    t.flags |= ML_TOKF_ISOLATE_DIGITS;
+    check_ids(&t, "x 123 4567", IDS(0, 89, 222, 18, 19, 20, 222, 21, 22, 23, 24));
+    check_ids(&t, "hello world", IDS(0, 265, 266));
     ml_tokenizer_free(&t);
 }
 
@@ -173,6 +190,9 @@ static void test_chat_templates(void) {
                  "<|im_start|>system\nYou are Qwen, created by Alibaba Cloud. You are a helpful assistant.<|im_end|>\n"
                  "<|im_start|>user\nHi<|im_end|>\n<|im_start|>assistant\n");
     check_render(ML_CHAT_QWEN, "Be kind.", "More", 0, "\n<|im_start|>user\nMore<|im_end|>\n<|im_start|>assistant\n");
+    check_render(ML_CHAT_SMOLLM, NULL, "Hi", 1,
+                 "<|im_start|>system\nYou are a helpful AI assistant named SmolLM, trained by Hugging Face<|im_end|>\n"
+                 "<|im_start|>user\nHi<|im_end|>\n<|im_start|>assistant\n");
     char longmsg[600];
     memset(longmsg, 'x', sizeof longmsg - 1);
     longmsg[sizeof longmsg - 1] = '\0';
@@ -193,6 +213,7 @@ int TT_ENTRY(int argc, char **argv) {
     TT_RUN(test_byte_bpe);
     TT_RUN(test_limits);
     TT_RUN(test_qwen2_flags);
+    TT_RUN(test_gpt2_flags);
     TT_RUN(test_llama2c);
     TT_RUN(test_chat_templates);
     TT_MAIN_END("test_tokenizer");
