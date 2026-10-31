@@ -1,20 +1,15 @@
 #!/bin/sh
-# Compares isa-lm with llama.cpp on one Hugging Face model: speed per ISA
-# level (x86-64 or AArch64) and perplexity, with the same weight formats (Q8_0,
-# and Q4_0 for every matrix). Results go to $OUT/results.md;
-# docs/benchmarks.md describes the runs.
+# Compares isa-lm with llama.cpp on one Hugging Face model: speed per x86 ISA
+# level and perplexity, with the same weight formats (Q8_0, and Q4_0 for every
+# matrix). Results go to $OUT/results.md; docs/benchmarks.md describes a run.
 #
 #   scripts/compare_llamacpp.sh LLAMA_CPP_DIR HF_DIR F16_GGUF TEXT [OUT]
 #
-# LLAMA_CPP_DIR is a llama.cpp checkout with CMake build directories. On x86-64:
+# LLAMA_CPP_DIR is a llama.cpp checkout with CMake build directories:
 #   build-native  GGML_NATIVE=ON (llama-bench, llama-perplexity, llama-quantize)
 #   build-avx2    GGML_NATIVE=OFF, AVX2 + FMA + F16C, no AVX-512   (llama-bench)
 #   build-sse42   GGML_NATIVE=OFF, SSE4.2 only                      (llama-bench)
 #   build-base    GGML_NATIVE=OFF, every x86 extension off (SSE2)  (llama-bench)
-# On AArch64:
-#   build-native  GGML_NATIVE=ON (llama-bench, llama-perplexity, llama-quantize)
-#   build-dotprod GGML_NATIVE=OFF, GGML_CPU_ARM_ARCH=armv8.2-a+dotprod (llama-bench)
-#   build-base    GGML_NATIVE=OFF, GGML_CPU_ARM_ARCH=armv8-a           (llama-bench)
 # A missing directory skips that row. F16_GGUF is the model converted by
 # llama.cpp (for Qwen2.5, the official *-fp16.gguf); TEXT is the perplexity
 # text (for example the wikitext-2 test set).
@@ -29,23 +24,16 @@ THREADS=${THREADS:-"1 4"} TOKENS=${TOKENS:-128} REPS=${REPS:-3} CTX=${CTX:-512} 
 mkdir -p "$OUT"
 log() { printf '%s\n' "$*" >&2; }
 
-case $(uname -m) in
-    aarch64|arm64) CANDIDATES="neon_i8mm sve neon_dotprod neon"; LEVELS="neon_dotprod:build-dotprod neon:build-base" ;;
-    *) CANDIDATES="avx512vnni avxvnni avx2 sse41 sse2"; LEVELS="avx2:build-avx2 sse41:build-sse42 sse2:build-base" ;;
-esac
 if [ -z "${NATIVE_ISA:-}" ]; then
-    for isa in $CANDIDATES; do
+    for isa in avx512vnni avxvnni avx2 sse41 sse2; do
         make -s ISA=$isa build/$isa/ml_tok >/dev/null 2>&1 || continue
         if build/$isa/ml_tok --help >/dev/null 2>&1; then NATIVE_ISA=$isa; break; fi
     done
 fi
-[ -n "${NATIVE_ISA:-}" ] || { log "no ISA build runs on this machine"; exit 1; }
-# the native pair, then the lower levels (the native ISA is not repeated)
-PAIRS="$NATIVE_ISA:build-native"
-for pair in $LEVELS; do [ "${pair%%:*}" = "$NATIVE_ISA" ] || PAIRS="$PAIRS $pair"; done
+[ -n "${NATIVE_ISA:-}" ] || { log "no x86 ISA build runs on this machine"; exit 1; }
 
 # isa-lm builds (threaded) and models
-for pair in $PAIRS; do make -s ISA=${pair%%:*} THREADS=pthread -j4 >/dev/null; done
+for isa in $NATIVE_ISA avx2 sse41 sse2; do make -s ISA=$isa THREADS=pthread -j4 >/dev/null; done
 make -s ISA=$NATIVE_ISA -j4 >/dev/null
 [ -f "$OUT/tok.mlt" ] || python3 tools/convert_tokenizer.py "$HF/tokenizer.json" "$OUT/tok.mlt" >/dev/null
 for wt in q8 q4; do
@@ -78,7 +66,7 @@ lcpp_speed() {   # BUILD MODEL THREADS
 {
 echo "| ISA level | Runtime | Weights | Size | Threads | Prefill tok/s | Decode tok/s |"
 echo "|-----------|---------|---------|-----:|--------:|--------------:|-------------:|"
-for pair in $PAIRS; do
+for pair in "$NATIVE_ISA:build-native" avx2:build-avx2 sse41:build-sse42 sse2:build-base; do
     isa=${pair%%:*} dir=${pair#*:}
     for wt in q8 q4; do for t in $THREADS; do
         log "isa-lm $isa $wt -t $t"
