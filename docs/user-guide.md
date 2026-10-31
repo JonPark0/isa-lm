@@ -266,19 +266,20 @@ Other models on the same text (Q8 against the F32 numpy reference):
 | SmolLM2 135M Instruct | 23.44 | 23.52 | 31.67 |
 | Gemma 3 1B Instruct | 42.32 | 42.20 | 53.68 |
 
-Gemma 3 1B loses the most to Q4_0. Keeping `emb,cls,v,down` in Q8 gives
-47.40 at 843 MB (Q4: 625 MB, Q8: 1125 MB). Google's quantization-aware
-checkpoint of it (`gemma-3-1b-it-qat-q4_0-unquantized`) was trained for
-llama.cpp's Q4_0 rounding. With `--q4-rule round`, which rounds the same way,
-its Q4 conversion reaches 40.50 at 562 MB (f16 scales). That is below its own
-Q8 (42.53) and below the regular checkpoint's F32 reference. The fitted rule
-gives 47.43 on it:
+Gemma 3 1B loses the most to Q4_0. With the fitted rule it reaches 53.25
+(f16 scales), and keeping `emb,cls,v,down` in Q8 gives 47.40 at 843 MB.
+llama.cpp's plain Q4_0 rounding (`--q4-rule round`) does better on Gemma 3,
+49.83 at 562 MB, though not on the others in the table below. Google's
+quantization-aware checkpoint (`gemma-3-1b-it-qat-q4_0-unquantized`) was
+trained for exactly that rounding, and with it reaches 40.50 at 562 MB. That
+is below its own Q8 (42.53) and below the regular checkpoint's F32 reference;
+the fit gives 47.43 on it. The converter therefore rounds Gemma 3 checkpoints
+by default and fits the others; `--q4-rule fit|round` overrides it.
 
-```sh
-python3 tools/convert.py hf ./gemma-3-1b-it-qat-q4_0-unquantized gemma-qat.mlb --wtype q4 --q4-rule round
-```
-
-Use the fitted rule (the default) for every other checkpoint.
+| Q4 rule (f16 scales) | Qwen2.5 0.5B | Llama 3.2 1B | Gemma 3 1B | Gemma 3 1B QAT |
+|---|---:|---:|---:|---:|
+| fit | **21.73** | **19.90** | 53.25 | 47.43 |
+| round | 22.45 | 19.94 | **49.83** | **40.50** |
 
 The converter fits each Q4 block's scale by weighted least squares over a few
 candidate mappings, rather than dividing the block's maximum by 7 (Llama 3.2

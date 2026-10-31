@@ -149,8 +149,8 @@ cubes do not underflow. `d` can be negative. With `f16` scales the fitted `d`
 is rounded to the nearest `f16`. Any `d` and nibbles are valid input to the
 runtime.
 
-With `tools/convert.py --q4-rule round`, Q4_0 blocks are rounded as
-llama.cpp does instead: `d` is the element of largest magnitude divided by −8,
+With `tools/convert.py --q4-rule round` (the default for Gemma 3), Q4_0 blocks
+are rounded as llama.cpp does instead: `d` is the element of largest magnitude divided by −8,
 and each level is `trunc(x × (1/d) + 8.5)`, at most 15, minus 8.
 Quantization-aware checkpoints trained for Q4_0 expect exactly this rounding.
 
