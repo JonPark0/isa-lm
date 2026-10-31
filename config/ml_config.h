@@ -177,6 +177,7 @@
 #else
 #define ml_k_silu_mul ml_k_silu_mul_scalar
 #endif
+#define ml_k_gelu_mul ml_k_gelu_mul_scalar
 
 #if defined(ML_HAS_ADD_AVX512VNNI)
 #define ml_k_add ml_k_add_avx512vnni

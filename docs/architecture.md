@@ -83,17 +83,17 @@ instruction can execute on an unsupported CPU, not even in a function prologue.
 ## Data flow for one token
 
 ```
-x = dequant(tok_emb[token])
+x = dequant(tok_emb[token]) · embed_scale
 for each layer:
     h  = rmsnorm(x) ; qa = quantize_q8(h)
     q, k, v = matvec(Wq|Wk|Wv, qa) (+ biases) ; per-head q/k norm (Qwen3) ; rope(q, k)
                                                       k, v go into the KV cache (F32, or quantized for Q8)
     o  = attention(q, K[w..pos], V[w..pos])           per head, GQA head h → kv head h / (n_heads / n_kv_heads);
                                                       w = 0, or pos + 1 − sliding_window with a window
-    x += matvec(Wo, quantize_q8(o))
+    x += matvec(Wo, quantize_q8(o))                   (rmsnorm'd first with post-norms, Gemma 3)
     h  = rmsnorm(x) ; qa = quantize_q8(h)
-    g  = silu(matvec(W1, qa)) * matvec(W3, qa)
-    x += matvec(W2, quantize_q8(g))
+    g  = act(matvec(W1, qa)) * matvec(W3, qa)         act: SiLU, or GELU (tanh) for Gemma
+    x += matvec(W2, quantize_q8(g))                   (rmsnorm'd first with post-norms)
 logits = matvec(Wcls, quantize_q8(rmsnorm(x)))
 ```
 

@@ -134,7 +134,8 @@ const char *ml_decode(ml_tokenizer *t, int prev, int tok) {
     if (t->kind != ML_TOK_LLAMA2C) {
         const char *p = t->text[tok];
         /* SentencePiece drops the space it prepended to the text */
-        if (t->kind == ML_TOK_SPM && (prev < 0 || prev == t->bos) && p[0] == ' ') p++;
+        if (t->kind == ML_TOK_SPM && !(t->flags & ML_TOKF_NO_PREPEND) && (prev < 0 || prev == t->bos) && p[0] == ' ')
+            p++;   /* the U+2581 the encoder put before the text */
         return p;
     }
     const char *p = t->vocab[tok];

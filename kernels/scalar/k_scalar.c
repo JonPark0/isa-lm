@@ -97,6 +97,13 @@ void ml_k_silu_mul_scalar(float *g, const float *u, int n) {
     for (int i = 0; i < n; i++) g[i] = g[i] / (1.0f + expf(-g[i])) * u[i];
 }
 
+void ml_k_gelu_mul_scalar(float *g, const float *u, int n) {
+    for (int i = 0; i < n; i++) {
+        const float x = g[i];
+        g[i] = 0.5f * x * (1.0f + tanhf(0.7978845608f * (x + 0.044715f * x * x * x))) * u[i];
+    }
+}
+
 void ml_k_add_scalar(float *y, const float *x, int n) {
     for (int i = 0; i < n; i++) y[i] += x[i];
 }

@@ -214,6 +214,10 @@ static void test_load_rejects_bad_attention_fields(void) {
     TT_EQ_INT(load_patched(0, 92, 8), ML_OK);                /* a window alone needs no other data */
     TT_EQ_INT(load_patched(0, 96, 2), ML_E_FORMAT);          /* per-layer flags present: 0 or 1 */
     TT_EQ_INT(load_patched(0, 100, 0xbf800000u), ML_E_FORMAT);   /* negative local RoPE base */
+    TT_EQ_INT(load_patched(0, 104, 2), ML_E_FORMAT);         /* unknown activation */
+    TT_EQ_INT(load_patched(0, 108, 2), ML_E_FORMAT);         /* post_norms is a 0/1 flag */
+    TT_EQ_INT(load_patched(0, 112, 0xbf800000u), ML_E_FORMAT);   /* negative embedding scale */
+    TT_EQ_INT(load_patched(0, 116, 0x7fc00000u), ML_E_FORMAT);   /* NaN attention scale */
 }
 
 /* q8_mask (offset 72): only Q4 models may keep classes in Q8, and only known

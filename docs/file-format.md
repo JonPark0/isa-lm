@@ -36,7 +36,11 @@ straight into it without copying. Everything is little-endian.
 | 92 | `u32` | `sliding_window` | 0: full attention; else each position attends to the last this many |
 | 96 | `u32` | `layer_flags` | 0 or 1: a byte of flags per layer follows the header (below) |
 | 100 | `f32` | `rope_local_theta` | ≥ 0: RoPE base of the layers flagged for it, used unscaled (Gemma 3) |
-| 104 | | padding | zero up to offset 256 |
+| 104 | `u32` | `act` | FFN activation: `0` = SiLU, `1` = GELU with the tanh approximation (Gemma) |
+| 108 | `u32` | `post_norms` | 0 or 1: the attention and FFN outputs are RMS-normalized before the residual (Gemma 3) |
+| 112 | `f32` | `embed_scale` | ≥ 0: factor on the embedding rows; 0 means 1 (Gemma: `sqrt(dim)`) |
+| 116 | `f32` | `attn_scale` | ≥ 0: attention score factor; 0 means `1/sqrt(head_dim)` |
+| 120 | | padding | zero up to offset 256 |
 
 `dim`, `n_layers`, `n_heads`, `n_kv_heads` and `hidden_dim` are limited to
 65536. `vocab` and `max_seq` are limited to 2^24. Files written before RoPE
@@ -83,6 +87,7 @@ for each layer:
   w1   (gate)               hidden_dim × dim    (wtype)
   w2   (down)               dim × hidden_dim    (wtype)
   w3   (up)                 hidden_dim × dim    (wtype)
+  post_attn_norm, post_ffn_norm  dim, dim       (F32; only if post_norms)
 final_norm                  dim                 (F32)
 wcls                        vocab × dim         (wtype; omitted if shared_classifier)
 ```

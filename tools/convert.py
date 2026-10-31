@@ -2,7 +2,7 @@
 
   convert.py llama2c IN.bin OUT.mlb [--wtype q8|q4] [--q8 LIST]   llama2.c legacy (v0) export
   convert.py hf DIR OUT.mlb [--wtype q8|q4] [--q8 LIST] [--max-seq N]
-                                                      HF Llama, Mistral, Qwen2, Qwen3: config.json + *.safetensors
+                                                      HF Llama, Mistral, Qwen2, Qwen3, Gemma 3 (text): config.json + *.safetensors
   --imatrix FILE (q4): weight the Q4 fits by an importance matrix from
                        ml_run --imatrix, run on a Q8 conversion of the same model
 """
@@ -87,7 +87,7 @@ def _unrotate(w, n_heads):
     return w.reshape(n_heads, 2, hd // 2, dim).transpose(0, 2, 1, 3).reshape(rows, dim)
 
 
-HF_TYPES = ("llama", "mistral", "qwen2", "qwen3")
+HF_TYPES = ("llama", "mistral", "qwen2", "qwen3", "gemma3_text")
 
 
 def _window(c):
@@ -98,6 +98,9 @@ def _window(c):
     n = c["num_hidden_layers"]
     if c.get("layer_types"):
         sliding = [t == "sliding_attention" for t in c["layer_types"]]
+    elif c.get("model_type") == "gemma3_text":   # every sliding_window_pattern-th layer attends to all
+        pat = c.get("sliding_window_pattern", 6)
+        sliding = [(i + 1) % pat != 0 for i in range(n)]
     elif c.get("model_type") in ("qwen2", "qwen3"):   # layers from max_window_layers on, if enabled
         sliding = [bool(c.get("use_sliding_window")) and i >= c.get("max_window_layers", n) for i in range(n)]
     else:
@@ -142,14 +145,18 @@ def _rope_scaling(c, hd):
 
 
 def load_hf(d, max_seq=None):
-    """-> (cfg, float32 weights) from a HF Llama, Mistral, Qwen2 or Qwen3 directory."""
+    """-> (cfg, float32 weights) from a HF Llama, Mistral, Qwen2, Qwen3 or Gemma 3 (text) directory."""
     with open(os.path.join(d, "config.json")) as fh:
         c = json.load(fh)
     mtype = c.get("model_type", "llama")
     if mtype not in HF_TYPES:
         raise ValueError(f"model_type {mtype!r} is not supported (only {', '.join(HF_TYPES)})")
-    if c.get("hidden_act", "silu") != "silu":
-        raise ValueError(f"hidden_act {c['hidden_act']!r} is not supported (only silu)")
+    gemma = mtype == "gemma3_text"
+    act = c.get("hidden_activation", c.get("hidden_act", "silu"))
+    if act not in ("silu", "gelu_pytorch_tanh"):
+        raise ValueError(f"activation {act!r} is not supported (silu and gelu_pytorch_tanh are)")
+    if c.get("final_logit_softcapping") or c.get("attn_logit_softcapping"):
+        raise ValueError("logit soft-capping is not supported")
     if c.get("mlp_bias"):
         raise ValueError("MLP biases are not supported")
     if c.get("partial_rotary_factor", 1.0) != 1.0:
@@ -182,17 +189,33 @@ def load_hf(d, max_seq=None):
                rope_theta=float(c.get("rope_theta", 10000.0)), norm_eps=float(c.get("rms_norm_eps", 1e-5)),
                shared_classifier=int(tied), rope_scaling=rope_scaling, head_dim=hd, qk_norm=int(qk_norm),
                sliding_window=window or 0,
-               layer_flags=[mlb.LAYER_SLIDING if sl else 0 for sl in sliding] if sliding else None)
-    w = {"tok_emb": t["model.embed_tokens.weight"], "final_norm": t["model.norm.weight"], "layers": []}
+               layer_flags=[mlb.LAYER_SLIDING if sl else 0 for sl in sliding] if sliding else None,
+               act="gelu_tanh" if act == "gelu_pytorch_tanh" else "silu")
+    if gemma:
+        # sliding layers rotate with the local base; embeddings scaled by
+        # sqrt(dim); scores by query_pre_attn_scalar^-0.5; norms of each block's
+        # output. Gemma's RMSNorm multiplies by (1 + w): the +1 goes into the
+        # stored weights.
+        n = cfg["n_layers"]
+        local = ([t == "sliding_attention" for t in c["layer_types"]] if c.get("layer_types") else
+                 [(i + 1) % c.get("sliding_window_pattern", 6) != 0 for i in range(n)])
+        # the local layers keep their RoPE base even when the context fits the window
+        cfg.update(layer_flags=[(mlb.LAYER_LOCAL_ROPE | (mlb.LAYER_SLIDING if window else 0)) if x else 0
+                                for x in local],
+                   rope_local_theta=float(c.get("rope_local_base_freq", 10000.0)),
+                   embed_scale=float(np.float32(math.sqrt(c["hidden_size"]))),
+                   attn_scale=float(c.get("query_pre_attn_scalar", hd)) ** -0.5, post_norms=1)
+    norm = (lambda v: v + 1.0) if gemma else (lambda v: v)
+    w = {"tok_emb": t["model.embed_tokens.weight"], "final_norm": norm(t["model.norm.weight"]), "layers": []}
     for i in range(cfg["n_layers"]):
         p = f"model.layers.{i}."
         w["layers"].append({
-            "attn_norm": t[p + "input_layernorm.weight"],
+            "attn_norm": norm(t[p + "input_layernorm.weight"]),
             "wq": _unrotate(t[p + "self_attn.q_proj.weight"], nh),
             "wk": _unrotate(t[p + "self_attn.k_proj.weight"], nkv),
             "wv": t[p + "self_attn.v_proj.weight"],
             "wo": t[p + "self_attn.o_proj.weight"],
-            "ffn_norm": t[p + "post_attention_layernorm.weight"],
+            "ffn_norm": norm(t[p + ("pre_feedforward_layernorm" if gemma else "post_attention_layernorm") + ".weight"]),
             "w1": t[p + "mlp.gate_proj.weight"],
             "w2": t[p + "mlp.down_proj.weight"],
             "w3": t[p + "mlp.up_proj.weight"],
@@ -202,8 +225,11 @@ def load_hf(d, max_seq=None):
                                    bk=_unrotate(t[p + "self_attn.k_proj.bias"][:, None], nkv)[:, 0],
                                    bv=t[p + "self_attn.v_proj.bias"])
         if qk_norm:   # per-head weights, permuted as each head's q/k rows are
-            w["layers"][-1].update(q_norm=_unrotate(t[p + "self_attn.q_norm.weight"][:, None], 1)[:, 0],
-                                   k_norm=_unrotate(t[p + "self_attn.k_norm.weight"][:, None], 1)[:, 0])
+            w["layers"][-1].update(q_norm=norm(_unrotate(t[p + "self_attn.q_norm.weight"][:, None], 1)[:, 0]),
+                                   k_norm=norm(_unrotate(t[p + "self_attn.k_norm.weight"][:, None], 1)[:, 0]))
+        if gemma:   # Gemma's post_attention_layernorm normalizes the attention output
+            w["layers"][-1].update(post_attn_norm=norm(t[p + "post_attention_layernorm.weight"]),
+                                   post_ffn_norm=norm(t[p + "post_feedforward_layernorm.weight"]))
     if not tied:
         w["wcls"] = t["lm_head.weight"]
     return cfg, w

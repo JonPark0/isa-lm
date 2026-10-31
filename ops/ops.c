@@ -123,7 +123,7 @@ static void attend(const ml_config *cfg, const ml_kv_layer *kv, float *out, cons
     const int n = pos + 1 - first;   /* positions attended, from `first` on */
     const size_t ld = (size_t)cfg->kv_dim, ldd = (size_t)cfg->n_kv_heads, ldatt = (size_t)cfg->max_seq;
     const size_t off = (size_t)kvh * hd + (size_t)first * ld, offd = (size_t)first * ldd;
-    const float scale = 1.0f / sqrtf((float)hd);
+    const float scale = cfg->attn_scale;
     for (int t0 = 0; t0 < n; t0 += ATT_BLOCK) {
         const int m = n - t0 < ATT_BLOCK ? n - t0 : ATT_BLOCK;
         for (int h = g0; h < g1; h++) {

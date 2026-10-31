@@ -92,11 +92,14 @@ def forward(cfg, t, tokens, kv="f32"):
     group = nh // nkv
     cos_t, sin_t = rope_tables(cfg)
     emb = mlb.dequant(t["tok_emb"])
+    escale = np.float32(cfg.get("embed_scale") or 1.0)
+    ascale = float(cfg.get("attn_scale") or 0.0) or 1.0 / np.sqrt(hd)
+    gelu = cfg.get("act") == "gelu_tanh"
     kcache = [[] for _ in t["layers"]]
     vcache = [[] for _ in t["layers"]]
     out = []
     for pos, tok in enumerate(tokens):
-        x = emb[tok].astype(np.float32).copy()
+        x = (emb[tok].astype(np.float32) * escale).astype(np.float32)
         for li, L in enumerate(t["layers"]):
             win = mlb.layer_window(cfg, li)
             ct, st = local if mlb.layer_local_rope(cfg, li) else (cos_t, sin_t)
@@ -127,15 +130,24 @@ def forward(cfg, t, tokens, kv="f32"):
             for hh in range(nh):
                 kh = hh // group
                 qh = np.asarray(q[hh * hd:(hh + 1) * hd], np.float64)
-                sc = K[:, kh * hd:(kh + 1) * hd] @ qh / np.sqrt(hd)
+                sc = K[:, kh * hd:(kh + 1) * hd] @ qh * ascale
                 p = softmax(sc)
                 o[hh * hd:(hh + 1) * hd] = p @ V[:, kh * hd:(kh + 1) * hd]
-            x = (x + m.matvec(L["wo"], o)).astype(np.float32)
+            a = m.matvec(L["wo"], o)
+            if "post_attn_norm" in L:   # Gemma 3: the block's output is normalized before the residual
+                a = rmsnorm(a, L["post_attn_norm"], eps)
+            x = (x + a).astype(np.float32)
             h = rmsnorm(x, L["ffn_norm"], eps)
             g = m.matvec(L["w1"], h).astype(np.float64)
             u = m.matvec(L["w3"], h).astype(np.float64)
-            g = (g / (1.0 + np.exp(-g)) * u).astype(np.float32)
-            x = (x + m.matvec(L["w2"], g)).astype(np.float32)
+            if gelu:   # tanh approximation (gelu_pytorch_tanh)
+                g = (0.5 * g * (1.0 + np.tanh(0.7978845608028654 * (g + 0.044715 * g * g * g))) * u).astype(np.float32)
+            else:
+                g = (g / (1.0 + np.exp(-g)) * u).astype(np.float32)
+            f = m.matvec(L["w2"], g)
+            if "post_ffn_norm" in L:
+                f = rmsnorm(f, L["post_ffn_norm"], eps)
+            x = (x + f).astype(np.float32)
         out.append(m.matvec(t["wcls"], rmsnorm(x, t["final_norm"], eps)))
     return np.stack(out).astype(np.float32)
 

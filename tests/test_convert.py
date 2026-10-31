@@ -415,6 +415,105 @@ def test_hf_rope_scaling_types(tmp_path):
                                rtol=1e-6)
 
 
+def _gemma3_hf(tmp_path):
+    """A small Gemma 3 text checkpoint: HF names, norms stored as w - 1, every
+    second layer local (window 4, base 100) -> (dir, config, float64 weights)."""
+    rng = np.random.default_rng(9)
+    D, H, KV, hd, F, V, NL = 64, 2, 1, 32, 128, 96, 4
+    c = {"model_type": "gemma3_text", "hidden_size": D, "num_attention_heads": H, "num_key_value_heads": KV,
+         "head_dim": hd, "intermediate_size": F, "vocab_size": V, "num_hidden_layers": NL,
+         "max_position_embeddings": 32, "rope_theta": 10000.0, "rope_local_base_freq": 100.0,
+         "rms_norm_eps": 1e-6, "sliding_window": 4, "sliding_window_pattern": 2,
+         "query_pre_attn_scalar": 16, "hidden_activation": "gelu_pytorch_tanh", "tie_word_embeddings": True}
+    t, orig = {}, {}
+
+    def put(name, arr):
+        bits, val = _bf16(arr)
+        t[name] = ("BF16", bits)
+        orig[name] = val.astype(np.float64)
+
+    def mat(r, k):
+        return rng.standard_normal((r, k)) / np.sqrt(k)
+
+    put("model.embed_tokens.weight", 0.3 * rng.standard_normal((V, D)))
+    for i in range(NL):
+        p = f"model.layers.{i}."
+        for n in ("input_layernorm", "post_attention_layernorm", "pre_feedforward_layernorm",
+                  "post_feedforward_layernorm"):
+            put(p + n + ".weight", 0.1 * rng.standard_normal(D))
+        put(p + "self_attn.q_norm.weight", 0.3 * rng.standard_normal(hd))
+        put(p + "self_attn.k_norm.weight", 0.3 * rng.standard_normal(hd))
+        put(p + "self_attn.q_proj.weight", mat(H * hd, D))
+        put(p + "self_attn.k_proj.weight", mat(KV * hd, D))
+        put(p + "self_attn.v_proj.weight", mat(KV * hd, D))
+        put(p + "self_attn.o_proj.weight", mat(D, H * hd))
+        put(p + "mlp.gate_proj.weight", mat(F, D))
+        put(p + "mlp.up_proj.weight", mat(F, D))
+        put(p + "mlp.down_proj.weight", mat(D, F))
+    put("model.norm.weight", 0.1 * rng.standard_normal(D))
+    d = tmp_path / "gemma"
+    d.mkdir(parents=True)
+    _write_safetensors(str(d / "model.safetensors"), t)
+    (d / "config.json").write_text(json.dumps(c))
+    return str(d), c, orig
+
+
+def _gemma3_forward(c, w, toks):
+    """Gemma 3 as transformers computes it (rotate_half RoPE, (1 + w) norms)."""
+    D, H, KV, hd = c["hidden_size"], c["num_attention_heads"], c["num_key_value_heads"], c["head_dim"]
+    rms = lambda x, g: x / np.sqrt((x * x).mean(-1, keepdims=True) + c["rms_norm_eps"]) * (1 + g)
+    T = len(toks)
+    x = w["model.embed_tokens.weight"][toks] * np.float32(np.sqrt(D))
+    for i in range(c["num_hidden_layers"]):
+        p = f"model.layers.{i}."
+        local = (i + 1) % c["sliding_window_pattern"] != 0
+        theta = c["rope_local_base_freq"] if local else c["rope_theta"]
+        h = rms(x, w[p + "input_layernorm.weight"])
+        q = rms((h @ w[p + "self_attn.q_proj.weight"].T).reshape(T, H, hd), w[p + "self_attn.q_norm.weight"])
+        k = rms((h @ w[p + "self_attn.k_proj.weight"].T).reshape(T, KV, hd), w[p + "self_attn.k_norm.weight"])
+        v = (h @ w[p + "self_attn.v_proj.weight"].T).reshape(T, KV, hd)
+        q = np.stack([_hf_rope(q[t].reshape(-1), t, hd, theta) for t in range(T)])
+        k = np.stack([_hf_rope(k[t].reshape(-1), t, hd, theta) for t in range(T)])
+        o = np.zeros((T, H, hd))
+        for t in range(T):
+            first = max(0, t + 1 - c["sliding_window"]) if local else 0
+            for hh in range(H):
+                kv = hh // (H // KV)
+                sc = k[first:t + 1, kv] @ q[t, hh] * c["query_pre_attn_scalar"] ** -0.5
+                pr = np.exp(sc - sc.max())
+                o[t, hh] = (pr / pr.sum()) @ v[first:t + 1, kv]
+        x = x + rms(o.reshape(T, -1) @ w[p + "self_attn.o_proj.weight"].T, w[p + "post_attention_layernorm.weight"])
+        h = rms(x, w[p + "pre_feedforward_layernorm.weight"])
+        gg = h @ w[p + "mlp.gate_proj.weight"].T
+        gg = 0.5 * gg * (1 + np.tanh(np.sqrt(2 / np.pi) * (gg + 0.044715 * gg ** 3)))
+        x = x + rms((gg * (h @ w[p + "mlp.up_proj.weight"].T)) @ w[p + "mlp.down_proj.weight"].T,
+                    w[p + "post_feedforward_layernorm.weight"])
+    return rms(x, w["model.norm.weight"]) @ w["model.embed_tokens.weight"].T
+
+
+def test_hf_gemma3(tmp_path):
+    """Gemma 3 text: flags, norms with +1, scales; the converted model run in C
+    (Q8) against transformers' arithmetic on the original weights."""
+    d, c, orig = _gemma3_hf(tmp_path)
+    cfg, w = convert.load_hf(d)
+    assert cfg["act"] == "gelu_tanh" and cfg["post_norms"] == 1 and cfg["attn_scale"] == 0.25
+    assert cfg["layer_flags"] == [3, 0, 3, 0] and cfg["rope_local_theta"] == 100.0 and cfg["sliding_window"] == 4
+    np.testing.assert_allclose(w["layers"][0]["post_attn_norm"],
+                               orig["model.layers.0.post_attention_layernorm.weight"] + 1, rtol=1e-6)
+    exe = os.path.join(ROOT, "build", "scalar", "ml_run")
+    if not os.path.exists(exe):
+        return
+    out = str(tmp_path / "g.mlb")
+    convert.main(["hf", d, out])
+    toks = [2, 7, 1, 30, 44, 5, 9, 61, 3, 12]   # 10 positions: the window of 4 cuts in
+    subprocess.run([exe, out, "--tokens", ",".join(map(str, toks)), "--dump-logits", str(tmp_path / "c.f32")],
+                   check=True)
+    got = np.fromfile(tmp_path / "c.f32", np.float32).reshape(len(toks), -1)
+    ref = _gemma3_forward(c, orig, toks)
+    assert (got.argmax(-1) == ref.argmax(-1)).mean() >= 0.8
+    assert np.abs(got - ref).max() <= 5e-2 * np.abs(ref).max()
+
+
 def test_large_vocab_loads_in_c(tmp_path):
     """Llama-3-sized vocabularies (> 65536) must load and run."""
     exe = os.path.join(ROOT, "build", "scalar", "ml_run")

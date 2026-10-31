@@ -209,6 +209,26 @@ static double *imat_at(const ml_state *s, int l, int which) {
     return s->imat + (size_t)l * (2 * (size_t)c->dim + c->q_dim + c->hidden_dim) + off[which];
 }
 
+/* Embedding row of token tok, times the model's embedding scale (Gemma). */
+static void embed(const ml_model *m, float *x, int tok) {
+    ml_dequant_row(x, &m->tok_emb, tok);
+    if (m->cfg.embed_scale != 1.0f)
+        for (int i = 0; i < m->cfg.dim; i++) x[i] *= m->cfg.embed_scale;
+}
+
+/* FFN activation in place: g = act(g) * u. */
+static void act_mul(const ml_config *c, float *g, const float *u) {
+    if (c->act == ML_ACT_GELU_TANH) ml_k_gelu_mul(g, u, c->hidden_dim);
+    else ml_k_silu_mul(g, u, c->hidden_dim);
+}
+
+/* A block's output y (dim floats) added to the residual x, normalized first
+ * when the model has post-norms (Gemma 3). */
+static void residual_add(const ml_config *c, float *x, float *y, const float *post_norm) {
+    if (post_norm) ml_k_rmsnorm(y, y, post_norm, c->dim, c->norm_eps);
+    ml_k_add(x, y, c->dim);
+}
+
 /* Per-head RMSNorm of n heads of head_dim floats at x (Qwen3), in place. */
 static void heads_norm(float *x, const float *w, int n, const ml_config *c) {
     for (int h = 0; h < n; h++) ml_k_rmsnorm(x + (size_t)h * c->head_dim, x + (size_t)h * c->head_dim, w, c->head_dim, c->norm_eps);
@@ -225,7 +245,7 @@ float *ml_forward(ml_state *s, int token, int pos) {
     const ml_model *m = s->m;
     const ml_config *c = &m->cfg;
     if (pos < 0 || pos >= c->max_seq || token < 0 || token >= c->vocab) return NULL;
-    PROF(ML_PROF_OTHER, ml_dequant_row(s->x, &m->tok_emb, token));
+    PROF(ML_PROF_OTHER, embed(m, s->x, token));
     for (int l = 0; l < c->n_layers; l++) {
         const ml_layer *L = &m->layers[l];
         const ml_kv_layer kv = kv_layer(s, l);
@@ -251,17 +271,17 @@ float *ml_forward(ml_state *s, int token, int pos) {
         PROF(ML_PROF_OTHER, ml_k_quantize_q8(&s->qa_q, s->ao, c->q_dim));
         IMAT(l, ML_IMAT_WO, s->ao, 1, c->q_dim);
         PROF(ML_PROF_WO, ml_matvec(s->pool, s->xb2, &L->wo, &s->qa_q));
-        PROF(ML_PROF_OTHER, ml_k_add(s->x, s->xb2, c->dim);
+        PROF(ML_PROF_OTHER, residual_add(c, s->x, s->xb2, L->post_attn_norm);
                             ml_k_rmsnorm(s->xb, s->x, L->ffn_norm, c->dim, c->norm_eps);
                             ml_k_quantize_q8(&s->qa_dim, s->xb, c->dim));
         IMAT(l, ML_IMAT_FFN, s->xb, 1, c->dim);
         PROF(ML_PROF_FFN, ml_matvec(s->pool, s->hb, &L->w1, &s->qa_dim);
                           ml_matvec(s->pool, s->hb2, &L->w3, &s->qa_dim));
-        PROF(ML_PROF_OTHER, ml_k_silu_mul(s->hb, s->hb2, c->hidden_dim);
+        PROF(ML_PROF_OTHER, act_mul(c, s->hb, s->hb2);
                             ml_k_quantize_q8(&s->qa_hidden, s->hb, c->hidden_dim));
         IMAT(l, ML_IMAT_DOWN, s->hb, 1, c->hidden_dim);
         PROF(ML_PROF_FFN, ml_matvec(s->pool, s->xb2, &L->w2, &s->qa_hidden));
-        PROF(ML_PROF_OTHER, ml_k_add(s->x, s->xb2, c->dim));
+        PROF(ML_PROF_OTHER, residual_add(c, s->x, s->xb2, L->post_ffn_norm));
     }
     PROF(ML_PROF_OTHER, ml_k_rmsnorm(s->xb, s->x, m->final_norm, c->dim, c->norm_eps);
                         ml_k_quantize_q8(&s->qa_dim, s->xb, c->dim));
@@ -312,16 +332,16 @@ static void token_stage(const tok_ctx *c, int t) {
         quantize_row_t(&s->qb_q, s->bao, t);
         break;
     case TOK_FFN_IN:
-        ml_k_add(x, s->bxb2 + (size_t)t * D, D);
+        residual_add(cfg, x, s->bxb2 + (size_t)t * D, L->post_attn_norm);
         ml_k_rmsnorm(xb, x, L->ffn_norm, D, cfg->norm_eps);
         quantize_row_t(&s->qb_dim, s->bxb, t);
         break;
     case TOK_DOWN_IN:
-        ml_k_silu_mul(s->bhb + (size_t)t * H, s->bhb2 + (size_t)t * H, H);
+        act_mul(cfg, s->bhb + (size_t)t * H, s->bhb2 + (size_t)t * H);
         quantize_row_t(&s->qb_hidden, s->bhb, t);
         break;
     case TOK_RESID:
-        ml_k_add(x, s->bxb2 + (size_t)t * D, D);
+        residual_add(cfg, x, s->bxb2 + (size_t)t * D, L->post_ffn_norm);
         break;
     case TOK_CLS_IN:
         ml_k_rmsnorm(xb, x, s->m->final_norm, D, cfg->norm_eps);
@@ -353,7 +373,7 @@ static void prefill_step(ml_state *s, const int *tok, int n, int pos0, float *lo
     const ml_config *c = &m->cfg;
     const int D = c->dim, H = c->hidden_dim, KV = c->kv_dim, QD = c->q_dim;
     s->qb_dim.n = s->qb_hidden.n = s->qb_q.n = n;
-    PROF(ML_PROF_OTHER, for (int t = 0; t < n; t++) ml_dequant_row(s->bx + (size_t)t * D, &m->tok_emb, tok[t]));
+    PROF(ML_PROF_OTHER, for (int t = 0; t < n; t++) embed(m, s->bx + (size_t)t * D, tok[t]));
     for (int l = 0; l < c->n_layers; l++) {
         const ml_layer *L = &m->layers[l];
         const ml_kv_layer kv = kv_layer(s, l);
