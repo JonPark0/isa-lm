@@ -84,8 +84,9 @@ for the ISA to both packed `#if` chains in `config/ml_config.h`:
 
 - `ML_HAS_MATVEC_PK_<ISA>` and, if the matmul exists, `ML_HAS_MATMUL_PK_<ISA>`;
 - the group size `ML_PACK_G`, the Q8 offset `ML_PACK_Q8_OFFSET` (128 if the dot
-  instruction needs unsigned weights), and `ML_PACK_Q8`, set to 0 to leave Q8
-  row-major.
+  instruction needs unsigned weights), the Q4 xor `ML_PACK_Q4_XOR` (`0x88` to
+  read nibbles as signed `q − 8`, else 0), and `ML_PACK_Q8`, set to 0 to leave
+  Q8 row-major.
 
 An ISA with a packed matvec but no matmul falls back to `ml_k_matmul_*_pk_loop`.
 An ISA may also add only a matmul on another ISA's layout, as `neon_i8mm` does

@@ -9,8 +9,8 @@ authors:
 repository-code: "https://github.com/JonPark0/isa-lm"
 url: "https://jonpark0.github.io/isa-lm/"
 license: MIT
-version: 0.2.0
-date-released: "2026-10-27"
+version: 0.3.0
+date-released: "2026-10-31"
 abstract: >-
   isa-lm is a dependency-free C11 inference runtime for Llama-style decoder Transformers
   with INT8 (Q8_0) and INT4 (Q4_0) weights, mixed Q4/Q8 models and an optional Q8 KV cache.
@@ -22,8 +22,9 @@ abstract: >-
   weight stream is prefetched in software, and attention is blocked for grouped-query heads.
   Results are bit-identical across thread counts and batch sizes and are checked against a
   numpy reference forward pass. It reads llama2.c checkpoints, Hugging Face safetensors
-  (including Llama 3 RoPE scaling) and Hugging Face tokenizer.json files (SentencePiece-style
-  and Llama 3 byte-level BPE, identical to the tokenizers library), and includes a chat mode,
+  (Llama, Mistral, Qwen2, Qwen3 and SmolLM2, with llama3, linear and yarn RoPE scaling) and
+  Hugging Face tokenizer.json files (SentencePiece-style, Llama 3, Qwen and GPT-2 byte-level
+  BPE, identical to the tokenizers library), and includes a chat mode,
   a perplexity tool and a CPU feature guard that refuses unsupported processors.
 keywords:
   - large language models
