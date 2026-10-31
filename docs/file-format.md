@@ -188,7 +188,7 @@ converter takes `attention_factor` from the config, or computes
 | Problem | Status |
 |---------|--------|
 | file cannot be opened | `ML_E_IO` |
-| empty file, file shorter than the header, bad magic or version, unknown `wtype` or `rope_type`, invalid llama3, linear or yarn parameters, a `rope_attn_factor` without yarn, `qkv_bias` or `qk_norm` other than 0 or 1, `sliding_window` above 2^24, file shorter than the arrays the header implies, a Q8 quant equal to −128 | `ML_E_FORMAT` |
+| empty file, file shorter than the header, bad magic or version, unknown `wtype` or `rope_type`, invalid llama3, linear or yarn parameters, a `rope_attn_factor` without yarn, `qkv_bias`, `qk_norm` or `layer_flags` other than 0 or 1, unknown layer flag bits, a negative `rope_local_theta` or a local-RoPE layer without one, `sliding_window` above 2^24, file shorter than the arrays the header implies, a Q8 quant equal to −128 | `ML_E_FORMAT` |
 | zero or over-limit dimension, `dim` or `hidden_dim` not a multiple of 32, `dim % n_heads ≠ 0` without `head_dim`, `n_heads % n_kv_heads ≠ 0`, odd `head_dim`, `q_dim` not a multiple of 32 or above 65536, `vocab < 3` | `ML_E_SHAPE` |
 
 All size arithmetic is overflow-checked, which matters on 32-bit targets.
