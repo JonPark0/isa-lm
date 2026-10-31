@@ -71,10 +71,36 @@ The native llama.cpp build owes its prefill to AMX, not to AVX-512 VNNI: its
 weights are repacked for AMX tiles by default. With that off
 (`llama-bench --repack 0`, same machine, later run) it prefills Q8_0 at 93
 tok/s on one thread and 318 on four, and Q4_0 at 83 and 320, about a third of
-isa-lm's AVX-512 VNNI rows. An AMX kernel for isa-lm's packed layout was tried
-(branch `exp/amx`); because every 32-weight block has its own scale, each tile
-product has to be stored and rescaled with AVX-512, and that made it only
-10–20% faster for Q8_0 and slower for Q4_0, so it is not part of the build.
+isa-lm's AVX-512 VNNI rows.
+
+An AMX kernel for isa-lm's packed layout is kept on the `exp/amx` branch and
+is not part of the build. Every 32-weight block has its own scale, so each
+16×16 tile product has to be stored and rescaled with AVX-512 in the matvec's
+order, which keeps prefill bit-identical to decoding. Microbenchmarks on this
+CPU show where the time goes (one core, weights in L2, per block of 16 tokens
+× 16 rows):
+
+| Work per block | ns |
+|---|---:|
+| tile loads and `tdpbsud` alone | 10.9 |
+| the same plus zeroing and storing the sum tile | 16.4 |
+| rescaling alone (convert, multiply, FMA per token) | 12.8 |
+| the same with the `offset × Σx` subtraction | 17.9 |
+| tiles and rescaling together | 34–37 |
+
+The tile instructions and the AVX-512 rescaling do not overlap: their times
+add up. The second version of the kernel removes the subtraction, as the
+microbenchmark suggested:
+- Q8 sum tiles start at `−128 Σx`, loaded from a buffer built once per tile
+  of tokens.
+- Q4 nibbles are widened to `q − 8` for `tdpbssd`.
+
+Against the first version, the kernels alone got faster:
+- Q8_0: 5–13% faster, 1.2–1.4× the AVX-512 VNNI kernel.
+- Q4_0: 20–43% faster, 1.0–1.2× the AVX-512 VNNI kernel.
+
+On Qwen2.5 0.5B the prefill speed is level with the AVX-512 VNNI build on one
+thread and 15–20% slower on four, so AMX stays out of the build.
 
 Measured with isa-lm at commit `0cb4d16`. Against the previous run (isa-lm
 before the faster prefill), AVX-512 VNNI prefill went from 145 to 221 tok/s
