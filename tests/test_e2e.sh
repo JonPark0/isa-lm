@@ -34,6 +34,23 @@ $RUN $B/ml_run $M/bias_q4.mlb --tokens $TOKENS --dump-logits $T/bias.f32 \
     && $RUN $B/ml_run $M/bias_q4.mlb --tokens $TOKENS --dump-logits $T/bias.b1.f32 --batch 1 \
     && cmp -s $T/bias.f32 $T/bias.b1.f32 && ok || bad "Q/K/V bias model"
 
+# head_dim other than dim / n_heads with per-head q/k norm (Qwen3), a sliding
+# window, yarn RoPE scaling: reference, row-major, batched prefill
+for mm in qk_q4 swa_q8 yarn_q4; do
+    $RUN $B/ml_run $M/$mm.mlb --tokens $TOKENS --dump-logits $T/$mm.f32 \
+        && python3 tools/ref_forward.py $M/$mm.mlb --tokens $TOKENS --out $T/$mm.ref.f32 \
+        && python3 tests/compare_logits.py $T/$mm.f32 $T/$mm.ref.f32 96 1e-3 >/dev/null \
+        && $RUN $B/ml_run $M/$mm.mlb --tokens $TOKENS --dump-logits $T/$mm.np.f32 --no-pack \
+        && python3 tests/compare_logits.py $T/$mm.np.f32 $T/$mm.ref.f32 96 1e-3 >/dev/null \
+        && $RUN $B/ml_run $M/$mm.mlb --tokens $TOKENS --dump-logits $T/$mm.b1.f32 --batch 1 \
+        && cmp -s $T/$mm.f32 $T/$mm.b1.f32 && ok || bad "$mm model"
+done
+# the window with the Q8 KV cache (distributions, see the Q8 KV cache tests)
+python3 tools/ref_forward.py $M/swa_q8.mlb --tokens $TOKENS --out $T/swa.kv8.ref.f32 --kv q8 \
+    && $RUN $B/ml_run $M/swa_q8.mlb --tokens $TOKENS --dump-logits $T/swa.kv8.f32 --kv q8 \
+    && python3 tests/compare_logits.py $T/swa.kv8.f32 $T/swa.kv8.ref.f32 96 5e-2 --any-argmax >/dev/null \
+    && ok || bad "sliding window with --kv q8"
+
 # Q8 KV cache (--kv q8) against the reference emulating it. K, V and q are
 # quantized from float results that differ in the last bits between C and numpy,
 # so a value near a rounding boundary can land one step away: compare

@@ -73,7 +73,7 @@ void ml_k_matvec_q4_pk_avxvnni(float *y, const ml_qtensor *W, const ml_qact *x, 
  * per token the arithmetic is the matvec's, so results match it exactly. */
 ML_INLINE void matmul_q8_tile(float *Y, int ldy, const ml_qtensor *W, const ml_qbatch *X, int r0, int r1, int t0, const int T) {
     const int nb = W->cols / QK;
-    static _Thread_local int xsum[PK_TILE][PK_MAX_BLOCKS];
+    static ML_THREAD_LOCAL int xsum[PK_TILE][PK_MAX_BLOCKS];
     pk_block_sums_batch(xsum, X, t0, T, nb, 128);
     for (int row = r0; row < r1; row += PK) {
         const uint8_t *p = W->pq + (size_t)(row / PK) * nb * (8 * PK * 4);
@@ -109,7 +109,7 @@ void ml_k_matmul_q8_pk_avxvnni(float *Y, int ldy, const ml_qtensor *W, const ml_
 
 ML_INLINE void matmul_q4_tile(float *Y, int ldy, const ml_qtensor *W, const ml_qbatch *X, int r0, int r1, int t0, const int T) {
     const int nb = W->cols / QK;
-    static _Thread_local int xsum[PK_TILE][PK_MAX_BLOCKS];
+    static ML_THREAD_LOCAL int xsum[PK_TILE][PK_MAX_BLOCKS];
     const __m256i m4 = _mm256_set1_epi8(0x0F);
     pk_block_sums_batch(xsum, X, t0, T, nb, 8);
     for (int row = r0; row < r1; row += PK) {

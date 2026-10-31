@@ -56,7 +56,7 @@ static inline void q4_operands(int8x16_t w01[4], int8x16_t w23[4], const uint8_t
 /* The tile's activations as smmla operands, built once per tile: pair q holds
  * tokens 2q and 2q + 1 (an odd last token is paired with itself), and entry
  * 4b + j holds bytes 8j..8j+7 of block b of both. */
-static _Thread_local int8x16_t xpair[PK_TILE / 2][PK_MAX_BLOCKS * 4];
+static ML_THREAD_LOCAL int8x16_t xpair[PK_TILE / 2][PK_MAX_BLOCKS * 4];
 
 static void make_pairs(const ml_qbatch *X, int t0, int T, int nb) {
     for (int q = 0; 2 * q < T; q++) {
@@ -107,7 +107,7 @@ static void make_pairs(const ml_qbatch *X, int t0, int T, int nb) {
 
 #define PK_MATMUL(OPERANDS, PTYPE, STEPS, Q4)                                     \
     const int nb = W->cols / QK;                                                  \
-    static _Thread_local int xsum[PK_TILE][PK_MAX_BLOCKS];                        \
+    static ML_THREAD_LOCAL int xsum[PK_TILE][PK_MAX_BLOCKS];                        \
     for (int t0 = 0; t0 < X->n; t0 += PK_TILE) {                                  \
         const int T = X->n - t0 < PK_TILE ? X->n - t0 : PK_TILE;                  \
         if (Q4) for (int t = 0; t < T; t++) xsums(xsum[t], X->q + (size_t)(t0 + t) * X->k, nb); \

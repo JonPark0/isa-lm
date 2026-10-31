@@ -122,7 +122,7 @@ void ml_k_matvec_q4_pk_neon_dotprod(float *y, const ml_qtensor *W, const ml_qact
 
 #define PK_MATMUL(BLOCK, PTYPE, STEPS, Q4)                                        \
     const int nb = W->cols / QK;                                                  \
-    static _Thread_local int xsum[PK_TILE][PK_MAX_BLOCKS];                        \
+    static ML_THREAD_LOCAL int xsum[PK_TILE][PK_MAX_BLOCKS];                        \
     for (int t0 = 0; t0 < X->n; t0 += PK_TILE) {                                  \
         const int T = X->n - t0 < PK_TILE ? X->n - t0 : PK_TILE;                  \
         if (Q4) for (int t = 0; t < T; t++) xsums(xsum[t], X->q + (size_t)(t0 + t) * X->k, nb); \

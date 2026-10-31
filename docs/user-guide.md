@@ -108,8 +108,9 @@ Use the matching llama2.c `tokenizer.bin` as it is.
 
 ### From a Hugging Face checkpoint
 
-The converter reads Llama, Mistral and Qwen2 (Qwen2.5) checkpoints: a
-directory containing `config.json` and one or more `*.safetensors` files:
+The converter reads Llama (also SmolLM2), Mistral, Qwen2 (Qwen2.5) and Qwen3
+checkpoints: a directory containing `config.json` and one or more
+`*.safetensors` files:
 
 ```sh
 python3 tools/convert.py hf ./TinyLlama-1.1B model.mlb --wtype q4 --max-seq 2048
@@ -120,13 +121,19 @@ python3 tools/convert.py hf ./TinyLlama-1.1B model.mlb --wtype q4 --max-seq 2048
   with a shared classifier.
 - **Rotary layout:** the q/k projections are permuted from the Hugging Face
   rotate-half layout to the interleaved pairs the runtime uses.
-- **RoPE scaling:** `rope_scaling` of type `llama3` is supported (Llama 3.1 and
-  3.2). The converter refuses other types (linear, dynamic, yarn) instead of
-  writing a model that would compute wrong outputs.
-- **Architectures:** `model_type` must be `llama`, `mistral` or `qwen2`, with
-  SiLU and no biases other than Qwen2's q/k/v biases. Others (Gemma, Phi, …)
-  are refused. Sliding-window attention is not implemented: a model that uses
-  it gets its context capped at the window, where it equals full attention.
+- **RoPE scaling:** `rope_scaling` of type `llama3` (Llama 3.1 and 3.2),
+  `linear` and `yarn` (for example Qwen2.5 and Qwen3 beyond 32K tokens, as
+  their model cards describe) are supported, with transformers' formulas. The
+  converter refuses other types (dynamic, longrope) instead of writing a model
+  that would compute wrong outputs.
+- **Architectures:** `model_type` must be `llama`, `mistral`, `qwen2` or
+  `qwen3`, with SiLU and no biases other than Qwen2's q/k/v biases. A
+  `head_dim` other than `hidden_size / num_attention_heads` and Qwen3's
+  per-head q/k RMSNorm are supported. Others (Gemma, Phi, …) are refused.
+- **Sliding window:** a window on every layer (Mistral v0.1) is kept: each
+  position attends to the last `sliding_window` positions. When only some
+  layers slide (Qwen2 with `use_sliding_window`), the context is capped at the
+  window instead, where it equals full attention.
 - **Context length:** `--max-seq` caps the context, and with it the KV cache.
   Without it the converter uses `max_position_embeddings`, which is often
   131072 for Llama 3.
@@ -144,21 +151,21 @@ printf "Hello, world" | build/avx2/ml_tok llama3.mlt        # 128000 9906 11 191
 echo "9906 11 1917" | build/avx2/ml_tok llama3.mlt --decode          # Hello, world
 ```
 
-Two kinds are supported, and they encode exactly as the Hugging Face
+These kinds are supported, and they encode exactly as the Hugging Face
 `tokenizers` library does (the tests compare them on hundreds of texts):
 
 | Kind | Models | Notes |
 |------|--------|-------|
 | SentencePiece-style BPE with byte fallback | Llama 2, TinyLlama, Mistral, Vicuna | spaces become `▁`, characters outside the vocabulary become `<0xXX>` byte tokens |
 | byte-level BPE with the Llama 3 pre-tokenizer | Llama 3, 3.1, 3.2 | text is split by the Llama 3 regex (letters, numbers, contractions, white space) before merging |
-| byte-level BPE with NFC and the Qwen2 pre-tokenizer | Qwen2, Qwen2.5 | text is normalized to NFC, then split as Llama 3 but with one digit per number chunk |
+| byte-level BPE with NFC and the Qwen2 pre-tokenizer | Qwen2, Qwen2.5, Qwen3 | text is normalized to NFC, then split as Llama 3 but with one digit per number chunk |
+| byte-level BPE with the GPT-2 pre-tokenizer | SmolLM, SmolLM2, GPT-2 | text is split by the GPT-2 regex, after splitting off every digit if the tokenizer does (SmolLM2) |
 
-The converter refuses anything else (WordPiece, Unigram, GPT-2
-pre-tokenizers, other normalizers) rather than write a tokenizer that would
-encode differently.
+The converter refuses anything else (WordPiece, Unigram, other normalizers or
+pre-tokenizers) rather than write a tokenizer that would encode differently.
 
 - **BOS:** added when the tokenizer's template adds it (`<s>`,
-  `<|begin_of_text|>`); Qwen2 adds none.
+  `<|begin_of_text|>`); Qwen2, Qwen3 and SmolLM2 add none.
 - **Special tokens** written in the prompt, such as `<|eot_id|>`, are encoded
   as the special tokens.
 - **Stopping:** generation stops at the tokenizer's EOS (`</s>`,
@@ -186,7 +193,12 @@ The capital of Germany is Berlin.
 | `zephyr` | TinyLlama Chat, Zephyr | `</s>` |
 | `llama2` | Llama 2 Chat, Mistral Instruct (without `--system`) | `</s>` |
 | `qwen` | Qwen2.5 Instruct; without `--system` it uses Qwen's default system prompt | `<|im_end|>` |
-| `chatml` | other ChatML models; a system turn only with `--system` | `<|im_end|>` |
+| `smollm` | SmolLM2 Instruct; without `--system` it uses SmolLM2's default system prompt | `<|im_end|>` |
+| `chatml` | Qwen3 and other ChatML models; a system turn only with `--system` | `<|im_end|>` |
+
+Qwen3 answers after a `<think>…</think>` section; ending a message with
+`/no_think` asks it to skip the reasoning. The KV cache keeps earlier replies
+with their reasoning, where Qwen3's own template drops it from the history.
 
 - **Input:** one turn per line on stdin (a `> ` prompt appears on a terminal),
   or a single turn with `-i`. End with Ctrl-D.
@@ -239,6 +251,13 @@ reference scores 19.00):
 | Q4 | 294 MB | 21.73 | 112.0 tok/s |
 
 Small models lose more to Q4_0: here `up` and `down` matter most, then `v`.
+
+Other models on the same text (Q8 against the F32 numpy reference):
+
+| Model | F32 | Q8 | Q4 |
+|-------|----:|---:|---:|
+| Qwen3 0.6B | 28.10 | 27.91 | 31.73 |
+| SmolLM2 135M Instruct | 23.44 | 23.52 | 31.67 |
 
 The converter fits each Q4 block's scale by weighted least squares over a few
 candidate mappings, rather than dividing the block's maximum by 7 (Llama 3.2
@@ -307,7 +326,7 @@ build/avx2/ml_run model.mlb --tokens 1,450,3681 --dump-logits l.f32
 | `--pack-cache` | Save the packed weights next to the model (`MODEL.pk<G>`, G = pack group) and map them from there on later runs instead of packing again. The cache is checked against the model and the build's layout and rewritten when stale. |
 | `--no-pack` | Keep weights row-major instead of repacking them for the packed kernels. Uses less memory during load, but runs slower. |
 | `--profile` | Print the share of forward-pass time per stage (qkv, attention, wo, ffn, classifier, other). |
-| `--chat TEMPLATE` | Chat with the model: `llama3`, `zephyr`, `llama2`, `qwen` or `chatml`, see [Chat](#chat). Needs `-z`. |
+| `--chat TEMPLATE` | Chat with the model: `llama3`, `zephyr`, `llama2`, `qwen`, `smollm` or `chatml`, see [Chat](#chat). Needs `-z`. |
 | `--system TEXT` | System prompt for `--chat`. |
 | `--eos ID` | Stop as soon as `ID` is generated. Without it, a run with `-z` stops at the tokenizer's BOS or EOS, and a run without `-z` uses every `-n` position. |
 
@@ -367,5 +386,7 @@ On a 4-vCPU VM with the avx512vnni build, `-t 4` decodes a 4-layer dim-2048 Q4 m
   `n_layers × max_seq × (kv_dim + 4 × n_kv_heads) × 2` with `--kv q8`. All size
   arithmetic is overflow-checked, so on 32-bit ARMv7 an oversized model fails
   with `out of memory` instead of crashing.
-- **Architecture:** only Llama-family decoders are supported: RMSNorm, SwiGLU,
-  GQA, no biases.
+- **Architecture:** Llama-family decoders (Llama, Mistral, Qwen2, Qwen3):
+  RMSNorm, SwiGLU, GQA, RoPE, biases only on the q, k and v projections
+  (Qwen2), optional per-head q/k RMSNorm (Qwen3) and one sliding window for
+  every layer. `tools/convert.py` refuses other architectures.

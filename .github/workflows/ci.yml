@@ -116,3 +116,45 @@ jobs:
             echo "$out"
             echo "::notice title=bench $isa::$out"
           done
+
+  msvc:
+    name: Windows MSVC
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install numpy
+        run: python -m pip install numpy
+      - name: Build and unit tests (CMake, MSVC)
+        run: |
+          # build output in a log; its error lines become annotations (logs are
+          # not always at hand)
+          for isa in scalar sse2 avx2; do
+            cmake -S . -B build/msvc-$isa -A x64 -DML_ISA=$isa > build-$isa.log 2>&1 &&
+              cmake --build build/msvc-$isa --config Release -j 4 >> build-$isa.log 2>&1 || {
+                grep -E "CMake Error|error|warning C4(013|047|133)" -A2 build-$isa.log | grep -v "^--$" | head -n 9 |
+                  while IFS= read -r l; do echo "::error title=msvc $isa build::$l"; done
+                exit 1
+              }
+            grep -c "warning C" build-$isa.log | sed "s/^/$isa warnings: /"
+            ctest --test-dir build/msvc-$isa -C Release --output-on-failure
+          done
+      - name: Logits against the numpy reference
+        run: |
+          T=1,5,9,13,17,21,25,29,33,37,41,45,49,53,57,61
+          mkdir -p build/models
+          python tools/gen_random.py --out build/models/rand_q8.mlb --wtype q8 > /dev/null
+          python tools/gen_random.py --out build/models/rand_q4.mlb --wtype q4 > /dev/null
+          python tools/gen_random.py --out build/models/bias_q4.mlb --wtype q4 --qkv-bias --seed 7 > /dev/null
+          for m in rand_q8 rand_q4 bias_q4; do
+            python tools/ref_forward.py build/models/$m.mlb --tokens $T --out build/$m.ref.f32
+            for isa in scalar sse2 avx2; do for p in "" --no-pack; do
+              build/msvc-$isa/Release/ml_run.exe build/models/$m.mlb --tokens $T --dump-logits build/$m.$isa.f32 $p
+              python tests/compare_logits.py build/$m.$isa.f32 build/$m.ref.f32 96 1e-3 ||
+                { echo "::error title=msvc logits::$m $isa ${p:-packed} differs from the reference"; exit 1; }
+            done; done
+          done
+          echo "::notice title=msvc::scalar, sse2 and avx2 builds match the numpy reference (q8, q4, q/k/v bias; packed and row-major)"

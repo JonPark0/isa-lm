@@ -150,7 +150,7 @@ void ml_k_matmul_q8_pk_sse41(float *Y, int ldy, const ml_qtensor *W, const ml_qb
 
 ML_INLINE void matmul_q4_tile(float *Y, int ldy, const ml_qtensor *W, const ml_qbatch *X, int r0, int r1, int t0, const int T) {
     const int nb = W->cols / QK;
-    static _Thread_local int xsum[PK_TILE][PK_MAX_BLOCKS];
+    static ML_THREAD_LOCAL int xsum[PK_TILE][PK_MAX_BLOCKS];
     const __m128i m4 = _mm_set1_epi8(0x0F), ones = _mm_set1_epi16(1);
     pk_block_sums_batch(xsum, X, t0, T, nb, 8);
     for (int row = r0; row < r1; row += PK) {

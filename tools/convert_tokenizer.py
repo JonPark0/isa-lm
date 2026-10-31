@@ -7,7 +7,9 @@ Supported, and checked before writing:
   - SentencePiece-style BPE with byte fallback (Llama 2, TinyLlama, Mistral):
     a Prepend/Replace normalizer, or a Metaspace pre-tokenizer without split;
   - byte-level BPE with the Llama 3 pre-tokenizer regex (Llama 3, 3.1, 3.2),
-    or its single-digit variant after an NFC normalizer (Qwen2, Qwen2.5).
+    or its single-digit variant after an NFC normalizer (Qwen2, Qwen2.5);
+  - byte-level BPE with the GPT-2 regex (ByteLevel use_regex), optionally after
+    a Digits(individual_digits) pre-tokenizer (SmolLM, SmolLM2).
 Anything else is refused rather than converted into a tokenizer that would
 encode differently.
 """
@@ -18,7 +20,7 @@ import sys
 
 SPM, BYTE_BPE = 1, 2
 ADDED, BYTE = 1, 2
-ADD_BOS, IGNORE_MERGES, PREPEND_FIRST, NFC, DIGITS1 = 1, 2, 4, 8, 16
+ADD_BOS, IGNORE_MERGES, PREPEND_FIRST, NFC, DIGITS1, GPT2, ISOLATE_DIGITS = 1, 2, 4, 8, 16, 32, 64
 SP = "▁"
 LLAMA3_REGEX = (r"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}{1,3}|"
                 r" ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+")
@@ -54,8 +56,9 @@ def parts(node, key):
 def detect(j):
     """-> (kind, flags) for a supported tokenizer.json, else raises Unsupported."""
     m = j["model"]
-    if m.get("type") != "BPE":
-        raise Unsupported(f"model type {m.get('type')!r} (only BPE is supported)")
+    mtype = m.get("type", "BPE" if "merges" in m else None)   # older files leave BPE implicit
+    if mtype != "BPE":
+        raise Unsupported(f"model type {mtype!r} (only BPE is supported)")
     if m.get("dropout") or m.get("continuing_subword_prefix") or m.get("end_of_word_suffix"):
         raise Unsupported("BPE dropout or subword prefixes/suffixes")
     norms = parts(j.get("normalizer"), "normalizers")
@@ -67,8 +70,19 @@ def detect(j):
             flags |= NFC
         elif norms:
             raise Unsupported("a normalizer other than NFC before byte-level BPE")
+        types = [p["type"] for p in pres]
+        if types in (["ByteLevel"], ["Digits", "ByteLevel"]) and pres[-1].get("use_regex", True):
+            # the GPT-2 regex inside ByteLevel, after an optional digit split
+            if pres[-1].get("add_prefix_space"):
+                raise Unsupported("ByteLevel with add_prefix_space")
+            if types[0] == "Digits":
+                if not pres[0].get("individual_digits"):
+                    raise Unsupported("Digits without individual_digits")
+                flags |= ISOLATE_DIGITS
+            return BYTE_BPE, flags | GPT2
         if len(pres) != 2 or len(split) != 1 or pres[0] is not split[0]:
-            raise Unsupported("byte-level pre-tokenizer other than Split(regex) + ByteLevel")
+            raise Unsupported("byte-level pre-tokenizer other than Split(regex) + ByteLevel, "
+                              "or ByteLevel with its GPT-2 regex")
         s, bl = pres
         rx = s["pattern"].get("Regex")
         if rx not in (LLAMA3_REGEX, QWEN2_REGEX) or s.get("behavior") != "Isolated" or s.get("invert"):

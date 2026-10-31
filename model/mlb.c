@@ -58,20 +58,38 @@ static ml_status parse_header(ml_config *cfg, int *shared, const uint8_t *h) {
     if (bias > 1) return ML_E_FORMAT;
     cfg->qkv_bias = (int)bias;
     if (cfg->dim % QK || cfg->hidden_dim % QK) return ML_E_SHAPE;
-    if (cfg->dim % cfg->n_heads || cfg->n_heads % cfg->n_kv_heads) return ML_E_SHAPE;
-    cfg->head_dim = cfg->dim / cfg->n_heads;
+    if (cfg->n_heads % cfg->n_kv_heads) return ML_E_SHAPE;
+    const uint32_t hd = rd32(h + 80);   /* 0: dim / n_heads */
+    if (hd > MAX_DIM || (!hd && cfg->dim % cfg->n_heads)) return ML_E_SHAPE;
+    cfg->head_dim = hd ? (int)hd : cfg->dim / cfg->n_heads;
+    if ((uint64_t)cfg->head_dim * (uint64_t)cfg->n_heads > MAX_DIM) return ML_E_SHAPE;
+    cfg->q_dim = cfg->head_dim * cfg->n_heads;
     cfg->kv_dim = cfg->head_dim * cfg->n_kv_heads;
-    if (cfg->head_dim % 2) return ML_E_SHAPE;
+    if (cfg->head_dim % 2 || cfg->q_dim % QK) return ML_E_SHAPE;
+    const uint32_t qkn = rd32(h + 84), win = rd32(h + 92);
+    if (qkn > 1 || win > MAX_TOKENS) return ML_E_FORMAT;
+    cfg->qk_norm = (int)qkn;
+    cfg->sliding_window = (int)win;
     if (!(cfg->rope_theta > 0.0f) || !(cfg->norm_eps >= 0.0f)) return ML_E_FORMAT;
     cfg->rope_type = (int)rd32(h + 52);
     cfg->rope_factor = rdf(h + 56);
     cfg->rope_low_freq_factor = rdf(h + 60);
     cfg->rope_high_freq_factor = rdf(h + 64);
     cfg->rope_orig_max_seq = (int)rd32(h + 68);
+    cfg->rope_attn_factor = rdf(h + 88);
+    if (cfg->rope_type != ML_ROPE_YARN && cfg->rope_attn_factor != 0.0f) return ML_E_FORMAT;
     if (cfg->rope_type == ML_ROPE_LLAMA3) {
         if (!(cfg->rope_factor > 0.0f && cfg->rope_factor < 1e6f) || !(cfg->rope_low_freq_factor > 0.0f) ||
             !(cfg->rope_high_freq_factor > cfg->rope_low_freq_factor && cfg->rope_high_freq_factor < 1e6f) ||
             cfg->rope_orig_max_seq <= 0)
+            return ML_E_FORMAT;
+    } else if (cfg->rope_type == ML_ROPE_LINEAR) {
+        if (!(cfg->rope_factor > 0.0f && cfg->rope_factor < 1e6f)) return ML_E_FORMAT;
+    } else if (cfg->rope_type == ML_ROPE_YARN) {
+        /* beta_fast > beta_slow > 0 rotations within the original context */
+        if (!(cfg->rope_factor > 0.0f && cfg->rope_factor < 1e6f) || !(cfg->rope_high_freq_factor > 0.0f) ||
+            !(cfg->rope_low_freq_factor > cfg->rope_high_freq_factor && cfg->rope_low_freq_factor < 1e6f) ||
+            cfg->rope_orig_max_seq <= 0 || !(cfg->rope_attn_factor > 0.0f && cfg->rope_attn_factor < 1e3f))
             return ML_E_FORMAT;
     } else if (cfg->rope_type != ML_ROPE_NONE) {
         return ML_E_FORMAT;
@@ -100,14 +118,18 @@ ml_status ml_model_load(ml_model *m, const char *path) {
     for (int l = 0; l < c->n_layers; l++) {
         ml_layer *L = &m->layers[l];
         L->attn_norm = take(&cur, normsz);
-        L->wq = take_mat(&cur, c->dim, c->dim, WT(ML_Q8M_QK));
+        L->wq = take_mat(&cur, c->q_dim, c->dim, WT(ML_Q8M_QK));
         L->wk = take_mat(&cur, c->kv_dim, c->dim, WT(ML_Q8M_QK));
         L->wv = take_mat(&cur, c->kv_dim, c->dim, WT(ML_Q8M_V));
-        L->wo = take_mat(&cur, c->dim, c->dim, WT(ML_Q8M_O));
+        L->wo = take_mat(&cur, c->dim, c->q_dim, WT(ML_Q8M_O));
         if (c->qkv_bias) {
-            L->bq = take(&cur, normsz);
+            L->bq = take(&cur, (size_t)c->q_dim * sizeof(float));
             L->bk = take(&cur, (size_t)c->kv_dim * sizeof(float));
             L->bv = take(&cur, (size_t)c->kv_dim * sizeof(float));
+        }
+        if (c->qk_norm) {
+            L->q_norm = take(&cur, (size_t)c->head_dim * sizeof(float));
+            L->k_norm = take(&cur, (size_t)c->head_dim * sizeof(float));
         }
         L->ffn_norm = take(&cur, normsz);
         L->w1 = take_mat(&cur, c->hidden_dim, c->dim, WT(ML_Q8M_UP));

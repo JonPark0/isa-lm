@@ -313,6 +313,37 @@ static int chunk_end(const uint32_t *cp, int m, int k, int ndig) {
     return j > k ? j : k + 1;
 }
 
+/* The GPT-2 pre-tokenizer regex (ByteLevel with use_regex), on code points:
+ *   's|'t|'re|'ve|'m|'ll|'d | ' '?\p{L}+ | ' '?\p{N}+ | ' '?[^\s\p{L}\p{N}]+
+ *   | \s+(?!\S) | \s+
+ * Contractions are lowercase only. Returns the end of the chunk at k. */
+static int chunk_end_gpt2(const uint32_t *cp, int m, int k) {
+    if (cp[k] == '\'' && k + 1 < m) {
+        const uint32_t a = cp[k + 1], b = k + 2 < m ? cp[k + 2] : 0;
+        if (a == 's' || a == 't' || a == 'm' || a == 'd') return k + 2;
+        if ((a == 'r' && b == 'e') || (a == 'v' && b == 'e') || (a == 'l' && b == 'l')) return k + 3;
+    }
+    const int j0 = cp[k] == ' ' && k + 1 < m ? k + 1 : k;   /* optional leading space */
+    int j = j0;
+    if (IS_L(j)) {
+        while (j < m && IS_L(j)) j++;
+        return j;
+    }
+    if (IS_N(j)) {
+        while (j < m && IS_N(j)) j++;
+        return j;
+    }
+    if (IS_OTHER(j)) {
+        while (j < m && IS_OTHER(j)) j++;
+        return j;
+    }
+    /* white space: all of it at the end of the text, else all but the last
+     * character before a non-space (that one joins the next chunk) */
+    for (j = k; j < m && IS_S(j); j++) {}
+    if (j < m && j - k >= 2) return j - 1;
+    return j > k ? j : k + 1;
+}
+
 /* Byte-level BPE on one pre-tokenized chunk. */
 static int encode_chunk(const ml_tokenizer *t, const unsigned char *s, int n, int *sym, emit_buf *e) {
     if (t->flags & ML_TOKF_IGNORE_MERGES) {
@@ -336,8 +367,17 @@ static int encode_byte_bpe(const ml_tokenizer *t, const unsigned char *s, int n,
         i += len;
     }
     off[m] = n;
+    const int gpt2 = (t->flags & ML_TOKF_GPT2) != 0, iso = (t->flags & ML_TOKF_ISOLATE_DIGITS) != 0;
     for (int k = 0; k < m;) {
-        const int j = chunk_end(cp, m, k, t->flags & ML_TOKF_DIGITS1 ? 1 : 3);
+        int j;
+        if (iso && IS_N(k)) {
+            j = k + 1;   /* a digit is a chunk of its own */
+        } else {
+            int end = m;   /* the regex runs on the text between isolated digits */
+            if (iso)
+                for (end = k; end < m && !IS_N(end); end++) {}
+            j = gpt2 ? chunk_end_gpt2(cp, end, k) : chunk_end(cp, end, k, t->flags & ML_TOKF_DIGITS1 ? 1 : 3);
+        }
         if (encode_chunk(t, s + off[k], off[j] - off[k], sym, e) < 0) return -1;
         k = j;
     }

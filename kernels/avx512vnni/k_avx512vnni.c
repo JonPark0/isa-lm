@@ -226,7 +226,7 @@ ML_INLINE void matmul_q8_groups(float *Y, int ldy, const ml_qtensor *W, const ml
 }
 
 ML_INLINE void matmul_q8_tile(float *Y, int ldy, const ml_qtensor *W, const ml_qbatch *X, int r0, int r1, int t0, const int T) {
-    static _Thread_local int xsum[TILE][PK_MAX_BLOCKS];
+    static ML_THREAD_LOCAL int xsum[TILE][PK_MAX_BLOCKS];
     block_sums_batch(xsum, X, t0, T, W->cols / QK, 128);
     for (int row = r0; row < r1; row += 2 * PK) {
         if (r1 - row > PK) matmul_q8_groups(Y, ldy, W, X, row, r1, t0, T, 2, xsum);
@@ -279,7 +279,7 @@ ML_INLINE void matmul_q4_groups(float *Y, int ldy, const ml_qtensor *W, const ml
 }
 
 ML_INLINE void matmul_q4_tile(float *Y, int ldy, const ml_qtensor *W, const ml_qbatch *X, int r0, int r1, int t0, const int T) {
-    static _Thread_local int xsum[TILE][PK_MAX_BLOCKS];
+    static ML_THREAD_LOCAL int xsum[TILE][PK_MAX_BLOCKS];
     block_sums_batch(xsum, X, t0, T, W->cols / QK, 8);
     for (int row = r0; row < r1; row += 2 * PK) {
         if (r1 - row > PK) matmul_q4_groups(Y, ldy, W, X, row, r1, t0, T, 2, xsum);
