@@ -20,7 +20,7 @@ WTYPES = {"f32": 0, "q8": 1, "q4": 2}
 # rope attention factor, sliding window (96), per-layer flags present, local
 # RoPE theta (104), FFN activation, post-norms, embedding scale, attention
 # scale: 120 bytes
-_HDR = struct.Struct("<4sIIIIIIIIffIIIfffIIIIIfIIfIIffI")
+_HDR = struct.Struct("<4sIIIIIIIIffIIIfffIIIIIfIIfIIffIff")
 ACTS = {"silu": 0, "gelu_tanh": 1}
 POST_NORM_KEYS = ("post_attn_norm", "post_ffn_norm")   # F32 [dim], after w3, when post_norms is set (Gemma 3)
 LAYER_SLIDING, LAYER_LOCAL_ROPE = 1, 2   # per-layer flag bits (Gemma 3, Qwen2 with some sliding layers)
@@ -349,7 +349,8 @@ def write_mlb(path, cfg, w, wtype, q8=(), imatrix=None, scales="f32", q4_rule="f
                     rs.get("attention_factor", 0.0) if yarn else 0.0, cfg.get("sliding_window") or 0,
                     int(cfg.get("layer_flags") is not None), float(cfg.get("rope_local_theta") or 0.0),
                     ACTS[cfg.get("act") or "silu"], int(bool(cfg.get("post_norms"))),
-                    float(cfg.get("embed_scale") or 0.0), float(cfg.get("attn_scale") or 0.0), int(f16))
+                    float(cfg.get("embed_scale") or 0.0), float(cfg.get("attn_scale") or 0.0), int(f16),
+                    float(cfg.get("attn_softcap") or 0.0), float(cfg.get("final_softcap") or 0.0))
     layout = []
     with open(path, "wb") as f:
         f.write(hdr.ljust(HEADER_SIZE, b"\0"))
@@ -437,7 +438,7 @@ def read_mlb(path):
     cfg = dict(zip(keys, f[1:13]))
     (rtype, rf, rlo, rhi, rorig, cfg["q8_mask"], cfg["qkv_bias"], cfg["head_dim"], cfg["qk_norm"],
      rattn, cfg["sliding_window"], has_flags, cfg["rope_local_theta"], act, cfg["post_norms"],
-     cfg["embed_scale"], cfg["attn_scale"], f16) = f[13:]
+     cfg["embed_scale"], cfg["attn_scale"], f16, cfg["attn_softcap"], cfg["final_softcap"]) = f[13:]
     cfg["scales"] = "f16" if f16 else "f32"
     cfg["act"] = {v: k for k, v in ACTS.items()}[act]
     rname = {v: k for k, v in ROPE_TYPES.items()}[rtype]

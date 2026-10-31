@@ -41,7 +41,9 @@ straight into it without copying. Everything is little-endian.
 | 112 | `f32` | `embed_scale` | ≥ 0: factor on the embedding rows; 0 means 1 (Gemma: `sqrt(dim)`) |
 | 116 | `f32` | `attn_scale` | ≥ 0: attention score factor; 0 means `1/sqrt(head_dim)` |
 | 120 | `u32` | `scale_f16` | 0 or 1: every quantized matrix stores its scales `d` as IEEE `f16` instead of `f32` |
-| 124 | | padding | zero up to offset 256 |
+| 124 | `f32` | `attn_softcap` | ≥ 0: attention scores become `cap · tanh(score / cap)` before the softmax; 0 means none (Gemma 2) |
+| 128 | `f32` | `final_softcap` | ≥ 0: the same on the logits; 0 means none (Gemma 2) |
+| 132 | | padding | zero up to offset 256 |
 
 `dim`, `n_layers`, `n_heads`, `n_kv_heads` and `hidden_dim` are limited to
 65536. `vocab` and `max_seq` are limited to 2^24. Files written before RoPE
@@ -207,7 +209,7 @@ converter takes `attention_factor` from the config, or computes
 | Problem | Status |
 |---------|--------|
 | file cannot be opened | `ML_E_IO` |
-| empty file, file shorter than the header, bad magic or version, unknown `wtype` or `rope_type`, invalid llama3, linear or yarn parameters, a `rope_attn_factor` without yarn, `qkv_bias`, `qk_norm`, `layer_flags`, `post_norms` or `scale_f16` other than 0 or 1, an unknown `act`, a negative or non-finite `embed_scale` or `attn_scale`, unknown layer flag bits, a negative `rope_local_theta` or a local-RoPE layer without one, `sliding_window` above 2^24, file shorter than the arrays the header implies, a Q8 quant equal to −128 | `ML_E_FORMAT` |
+| empty file, file shorter than the header, bad magic or version, unknown `wtype` or `rope_type`, invalid llama3, linear or yarn parameters, a `rope_attn_factor` without yarn, `qkv_bias`, `qk_norm`, `layer_flags`, `post_norms` or `scale_f16` other than 0 or 1, an unknown `act`, a negative or non-finite `embed_scale`, `attn_scale`, `attn_softcap` or `final_softcap`, unknown layer flag bits, a negative `rope_local_theta` or a local-RoPE layer without one, `sliding_window` above 2^24, file shorter than the arrays the header implies, a Q8 quant equal to −128 | `ML_E_FORMAT` |
 | zero or over-limit dimension, `dim` or `hidden_dim` not a multiple of 32, `dim % n_heads ≠ 0` without `head_dim`, `n_heads % n_kv_heads ≠ 0`, odd `head_dim`, `q_dim` not a multiple of 32 or above 65536, `vocab < 3` | `ML_E_SHAPE` |
 
 All size arithmetic is overflow-checked, which matters on 32-bit targets.

@@ -82,9 +82,9 @@ Site: <https://jonpark0.github.io/isa-lm/> · Wiki: <https://github.com/JonPark0
 | Thread pool | bit-identical results for any thread count; ThreadSanitizer clean; a 4-layer dim-2048 Q4 model decodes at 140 tok/s with `-t 1` and 503 tok/s with `-t 4` (avx512vnni, 4 vCPUs) |
 | Windows | MSVC builds (scalar, SSE2, AVX2) pass the unit tests and match the numpy reference in CI; the MinGW-built release binaries are checked under Wine before publishing |
 | Quantization | Q8_0, Q4_0, and Q4 with chosen matrix classes in Q8 (`--q8 v,o,down`: Llama 3.2 1B perplexity 17.89 at 831 MB, against 17.27 for Q8 at 1252 MB and 19.91 for Q4 at 663 MB); f16 block scales by default (Q4 at 4.5 bits per weight); each Q4 block's scale is fitted rather than rounded from its maximum (Qwen2.5 0.5B: 15.14 against 15.86 for llama.cpp's Q4_0, see the [comparison](docs/benchmarks.md)), except for Gemma 3, whose checkpoints do better with llama.cpp's rounding (its quantization-aware 1B checkpoint: Q4 perplexity 40.50, below its Q8); `tools/perplexity.py` measures it |
-| Models | Llama 2/3/3.1/3.2, TinyLlama, SmolLM2, Mistral (with its sliding window), Qwen2/2.5 (q/k/v biases), Qwen3 (its own head size, per-head q/k norm) and Gemma 3 text (GELU, block output norms, local and global layers); RoPE scaling of the llama3, linear and yarn kinds. TinyLlama 1.1B, Llama 3.2 1B, Qwen2.5 0.5B, Qwen3 0.6B, SmolLM2 135M and Gemma 3 1B were run end to end from their Hugging Face files; Q8 perplexity matches an F32 reference (Qwen2.5 18.98 against 19.00, Qwen3 27.90 against 28.10, Gemma 3 41.97 against 42.32) |
+| Models | Llama 2/3/3.1/3.2, TinyLlama, SmolLM2, Mistral (with its sliding window), Qwen2/2.5 (q/k/v biases), Qwen3 (its own head size, per-head q/k norm), Gemma 2 (soft-capped attention scores and logits) and Gemma 3 (GELU, block output norms, local and global layers; the text model of the 4B and larger image-text checkpoints); RoPE scaling of the llama3, linear and yarn kinds. TinyLlama 1.1B, Llama 3.2 1B, Qwen2.5 0.5B, Qwen3 0.6B, SmolLM2 135M and Gemma 3 1B and 4B were run end to end from their Hugging Face files; Q8 perplexity matches an F32 reference (Qwen2.5 18.98 against 19.00, Qwen3 27.90 against 28.10, Gemma 3 41.97 against 42.32) |
 | Tokenizers | llama2.c `tokenizer.bin`; Hugging Face `tokenizer.json` for SentencePiece-style BPE (Llama 2, TinyLlama, Mistral), Llama 3 byte-level BPE, Qwen2/Qwen3 byte-level BPE with NFC, and GPT-2 byte-level BPE (SmolLM2), converted by `tools/convert_tokenizer.py` and identical to the `tokenizers` library on every text tested |
-| Not implemented | other tokenizers (WordPiece, Unigram), RoPE scaling of the dynamic and longrope kinds, partial rotary embeddings, logit soft-capping, multimodal checkpoints, architectures other than Llama, Mistral, Qwen2, Qwen3 and Gemma 3 text (Phi, mixture of experts) |
+| Not implemented | other tokenizers (WordPiece, Unigram), RoPE scaling of the dynamic and longrope kinds, partial rotary embeddings, image input (of Gemma 3's image-text checkpoints only the text model is converted), architectures other than Llama, Mistral, Qwen2, Qwen3, Gemma 2 and Gemma 3 (Phi, mixture of experts) |
 
 ## Citing
 
@@ -114,7 +114,7 @@ Please also cite the models you run; their licenses are separate from this one.
 - **속도:** 명령어 집합별 정수 내적에 맞춘 가중치 재배치, 프롬프트 일괄 처리, 소프트웨어 프리페치, GQA 블록
   어텐션을 씁니다. 스레드 수를 바꿔도 결과는 비트 단위로 같습니다.
 - **모델과 토크나이저:** llama2.c 체크포인트와 Hugging Face safetensors(Llama 2, Llama 3/3.1/3.2, TinyLlama,
-  SmolLM2, Mistral, Qwen2/Qwen2.5, Qwen3)를 변환합니다. Hugging Face `tokenizer.json`은 `tokenizers` 라이브러리와 같은 결과로 인코딩합니다.
+  SmolLM2, Mistral, Qwen2/Qwen2.5, Qwen3, Gemma 2, Gemma 3)를 변환합니다. Hugging Face `tokenizer.json`은 `tokenizers` 라이브러리와 같은 결과로 인코딩합니다.
 - **사용:** 텍스트 생성, 대화 모드(`--chat`), top-k·top-p·반복 패널티, 퍼플렉서티 측정을 제공합니다.
 - **검증:** 커널은 스칼라·배정밀도 기준과, 전체 결과는 numpy 참조 구현과 비교합니다. ARM과 구형 x86은 qemu로,
   Arm 실기는 CI에서 확인합니다.

@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Gemma 3 4B, 12B and 27B: their image-text checkpoints (`model_type`
+  `gemma3`) convert to the text model, leaving the vision tower out. Gemma 3
+  4B Instruct Q8 logits match an F32 numpy forward (KL 0.002); Q4 takes 2083
+  MiB and decodes at 14.8 tok/s on 4 vCPUs.
+- Gemma 2: logit soft-capping of the attention scores and the logits (`.mlb`
+  header offsets 124 and 128), even layers behind the sliding window.
+
+### Changed
+
+- `tools/convert.py` converts checkpoint tensors to float32 one at a time, so
+  a 4B model converts in about the memory of its largest tensor instead of
+  16 GB.
+
 ## 0.4.0 — 2026-10-31
 
 ### Added
