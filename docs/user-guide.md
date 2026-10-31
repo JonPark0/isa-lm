@@ -367,5 +367,6 @@ On a 4-vCPU VM with the avx512vnni build, `-t 4` decodes a 4-layer dim-2048 Q4 m
   `n_layers × max_seq × (kv_dim + 4 × n_kv_heads) × 2` with `--kv q8`. All size
   arithmetic is overflow-checked, so on 32-bit ARMv7 an oversized model fails
   with `out of memory` instead of crashing.
-- **Architecture:** only Llama-family decoders are supported: RMSNorm, SwiGLU,
-  GQA, no biases.
+- **Architecture:** Llama-family decoders (Llama, Mistral, Qwen2): RMSNorm,
+  SwiGLU, GQA, RoPE, and biases only on the q, k and v projections (Qwen2).
+  `tools/convert.py` refuses other architectures.

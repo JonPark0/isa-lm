@@ -24,14 +24,17 @@ typedef enum {
 /* For kernels: ML_INLINE forces inlining, and ML_UNROLL(n) asks for complete
  * unrolling of the loop that follows. Together they let a tile body be
  * instantiated for constant token counts with its per-token accumulators in
- * registers instead of on the stack. */
+ * registers instead of on the stack. ML_THREAD_LOCAL is C11 _Thread_local,
+ * spelled __declspec(thread) for MSVC. */
 #if defined(_MSC_VER) && !defined(__clang__)
 #define ML_INLINE static __forceinline
 #define ML_UNROLL(n)
+#define ML_THREAD_LOCAL __declspec(thread)
 #else
 #define ML_INLINE static inline __attribute__((always_inline))
 #define ML_PRAGMA_(x) _Pragma(#x)
 #define ML_UNROLL(n) ML_PRAGMA_(GCC unroll n)
+#define ML_THREAD_LOCAL _Thread_local
 #endif
 
 /* Software prefetch for the packed matvecs' weight stream. Decoding reads

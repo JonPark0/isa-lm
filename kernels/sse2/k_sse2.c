@@ -332,7 +332,7 @@ void ml_k_axpy_q8_sse2(float *y, const float *a, const int8_t *x, const float *d
 #define XC 256
 
 /* Expanded activations, PK_TILE tokens of XC blocks each (256 KB). */
-static _Thread_local __m128i pk_xe[PK_TILE][XC * 16];
+static ML_THREAD_LOCAL __m128i pk_xe[PK_TILE][XC * 16];
 
 static void pk_expand(__m128i *o, const int8_t *q, int nblocks) {
     for (int i = 0; i < nblocks * 8; i++, q += 4) {
@@ -412,7 +412,7 @@ void ml_k_matvec_q4_pk_sse2(float *y, const ml_qtensor *W, const ml_qact *x, int
  * per token the arithmetic is the matvec's, so the results match it exactly. */
 #define PK_MATMUL_TILE(BLOCK, STEPS, OFFSET)                                      \
     const int nb = W->cols / QK;                                                  \
-    static _Thread_local int xsum[PK_TILE][PK_MAX_BLOCKS];                        \
+    static ML_THREAD_LOCAL int xsum[PK_TILE][PK_MAX_BLOCKS];                        \
     __m128i (*xe)[XC * 16] = pk_xe;                                               \
     float tail[PK_TILE][PK];                                                      \
     pk_block_sums_batch(xsum, X, t0, T, nb, OFFSET);                              \

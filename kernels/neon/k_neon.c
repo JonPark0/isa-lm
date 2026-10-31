@@ -393,7 +393,7 @@ void ml_k_matmul_q8_pk_neon(float *Y, int ldy, const ml_qtensor *W, const ml_qba
 
 void ml_k_matmul_q4_pk_neon(float *Y, int ldy, const ml_qtensor *W, const ml_qbatch *X, int r0, int r1) {
     const int nb = W->cols / QK;
-    static _Thread_local int xsum[PK_TILE][PK_MAX_BLOCKS];
+    static ML_THREAD_LOCAL int xsum[PK_TILE][PK_MAX_BLOCKS];
     for (int t0 = 0; t0 < X->n; t0 += PK_TILE) {
         const int T = X->n - t0 < PK_TILE ? X->n - t0 : PK_TILE;
         for (int t = 0; t < T; t++) xsums(xsum[t], X->q + (size_t)(t0 + t) * X->k, nb);
