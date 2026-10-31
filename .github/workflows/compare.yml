@@ -47,7 +47,7 @@ jobs:
       - name: Install Python deps
         run: |
           .github/scripts/apt-install.sh python3-numpy
-          pip install --user --break-system-packages pyarrow
+          pip install --user --break-system-packages "pyarrow<18"   # the last before NumPy 2
       - name: CPU
         run: lscpu | grep -E 'Model name|^CPU\(s\)|Flags' | cut -c1-400
       - name: Build llama.cpp
