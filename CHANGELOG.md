@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 — 2026-10-31
 
 ### Added
 
@@ -13,11 +13,9 @@
   offset 96) puts a layer behind the window and on the local RoPE base
   (offset 100). The converter writes them when only some layers slide
   (`layer_types`, Qwen2's `max_window_layers`) instead of capping the context.
-
 - f16 block scales (`.mlb` header offset 120): Q4_0 takes 4.5 bits per
   weight instead of 5, Q8_0 8.5 instead of 9. Both kinds of file load in every
   build.
-
 - `tools/convert.py --q4-rule round`: llama.cpp's Q4_0 rounding, now the
   default for Gemma 3 (`--q4-rule fit` for the fitted rule). Gemma 3 1B Q4
   perplexity 49.83 against 53.25 fitted; its quantization-aware checkpoint
@@ -29,7 +27,8 @@
 
 - `tools/convert.py` writes f16 scales by default (`--scales f32` keeps the
   older files): perplexity changes by at most 0.15% (Qwen2.5 0.5B, Llama 3.2
-  1B), and Qwen2.5 0.5B Q4 shrinks from 309 to 278 MB.
+  1B), and Qwen2.5 0.5B Q4 shrinks from 309 to 278 MB. Versions before 0.4.0
+  cannot read files with f16 scales.
 - AVX2, AVX-VNNI and AVX-512 VNNI builds keep f16 scales as f16 in the packed
   weights, so decoding reads fewer bytes: on GitHub's x86-64 runner
   (Qwen2.5 0.5B) Q4 decode is 1.04-1.12x faster and Q8 1.05-1.11x. These
@@ -46,6 +45,11 @@
   Q4 prefill is 1.16-1.24x faster, Q4 decode 1.07-1.12x, and Q8 prefill on
   neon_dotprod and sve 1.04x. Pack cache files from earlier builds are
   rewritten.
+- [The benchmarks](https://github.com/JonPark0/isa-lm/blob/main/docs/benchmarks.md)
+  explain why AMX stays out of the build: on the reference CPU the tile
+  products and the AVX-512 rescaling of every 32-weight block do not overlap,
+  and a second AMX kernel, though 1.2-1.4x the AVX-512 VNNI kernel for Q8,
+  prefills no faster on a whole model.
 
 ## 0.3.0 — 2026-10-31
 
