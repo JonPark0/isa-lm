@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- AVX-512 VNNI prompt prefill feeds each weight vector to 6 tokens instead
+  of 4: matmuls 1.05-1.08× and Qwen2.5 0.5B prefill 1.05× faster on one
+  thread (GitHub runner; four threads within noise).
+- AVX2 Q8 prompt prefill takes |x| from a buffer made once per tile, saving a
+  `psignb` per token and step: Q8 matmuls 1.10-1.16× and Qwen2.5 0.5B Q8
+  prefill 1.14× faster on one thread (four threads
+  within noise).
+
 ## 0.4.0 — 2026-10-31
 
 ### Added
