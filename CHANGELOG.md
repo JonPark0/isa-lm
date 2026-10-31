@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 — 2026-10-31
 
 ### Added
 
@@ -16,6 +16,14 @@
   v0.1 has, is kept instead of capping the context.
 - Windows: CI builds the scalar, SSE2 and AVX2 configurations with MSVC and
   checks them against the numpy reference.
+- `scripts/compare_llamacpp.sh` runs on AArch64 too (native, dotprod and Armv8.0
+  levels), and the manual `llama.cpp comparison` workflow runs it on GitHub's
+  x86-64 and AArch64 runners. [The comparison](https://github.com/JonPark0/isa-lm/blob/main/docs/benchmarks.md)
+  now covers both: on x86-64 without AVX-512 isa-lm is ahead or level
+  everywhere; on AArch64 decode is level to 1.2× faster with dotprod and i8mm
+  and 1.3–1.7× faster on Armv8.0, while llama.cpp prefills Q4_0 faster with
+  dotprod. On the reference machine llama.cpp's AVX-512 prefill lead comes
+  from AMX; without it llama.cpp prefills at about a third of isa-lm's speed.
 
 ### Changed
 

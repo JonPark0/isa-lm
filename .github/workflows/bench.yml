@@ -86,6 +86,13 @@ jobs:
             echo
             cat bench.md
           } >> "$GITHUB_STEP_SUMMARY"
+          # each ISA's tables in an annotation too (readable through the checks
+          # API, which cuts a message at about 4 KB)
+          awk -v name="$NAME" '
+            function flush() { if (body != "") print "::notice title=bench " name " " isa "::" body; body = "" }
+            /^## / { flush(); isa = substr($0, 4); next }
+            isa != "" { gsub(/%/, "%25"); body = body $0 "%0A" }
+            END { flush() }' bench.md
       - uses: actions/upload-artifact@v4
         if: always()
         with:
