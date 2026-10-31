@@ -126,13 +126,17 @@ python3 tools/convert.py hf ./TinyLlama-1.1B model.mlb --wtype q4 --max-seq 2048
   their model cards describe) are supported, with transformers' formulas. The
   converter refuses other types (dynamic, longrope) instead of writing a model
   that would compute wrong outputs.
-- **Architectures:** `model_type` must be `llama`, `mistral`, `qwen2`, `qwen3`
-  or `gemma3_text` (Gemma 3 1B), with no biases other than Qwen2's q/k/v
-  biases. A `head_dim` other than `hidden_size / num_attention_heads`, Qwen3's
-  per-head q/k RMSNorm, and Gemma 3's GELU, block output norms, embedding and
-  attention scales and local/global layers are supported; Gemma's `(1 + w)`
-  norm weights are stored with the 1 added. Others (Phi, Gemma 3's multimodal
-  4B and larger checkpoints, logit soft-capping, …) are refused.
+- **Architectures:** `model_type` must be `llama`, `mistral`, `qwen2`, `qwen3`,
+  `gemma2`, `gemma3_text` (Gemma 3 1B) or `gemma3` (Gemma 3 4B, 12B and 27B,
+  image-text checkpoints: the converter takes the text model and leaves the
+  vision tower out), with no biases other than Qwen2's q/k/v biases. A
+  `head_dim` other than `hidden_size / num_attention_heads`, Qwen3's per-head
+  q/k RMSNorm, Gemma's GELU, block output norms, embedding and attention
+  scales and local/global layers, and Gemma 2's soft-capped attention scores
+  and logits are supported; Gemma's `(1 + w)` norm weights are stored with the
+  1 added. Others (Phi, mixture of experts, …) are refused. Checkpoint tensors
+  are converted to float32 one at a time, so converting a 4B model needs about
+  as much memory as its largest tensor.
 - **Sliding window:** each position of a sliding layer attends to the last
   `sliding_window` positions: every layer for Mistral v0.1, the layers
   `layer_types` or Qwen2's `max_window_layers` select otherwise.
@@ -232,54 +236,63 @@ keeps some matrix classes of a Q4 model in Q8 (`emb`, `cls`, `qk`, `v`, `o`,
 python3 tools/convert.py hf ./Llama-3.2-1B-Instruct llama.mlb --wtype q4 --q8 v,o,down
 ```
 
-Llama 3.2 1B on wikitext-2 (2044 tokens, `tools/perplexity.py`; decode on
-4 vCPUs, avx512vnni):
+Llama 3.2 1B on wikitext-2 (2044 tokens, `tools/perplexity.py`; f16 scales,
+the converter's default; sizes in MiB; decode on 4 vCPUs, avx512vnni):
 
 | Weights | Size | Perplexity | Decode `-t 4` |
 |---------|-----:|-----------:|--------------:|
-| Q8 | 1326 MB | 17.30 | 31.5 tok/s |
-| Q4 + Q8 `v,o,down` | 904 MB | 17.95 | 47.7 tok/s |
-| Q4 + Q8 `v,down` | 872 MB | 18.22 | |
-| Q4 | 737 MB | 19.91 | 61.3 tok/s |
+| Q8 | 1252 MB | 17.27 | 35.0 tok/s |
+| Q4 + Q8 `v,o,down` | 831 MB | 17.89 | 47.7 tok/s |
+| Q4 + Q8 `v,down` | 799 MB | 18.10 | |
+| Q4 | 663 MB | 19.91 | 64.1 tok/s |
 
 The down projection (`down`) and the value and output projections matter
 most. The Q8 KV cache costs nothing measurable here: `--kv q8` on the Q8
 model gives 17.27. The embedding and classifier (`emb`, `cls`) are large for a 128K
-vocabulary and help little (Q4 + `emb,cls`: 862 MB, 19.90).
+vocabulary and help little (Q4 + `emb,cls`: 788 MB, 19.87).
 
 Qwen2.5 0.5B Instruct, same text and machine (no BOS; the F32 numpy
 reference scores 19.00):
 
 | Weights | Size | Perplexity | Decode `-t 4` |
 |---------|-----:|-----------:|--------------:|
-| Q8 | 530 MB | 19.05 | 63.3 tok/s |
-| Q4 + Q8 `emb,v,o,down` | 419 MB | 19.97 | 85.2 tok/s |
-| Q4 | 294 MB | 21.73 | 112.0 tok/s |
+| Q8 | 500 MB | 18.98 | 87.3 tok/s |
+| Q4 + Q8 `emb,v,o,down` | 390 MB | 20.06 | 107.2 tok/s |
+| Q4 | 265 MB | 21.74 | 141.5 tok/s |
+
+With f32 scales (`--scales f32`) every file is 5–10% larger and perplexity
+changes by at most 0.15%.
 
 Small models lose more to Q4_0: here `up` and `down` matter most, then `v`.
 
-Other models on the same text (Q8 against the F32 numpy reference):
+Other models on the same text (Q8 against the F32 numpy reference; f16 scales,
+Q4 with the default rule):
 
 | Model | F32 | Q8 | Q4 |
 |-------|----:|---:|---:|
-| Qwen3 0.6B | 28.10 | 27.91 | 31.73 |
-| SmolLM2 135M Instruct | 23.44 | 23.52 | 31.67 |
-| Gemma 3 1B Instruct | 42.32 | 42.20 | 53.68 |
+| Qwen3 0.6B | 28.10 | 27.90 | 31.69 |
+| SmolLM2 135M Instruct | 23.44 | 23.62 | 31.60 |
+| Gemma 3 1B Instruct | 42.32 | 41.97 | 49.83 |
+| Gemma 3 4B Instruct | — | 24.30 | 23.31 |
 
-Gemma 3 1B loses the most to Q4_0. With the fitted rule it reaches 53.25
-(f16 scales), and keeping `emb,cls,v,down` in Q8 gives 47.40 at 843 MB.
-llama.cpp's plain Q4_0 rounding (`--q4-rule round`) does better on Gemma 3,
-49.83 at 562 MB, though not on the others in the table below. Google's
+The F32 reference was not run over the whole text for Gemma 3 4B; on its
+first 96 tokens the Q8 logits are within KL 0.0021 of it (same argmax at 97%
+of the positions). Its Q8 file takes 3932 MiB, Q4 2083 MiB.
+
+Gemma 3 1B loses the most to Q4_0. With the fitted rule it reaches 53.25,
+and keeping `emb,cls,v,down` in Q8 gives 47.97 at 783 MB. llama.cpp's plain
+Q4_0 rounding (`--q4-rule round`) does better on Gemma 3, 49.83 at 536 MB,
+though not on the other models below. Google's
 quantization-aware checkpoint (`gemma-3-1b-it-qat-q4_0-unquantized`) was
-trained for exactly that rounding, and with it reaches 40.50 at 562 MB. That
+trained for exactly that rounding, and with it reaches 40.50 at 536 MB. That
 is below its own Q8 (42.53) and below the regular checkpoint's F32 reference;
 the fit gives 47.43 on it. The converter therefore rounds Gemma 3 checkpoints
 by default and fits the others; `--q4-rule fit|round` overrides it.
 
-| Q4 rule (f16 scales) | Qwen2.5 0.5B | Llama 3.2 1B | Gemma 3 1B | Gemma 3 1B QAT |
-|---|---:|---:|---:|---:|
-| fit | **21.73** | **19.90** | 53.25 | 47.43 |
-| round | 22.45 | 19.94 | **49.83** | **40.50** |
+| Q4 rule (f16 scales) | Qwen2.5 0.5B | Llama 3.2 1B | Qwen3 0.6B | SmolLM2 135M | Gemma 3 1B | Gemma 3 1B QAT |
+|---|---:|---:|---:|---:|---:|---:|
+| fit | **21.73** | **19.90** | **31.69** | **31.60** | 53.25 | 47.43 |
+| round | 22.45 | 19.94 | 31.75 | 32.31 | **49.83** | **40.50** |
 
 The converter fits each Q4 block's scale by weighted least squares over a few
 candidate mappings, rather than dividing the block's maximum by 7 (Llama 3.2

@@ -221,6 +221,9 @@ static void test_load_rejects_bad_attention_fields(void) {
     TT_EQ_INT(load_patched(0, 112, 0xbf800000u), ML_E_FORMAT);   /* negative embedding scale */
     TT_EQ_INT(load_patched(0, 116, 0x7fc00000u), ML_E_FORMAT);   /* NaN attention scale */
     TT_EQ_INT(load_patched(0, 120, 2), ML_E_FORMAT);         /* scale_f16 is a 0/1 flag */
+    TT_EQ_INT(load_patched(0, 124, 0xbf800000u), ML_E_FORMAT);   /* negative attention soft-cap */
+    TT_EQ_INT(load_patched(0, 128, 0x7f800000u), ML_E_FORMAT);   /* infinite logit soft-cap */
+    TT_EQ_INT(load_patched(0, 128, 0x41f00000u), ML_OK);         /* a logit soft-cap of 30 */
 }
 
 /* f16 scales (offset 120; lwin_q8.mlb): the loader converts them to floats,
