@@ -127,7 +127,7 @@ main branch's, and llama.cpp b11835):
 | NEON (Armv8.0) | Q4_0 | 1 | 41.1 | 24.4 | 26.5 | 15.8 | 1.68× |
 | NEON (Armv8.0) | Q4_0 | 4 | 153.8 | 96.1 | 81.7 | 53.7 | 1.52× |
 
-- **x86-64 without AVX-512:** isa-lm is ahead everywhere: decode 1.0–1.7×
+- **x86-64 without AVX-512:** isa-lm is ahead or level everywhere: decode 1.0–1.7×
   with AVX2 and 2.5–10× on SSE builds, prefill 1.4–1.9× with AVX2 and 2.6–10×
   on SSE builds.
 - **AArch64:** decode is level with llama.cpp for Q8_0 at dotprod and i8mm and
