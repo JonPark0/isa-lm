@@ -67,15 +67,17 @@ jobs:
           done
       - name: Model and text
         run: |
+          # each failure is annotated (job logs are not always at hand)
+          get() { curl -fsSL --retry 3 --retry-delay 5 -o "$1" "$2" || { echo "::error title=download::$2"; exit 1; }; }
           mkdir -p ../data/qwen
           hf=https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct/resolve/main
-          for f in config.json tokenizer.json model.safetensors; do curl -fsSL -o ../data/qwen/$f $hf/$f; done
-          curl -fsSL -o ../data/f16.gguf \
+          for f in config.json tokenizer.json model.safetensors; do get ../data/qwen/$f $hf/$f; done
+          get ../data/f16.gguf \
             https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-fp16.gguf
-          curl -fsSL -o ../data/wiki.parquet \
+          get ../data/wiki.parquet \
             https://huggingface.co/datasets/Salesforce/wikitext/resolve/main/wikitext-2-raw-v1/test-00000-of-00001.parquet
           python3 -c "import pyarrow.parquet as pq, sys; open(sys.argv[2], 'w').write(''.join(pq.read_table(sys.argv[1])['text'].to_pylist()))" \
-            ../data/wiki.parquet ../data/wiki.txt
+            ../data/wiki.parquet ../data/wiki.txt 2> py.err || { echo "::error title=wikitext::$(tail -n 3 py.err | tr '\n' ' ')"; exit 1; }
           ls -la ../data ../data/qwen
       - name: Compare
         env:
