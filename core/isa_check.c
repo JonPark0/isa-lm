@@ -51,6 +51,7 @@ ml_status ml_isa_check(const char **missing) {
     REQUIRE(BIT(l1[2], 28), "avx");
     REQUIRE(osxsave && (xcr0 & 0x6) == 0x6, "os-avx-state");
     REQUIRE(BIT(l1[2], 12), "fma");
+    REQUIRE(BIT(l1[2], 29), "f16c");
     REQUIRE(BIT(l7[1], 5), "avx2");
 #endif
 #if defined(ML_ISA_AVXVNNI)

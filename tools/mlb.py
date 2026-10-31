@@ -198,6 +198,18 @@ def _q4_search(b, w=None):
     return np.where(zero[:, None], 0, lv), np.where(zero, 0, d).astype(np.float32)
 
 
+def _q4_round(b):
+    """Blocks b[n, 32] -> (levels, scales) by llama.cpp's Q4_0 rule: d is the
+    element of largest magnitude over -8, and each level x / d + 8.5 truncated,
+    at most 15, minus 8. Quantization-aware checkpoints trained for Q4_0
+    (Gemma 3 QAT) expect exactly this rounding."""
+    mx = np.take_along_axis(b, np.abs(b).argmax(axis=-1)[:, None], axis=-1)[:, 0]
+    d = (mx / np.float32(-8)).astype(np.float32)
+    inv = np.where(d != 0, np.float32(1) / np.where(d != 0, d, 1), np.float32(0)).astype(np.float32)
+    lv = np.minimum(np.trunc((b * inv[:, None]).astype(np.float32) + np.float32(8.5)), 15) - 8
+    return lv.astype(np.float32), d
+
+
 IMP_FLOOR = np.float32(1e-3)   # least channel importance, relative to the matrix mean
 
 
@@ -211,9 +223,10 @@ def _importance(imp):
     return np.maximum((imp / mean).astype(np.float32), IMP_FLOOR)
 
 
-def quantize_q4(x, imp=None, f16=False):
+def quantize_q4(x, imp=None, f16=False, rule="fit"):
     """x[..., K] float32 -> (packed uint8[..., K/2], d float32[..., K/32]);
-    with f16, d is float16, each fitted scale rounded to nearest.
+    with f16, d is float16, each scale rounded to nearest. rule "round" takes
+    llama.cpp's Q4_0 rounding (_q4_round) instead of the fit below.
     Byte j of a block holds element j (low nibble) and j+16 (high nibble).
 
     Per block, the element of largest magnitude is mapped to level -8 - step
@@ -240,8 +253,15 @@ def quantize_q4(x, imp=None, f16=False):
         s2 = s2_64.astype(np.float32)
         impb = imp.reshape(nb, QK)
 
+    if rule not in ("fit", "round"):
+        raise ValueError(f"Q4 rule must be fit or round, not {rule!r}")
+    if rule == "round" and imp is not None:
+        raise ValueError("an importance matrix weights the fitted rule only")
+
     def search(i):
         c = b[i:i + 4096]
+        if rule == "round":
+            return _q4_round(c)
         if imp is None:
             return _q4_search(c)
         idx = np.arange(i, i + len(c))
@@ -303,11 +323,12 @@ def _check_cfg(cfg):
         raise ValueError(f"n_heads * head_dim = {cfg['n_heads'] * head_dim(cfg)} must be a multiple of {QK}")
 
 
-def write_mlb(path, cfg, w, wtype, q8=(), imatrix=None, scales="f32"):
+def write_mlb(path, cfg, w, wtype, q8=(), imatrix=None, scales="f32", q4_rule="fit"):
     """Writes the model; returns [(array name, offset, nbytes)] for every array.
     q8: matrix classes (Q8_CLASSES) kept in Q8 when wtype is q4.
     imatrix: read_imatrix's result, weighting the Q4 fits.
-    scales: "f32" or "f16", the storage of every matrix's block scales."""
+    scales: "f32" or "f16", the storage of every matrix's block scales.
+    q4_rule: "fit" or "round" (quantize_q4)."""
     if scales not in ("f32", "f16"):
         raise ValueError(f"scales must be f32 or f16, not {scales!r}")
     f16 = scales == "f16"
@@ -351,7 +372,7 @@ def write_mlb(path, cfg, w, wtype, q8=(), imatrix=None, scales="f32"):
             key = name.split(".")[-1]
             t = matrix_type(key, WTYPES[wtype], mask, shared)
             imp = imatrix_for(imatrix, name, shared) if imatrix else None
-            q, d = quantize_q8(arr, f16) if t == WTYPES["q8"] else quantize_q4(arr, imp, f16)
+            q, d = quantize_q8(arr, f16) if t == WTYPES["q8"] else quantize_q4(arr, imp, f16, q4_rule)
             put(name + ".q", q)
             put(name + ".d", d)
     return layout

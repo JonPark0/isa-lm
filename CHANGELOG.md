@@ -18,11 +18,22 @@
   weight instead of 5, Q8_0 8.5 instead of 9. Both kinds of file load in every
   build.
 
+- `tools/convert.py --q4-rule round`: llama.cpp's Q4_0 rounding, now the
+  default for Gemma 3 (`--q4-rule fit` for the fitted rule). Gemma 3 1B Q4
+  perplexity 49.83 against 53.25 fitted; its quantization-aware checkpoint
+  (`gemma-3-1b-it-qat-q4_0-unquantized`) reaches 40.50, below its Q8 (42.53).
+  The fit stays the default for other models (Qwen2.5 0.5B 21.73 against
+  22.45).
+
 ### Changed
 
 - `tools/convert.py` writes f16 scales by default (`--scales f32` keeps the
   older files): perplexity changes by at most 0.15% (Qwen2.5 0.5B, Llama 3.2
   1B), and Qwen2.5 0.5B Q4 shrinks from 309 to 278 MB.
+- AVX2, AVX-VNNI and AVX-512 VNNI builds keep f16 scales as f16 in the packed
+  weights, so decoding reads fewer bytes: on GitHub's x86-64 runner
+  (Qwen2.5 0.5B) Q4 decode is 1.04-1.12x faster and Q8 1.05-1.11x. These
+  builds now require F16C, which every AVX2 CPU has.
 - Prompt prefill takes up to 128 tokens per batched step (was 32; `--batch`
   1-128), so each step's pass over the weights serves 4x the tokens: prefill
   up to 1.4x faster on the AVX-512 reference VM (Qwen2.5 0.5B, 4 threads) and

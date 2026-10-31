@@ -43,9 +43,9 @@ CHAIN := $(CHAIN_$(ISA))
 ISAFLAGS_scalar       :=
 ISAFLAGS_sse2         := -msse2
 ISAFLAGS_sse41        := -msse4.1
-ISAFLAGS_avx2         := -mavx2 -mfma
-ISAFLAGS_avxvnni      := -mavx2 -mfma -mavxvnni
-ISAFLAGS_avx512vnni   := -mavx512f -mavx512bw -mavx512vnni -mfma
+ISAFLAGS_avx2         := -mavx2 -mfma -mf16c
+ISAFLAGS_avxvnni      := -mavx2 -mfma -mf16c -mavxvnni
+ISAFLAGS_avx512vnni   := -mavx512f -mavx512bw -mavx512vnni -mfma -mf16c
 ifeq ($(ARCH),arm)
   ISAFLAGS_neon       := -march=armv7-a -mfpu=neon -mfloat-abi=hard
 else

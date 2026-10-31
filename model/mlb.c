@@ -22,7 +22,7 @@ static const void *take(cursor *c, size_t nbytes) {
 }
 
 static ml_qtensor take_mat(cursor *c, int rows, int cols, int type, int f16) {
-    ml_qtensor t = { NULL, NULL, rows, cols, (uint8_t)type, NULL, NULL, NULL };
+    ml_qtensor t = { NULL, NULL, rows, cols, (uint8_t)type, NULL, NULL, NULL, 0 };
     size_t n, nd;
     if (!ml_mul_size((size_t)rows, (size_t)cols, &n) || !ml_mul_size(n / QK, f16 ? 2 : sizeof(float), &nd)) {
         c->ok = 0;   /* cannot fit in this address space, let alone this file */

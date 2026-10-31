@@ -76,6 +76,25 @@ def test_f16_scales(tmp_path):
         pass
 
 
+def test_quantize_q4_round_rule():
+    # llama.cpp's Q4_0: d = signed max / -8, levels trunc(x/d + 8.5) capped at 15, minus 8
+    x = np.zeros((1, 32), np.float32)
+    x[0, :6] = [-8.0, 4.0, 3.5, -3.49, 7.9, 6.9]
+    p, d = mlb.quantize_q4(x, rule="round")
+    assert d[0, 0] == 1.0
+    lv = np.concatenate([(p[0, :16] & 15).astype(int) - 8, (p[0, :16] >> 4).astype(int) - 8])
+    assert list(lv[:6]) == [-8, 4, 4, -3, 7, 7]
+    assert not lv[6:].any()
+    # the fit is unchanged as the default, and refuses no rule silently
+    assert np.array_equal(mlb.quantize_q4(x)[0], mlb.quantize_q4(x, rule="fit")[0])
+    for bad in (dict(rule="nearest"), dict(rule="round", imp=np.ones(32))):
+        try:
+            mlb.quantize_q4(x, **bad)
+            raise AssertionError(bad)
+        except ValueError:
+            pass
+
+
 def test_quantize_q8_rounding():
     x = np.zeros((1, 32), np.float32)
     x[0, :6] = [127.0, 0.5, -0.5, 1.5, 2.5, -2.5]
