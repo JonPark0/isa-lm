@@ -562,6 +562,28 @@ def test_hf_gemma3(tmp_path):
     assert np.abs(got - ref).max() <= 5e-2 * np.abs(ref).max()
 
 
+def test_hf_gemma3_image_text(tmp_path):
+    """Gemma 3 4B and up ship as image-text checkpoints (model_type gemma3, the
+    text model's config in text_config, its tensors under language_model.):
+    the text model converts to the same file as the text-only checkpoint."""
+    d, c, orig = _gemma3_hf(tmp_path)
+    t = {"language_model." + k: ("BF16", _bf16(v)[0]) for k, v in orig.items()}
+    rng = np.random.default_rng(3)
+    t["vision_tower.vision_model.embeddings.patch_embedding.weight"] = ("BF16", _bf16(rng.standard_normal((8, 3, 2, 2)))[0])
+    t["multi_modal_projector.mm_input_projection_weight"] = ("BF16", _bf16(rng.standard_normal((8, 64)))[0])
+    mm = tmp_path / "gemma_mm"
+    mm.mkdir()
+    _write_safetensors(str(mm / "model.safetensors"), t)
+    tc = {k: v for k, v in c.items() if k != "model_type"}   # transformers leaves it out at times
+    (mm / "config.json").write_text(json.dumps({"model_type": "gemma3", "text_config": tc,
+                                                "vision_config": {"model_type": "siglip_vision_model"}}))
+    a, b = str(tmp_path / "text.mlb"), str(tmp_path / "mm.mlb")
+    convert.main(["hf", d, a, "--wtype", "q4"])
+    convert.main(["hf", str(mm), b, "--wtype", "q4"])
+    with open(a, "rb") as fa, open(b, "rb") as fb:
+        assert fa.read() == fb.read()
+
+
 def test_large_vocab_loads_in_c(tmp_path):
     """Llama-3-sized vocabularies (> 65536) must load and run."""
     exe = os.path.join(ROOT, "build", "scalar", "ml_run")

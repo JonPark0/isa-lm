@@ -62,8 +62,35 @@ def load_llama2c(path):
 _DTYPES = {"F32": np.float32, "F16": np.float16, "BF16": np.uint16}
 
 
+class Lazy:
+    """An array made when it is first used (np.asarray): a converter holding
+    these keeps only the tensor it is writing in memory, not the checkpoint
+    in float32 (a 4B model would need 16 GB)."""
+
+    def __init__(self, fn, shape):
+        self.fn, self.shape = fn, tuple(shape)
+
+    def __array__(self, dtype=None, copy=None):
+        a = self.fn()
+        return a if dtype is None else a.astype(dtype, copy=False)
+
+    def __add__(self, v):
+        return Lazy(lambda: np.asarray(self) + v, self.shape)
+
+    def __matmul__(self, o):
+        return np.asarray(self) @ o
+
+    def __rmatmul__(self, o):
+        return o @ np.asarray(self)
+
+
+def lazy(fn, src):
+    """Lazy array fn(src array), of src's shape."""
+    return Lazy(lambda: fn(np.asarray(src)), src.shape)
+
+
 def read_safetensors(path):
-    """-> {name: float32 array}. Supports F32, F16, BF16."""
+    """-> {name: Lazy float32 array}. Supports F32, F16, BF16."""
     with open(path, "rb") as fh:
         n = struct.unpack("<Q", fh.read(8))[0]
         header = json.loads(fh.read(n))
@@ -76,10 +103,13 @@ def read_safetensors(path):
         if info["dtype"] not in _DTYPES:
             raise ValueError(f"{name}: unsupported dtype {info['dtype']}")
         a, b = info["data_offsets"]
-        arr = np.frombuffer(raw[base + a:base + b], _DTYPES[info["dtype"]]).reshape(info["shape"])
-        if info["dtype"] == "BF16":
-            arr = (arr.astype(np.uint32) << 16).view(np.float32)
-        out[name] = arr.astype(np.float32)
+
+        def get(a=a, b=b, info=info):
+            arr = np.frombuffer(raw[base + a:base + b], _DTYPES[info["dtype"]]).reshape(info["shape"])
+            if info["dtype"] == "BF16":
+                return (arr.astype(np.uint32) << 16).view(np.float32)
+            return arr.astype(np.float32)
+        out[name] = Lazy(get, info["shape"])
     return out
 
 
@@ -151,6 +181,12 @@ def load_hf(d, max_seq=None):
     """-> (cfg, float32 weights) from a HF Llama, Mistral, Qwen2, Qwen3 or Gemma 3 (text) directory."""
     with open(os.path.join(d, "config.json")) as fh:
         c = json.load(fh)
+    pre = "model."   # tensor name prefix of the text model
+    if c.get("model_type") == "gemma3" and "text_config" in c:
+        # Gemma 3 4B and up ship as image-text models: convert the text model
+        # (language_model.*) and leave the vision tower out
+        c, pre = c["text_config"], "language_model.model."
+        c.setdefault("model_type", "gemma3_text")
     mtype = c.get("model_type", "llama")
     if mtype not in HF_TYPES:
         raise ValueError(f"model_type {mtype!r} is not supported (only {', '.join(HF_TYPES)})")
@@ -179,14 +215,14 @@ def load_hf(d, max_seq=None):
     window, sliding = _window(c)
     if window and window >= seq:   # the window never cuts anything off
         window, sliding = None, None
-    qk_norm = "model.layers.0.self_attn.q_norm.weight" in t
-    if (t["model.layers.0.self_attn.q_proj.weight"].shape[0] != nh * hd or
-            t["model.layers.0.self_attn.k_proj.weight"].shape[0] != nkv * hd):
+    qk_norm = pre + "layers.0.self_attn.q_norm.weight" in t
+    if (t[pre + "layers.0.self_attn.q_proj.weight"].shape[0] != nh * hd or
+            t[pre + "layers.0.self_attn.k_proj.weight"].shape[0] != nkv * hd):
         raise ValueError(f"q/k projections do not match {nh} and {nkv} heads of {hd}")
     if any(k.endswith(("o_proj.bias", "mlp.gate_proj.bias", "mlp.up_proj.bias", "mlp.down_proj.bias"))
            for k in t):
         raise ValueError("biases other than on the q/k/v projections are not supported")
-    bias = "model.layers.0.self_attn.q_proj.bias" in t
+    bias = pre + "layers.0.self_attn.q_proj.bias" in t
     cfg = dict(dim=c["hidden_size"], n_layers=c["num_hidden_layers"], n_heads=nh, n_kv_heads=nkv,
                hidden_dim=c["intermediate_size"], vocab=c["vocab_size"], max_seq=seq, qkv_bias=int(bias),
                rope_theta=float(c.get("rope_theta", 10000.0)), norm_eps=float(c.get("rms_norm_eps", 1e-5)),
@@ -209,13 +245,13 @@ def load_hf(d, max_seq=None):
                    embed_scale=float(np.float32(math.sqrt(c["hidden_size"]))),
                    attn_scale=float(c.get("query_pre_attn_scalar", hd)) ** -0.5, post_norms=1)
     norm = (lambda v: v + 1.0) if gemma else (lambda v: v)
-    w = {"tok_emb": t["model.embed_tokens.weight"], "final_norm": norm(t["model.norm.weight"]), "layers": []}
+    w = {"tok_emb": t[pre + "embed_tokens.weight"], "final_norm": norm(t[pre + "norm.weight"]), "layers": []}
     for i in range(cfg["n_layers"]):
-        p = f"model.layers.{i}."
+        p = f"{pre}layers.{i}."
         w["layers"].append({
             "attn_norm": norm(t[p + "input_layernorm.weight"]),
-            "wq": _unrotate(t[p + "self_attn.q_proj.weight"], nh),
-            "wk": _unrotate(t[p + "self_attn.k_proj.weight"], nkv),
+            "wq": lazy(lambda a: _unrotate(a, nh), t[p + "self_attn.q_proj.weight"]),
+            "wk": lazy(lambda a: _unrotate(a, nkv), t[p + "self_attn.k_proj.weight"]),
             "wv": t[p + "self_attn.v_proj.weight"],
             "wo": t[p + "self_attn.o_proj.weight"],
             "ffn_norm": norm(t[p + ("pre_feedforward_layernorm" if gemma else "post_attention_layernorm") + ".weight"]),
@@ -224,12 +260,12 @@ def load_hf(d, max_seq=None):
             "w3": t[p + "mlp.up_proj.weight"],
         })
         if bias:   # q/k biases follow their rows through the RoPE permutation
-            w["layers"][-1].update(bq=_unrotate(t[p + "self_attn.q_proj.bias"][:, None], nh)[:, 0],
-                                   bk=_unrotate(t[p + "self_attn.k_proj.bias"][:, None], nkv)[:, 0],
+            w["layers"][-1].update(bq=lazy(lambda a: _unrotate(a[:, None], nh)[:, 0], t[p + "self_attn.q_proj.bias"]),
+                                   bk=lazy(lambda a: _unrotate(a[:, None], nkv)[:, 0], t[p + "self_attn.k_proj.bias"]),
                                    bv=t[p + "self_attn.v_proj.bias"])
         if qk_norm:   # per-head weights, permuted as each head's q/k rows are
-            w["layers"][-1].update(q_norm=norm(_unrotate(t[p + "self_attn.q_norm.weight"][:, None], 1)[:, 0]),
-                                   k_norm=norm(_unrotate(t[p + "self_attn.k_norm.weight"][:, None], 1)[:, 0]))
+            w["layers"][-1].update(q_norm=norm(lazy(lambda a: _unrotate(a[:, None], 1)[:, 0], t[p + "self_attn.q_norm.weight"])),
+                                   k_norm=norm(lazy(lambda a: _unrotate(a[:, None], 1)[:, 0], t[p + "self_attn.k_norm.weight"])))
         if gemma:   # Gemma's post_attention_layernorm normalizes the attention output
             w["layers"][-1].update(post_attn_norm=norm(t[p + "post_attention_layernorm.weight"]),
                                    post_ffn_norm=norm(t[p + "post_feedforward_layernorm.weight"]))
