@@ -86,6 +86,8 @@ jobs:
             echo
             cat bench.md
           } >> "$GITHUB_STEP_SUMMARY"
+          # the tables in one annotation too (readable through the checks API)
+          echo "::notice title=bench $NAME::$(sed 's/%/%25/g' bench.md | awk '{printf "%s%%0A", $0}')"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
