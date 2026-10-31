@@ -341,9 +341,17 @@ void ml_k_axpy_q8_avx2(float *y, const float *a, const int8_t *x, const float *d
 
 /* Batched packed kernels: each weight vector feeds up to PK_TILE tokens;
  * per token the arithmetic is the matvec's, so results match it exactly. */
+/* |x| of the tile's activations, made once per tile: the products take |x|
+ * (unsigned) times w with x's sign, so this saves a psignb per token and step. */
+static ML_THREAD_LOCAL int8_t xabs[PK_TILE][PK_MAX_BLOCKS * QK];
+
 ML_INLINE void matmul_q8_tile(float *Y, int ldy, const ml_qtensor *W, const ml_qbatch *X, int r0, int r1, int t0, const int T, const int f16) {
     const int nb = W->cols / QK;
     const __m256i ones = _mm256_set1_epi16(1);
+    ML_UNROLL(4) for (int t = 0; t < T; t++)
+        for (int i = 0; i < X->k; i += 32)
+            _mm256_storeu_si256((__m256i *)(xabs[t] + i),
+                                _mm256_abs_epi8(_mm256_loadu_si256((const __m256i *)(X->q + (size_t)(t0 + t) * X->k + i))));
     for (int row = r0; row < r1; row += PK) {
         const uint8_t *p = W->pq + (size_t)(row / PK) * nb * (8 * PK * 4);
     const void *d = pk_d(W, (size_t)(row / PK) * nb * PK, f16);
@@ -356,7 +364,8 @@ ML_INLINE void matmul_q8_tile(float *Y, int ldy, const ml_qtensor *W, const ml_q
                 const __m256i w = _mm256_loadu_si256((const __m256i *)(p + k * PK * 4));
                 ML_UNROLL(4) for (int t = 0; t < T; t++) {
                     const __m256i xv = _mm256_set1_epi32(((const int32_t *)(X->q + (size_t)(t0 + t) * X->k + b * QK))[k]);
-                    s[t] = _mm256_add_epi32(s[t], _mm256_madd_epi16(_mm256_maddubs_epi16(_mm256_sign_epi8(xv, xv), _mm256_sign_epi8(w, xv)), ones));
+                    const __m256i av = _mm256_set1_epi32(((const int32_t *)(xabs[t] + b * QK))[k]);
+                    s[t] = _mm256_add_epi32(s[t], _mm256_madd_epi16(_mm256_maddubs_epi16(av, _mm256_sign_epi8(w, xv)), ones));
                 }
             }
             const __m256 dv = pk_d8(d, b * PK, f16);
