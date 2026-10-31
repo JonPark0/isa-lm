@@ -4,16 +4,18 @@ name: llama.cpp comparison
 # runners (Qwen2.5 0.5B Instruct, Q8_0 and Q4_0, wikitext-2 perplexity). The
 # results table goes to the run's summary, an artifact and one annotation.
 on:
+  push:
+    branches: [bench/arm-compare]   # temporary: a first run before the workflow is on main
   workflow_dispatch:
     inputs:
       llama_cpp:
         description: "llama.cpp tag to compare against"
         default: b11835
-        required: true
+        required: false
       reps:
         description: "Runs averaged per measurement"
         default: "3"
-        required: true
+        required: false
 
 permissions:
   contents: read
@@ -50,7 +52,7 @@ jobs:
         run: lscpu | grep -E 'Model name|^CPU\(s\)|Flags' | cut -c1-400
       - name: Build llama.cpp
         env:
-          TAG: ${{ inputs.llama_cpp }}
+          TAG: ${{ inputs.llama_cpp || 'b11835' }}
           BUILDS: ${{ matrix.builds }}
         run: |
           git clone -q --depth 1 --branch "$TAG" https://github.com/ggml-org/llama.cpp ../llama.cpp
@@ -77,12 +79,12 @@ jobs:
           ls -la ../data ../data/qwen
       - name: Compare
         env:
-          REPS: ${{ inputs.reps }}
+          REPS: ${{ inputs.reps || '3' }}
           NAME: ${{ matrix.name }}
         run: |
           scripts/compare_llamacpp.sh ../llama.cpp ../data/qwen ../data/f16.gguf ../data/wiki.txt build/compare
           {
-            echo "# $NAME: isa-lm ${GITHUB_SHA::7} against llama.cpp ${{ inputs.llama_cpp }}"
+            echo "# $NAME: isa-lm ${GITHUB_SHA::7} against llama.cpp ${{ inputs.llama_cpp || 'b11835' }}"
             echo
             cat build/compare/results.md
           } >> "$GITHUB_STEP_SUMMARY"
