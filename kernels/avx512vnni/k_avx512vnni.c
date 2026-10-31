@@ -185,11 +185,27 @@ void ml_k_matvec_q4_pk_avx512vnni(float *y, const ml_qtensor *W, const ml_qact *
     else matvec_q4_pk_impl(y, W, x, r0, r1, 0);
 }
 
-/* Batched packed kernels: each weight vector loaded once feeds up to 4
+/* Batched packed kernels: each weight vector loaded once feeds up to 6
  * tokens, which turns the memory-bound matvec into a compute-bound matmul.
  * Per token the arithmetic is exactly the matvec's, so results match it
- * bit for bit. */
-#define TILE 4
+ * bit for bit. Two row groups by 6 tokens keep 24 accumulators in the 32 zmm
+ * registers; on the GitHub runner 6 ran 5-8% faster than 4. */
+#define TILE 6
+/* PK_TILES for tiles of up to 6 tokens */
+#define PK_TILES6(TILE_FN)                                                        \
+    for (int rb_ = pk_row_block(W, PK), b0_ = r0; b0_ < r1; b0_ += rb_) {         \
+        const int b1_ = r1 - b0_ < rb_ ? r1 : b0_ + rb_;                          \
+        for (int t0 = 0; t0 < X->n; t0 += TILE) {                                 \
+            switch (X->n - t0 < TILE ? X->n - t0 : TILE) {                        \
+            case 6: TILE_FN(Y, ldy, W, X, b0_, b1_, t0, 6); break;                \
+            case 5: TILE_FN(Y, ldy, W, X, b0_, b1_, t0, 5); break;                \
+            case 4: TILE_FN(Y, ldy, W, X, b0_, b1_, t0, 4); break;                \
+            case 3: TILE_FN(Y, ldy, W, X, b0_, b1_, t0, 3); break;                \
+            case 2: TILE_FN(Y, ldy, W, X, b0_, b1_, t0, 2); break;                \
+            default: TILE_FN(Y, ldy, W, X, b0_, b1_, t0, 1); break;               \
+            }                                                                     \
+        }                                                                         \
+    }
 
 static void block_sums_batch(int (*xsum)[PK_MAX_BLOCKS], const ml_qbatch *X, int t0, int T, int nb, int offset) {
     for (int t = 0; t < T; t++) {
@@ -211,23 +227,23 @@ ML_INLINE void matmul_q8_groups(float *Y, int ldy, const ml_qtensor *W, const ml
     const uint8_t *p = W->pq + (size_t)(row / PK) * gq;
     const void *d = pk_d(W, (size_t)(row / PK) * gd, f16);
     __m512 acc[2][TILE];
-    ML_UNROLL(2) for (int g = 0; g < 2; g++) ML_UNROLL(4) for (int t = 0; t < TILE; t++) acc[g][t] = _mm512_setzero_ps();
+    ML_UNROLL(2) for (int g = 0; g < 2; g++) ML_UNROLL(6) for (int t = 0; t < TILE; t++) acc[g][t] = _mm512_setzero_ps();
     for (int b = 0; b < nb; b++, p += 8 * PK * 4) {
         __m512i s[2][TILE];
-        ML_UNROLL(2) for (int g = 0; g < 2; g++) ML_UNROLL(4) for (int t = 0; t < TILE; t++) s[g][t] = _mm512_setzero_si512();
+        ML_UNROLL(2) for (int g = 0; g < 2; g++) ML_UNROLL(6) for (int t = 0; t < TILE; t++) s[g][t] = _mm512_setzero_si512();
         /* unrolled: in a loop GCC copies each vpdpbusd accumulator to and from
          * another register, two moves per product (no zmm move elimination) */
         ML_UNROLL(8) for (int k = 0; k < 8; k++) {
             __m512i w[2];
             ML_UNROLL(2) for (int g = 0; g < NG; g++) w[g] = _mm512_loadu_si512((const void *)(p + g * gq + k * PK * 4));
-            ML_UNROLL(4) for (int t = 0; t < T; t++) {
+            ML_UNROLL(6) for (int t = 0; t < T; t++) {
                 const __m512i xv = _mm512_set1_epi32(((const int32_t *)(X->q + (size_t)(t0 + t) * X->k + b * QK))[k]);
                 ML_UNROLL(2) for (int g = 0; g < NG; g++) s[g][t] = _mm512_dpbusd_epi32(s[g][t], w[g], xv);
             }
         }
         ML_UNROLL(2) for (int g = 0; g < NG; g++) {
             const __m512 dv = pk_d16(d, g * gd + b * PK, f16);
-            ML_UNROLL(4) for (int t = 0; t < T; t++) {
+            ML_UNROLL(6) for (int t = 0; t < T; t++) {
                 const __m512i st = _mm512_sub_epi32(s[g][t], _mm512_set1_epi32(xsum[t][b]));
                 acc[g][t] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(st),
                                             _mm512_mul_ps(dv, _mm512_set1_ps(X->d[(size_t)(t0 + t) * nb + b])), acc[g][t]);
@@ -251,8 +267,8 @@ ML_INLINE void matmul_q8_tile(float *Y, int ldy, const ml_qtensor *W, const ml_q
 #define matmul_q8_tile_f(Y, ldy, W, X, r0, r1, t0, T) matmul_q8_tile(Y, ldy, W, X, r0, r1, t0, T, 0)
 
 void ml_k_matmul_q8_pk_avx512vnni(float *Y, int ldy, const ml_qtensor *W, const ml_qbatch *X, int r0, int r1) {
-    if (W->pd16) { PK_TILES(matmul_q8_tile_h, TILE) }
-    else { PK_TILES(matmul_q8_tile_f, TILE) }
+    if (W->pd16) { PK_TILES6(matmul_q8_tile_h) }
+    else { PK_TILES6(matmul_q8_tile_f) }
 }
 
 ML_INLINE void matmul_q4_groups(float *Y, int ldy, const ml_qtensor *W, const ml_qbatch *X, int row, int r1, int t0,
@@ -263,10 +279,10 @@ ML_INLINE void matmul_q4_groups(float *Y, int ldy, const ml_qtensor *W, const ml
     const uint8_t *p = W->pq + (size_t)(row / PK) * gq;
     const void *d = pk_d(W, (size_t)(row / PK) * gd, f16);
     __m512 acc[2][TILE];
-    ML_UNROLL(2) for (int g = 0; g < 2; g++) ML_UNROLL(4) for (int t = 0; t < TILE; t++) acc[g][t] = _mm512_setzero_ps();
+    ML_UNROLL(2) for (int g = 0; g < 2; g++) ML_UNROLL(6) for (int t = 0; t < TILE; t++) acc[g][t] = _mm512_setzero_ps();
     for (int b = 0; b < nb; b++, p += 4 * PK * 4) {
         __m512i s[2][TILE];
-        ML_UNROLL(2) for (int g = 0; g < 2; g++) ML_UNROLL(4) for (int t = 0; t < TILE; t++) s[g][t] = _mm512_setzero_si512();
+        ML_UNROLL(2) for (int g = 0; g < 2; g++) ML_UNROLL(6) for (int t = 0; t < TILE; t++) s[g][t] = _mm512_setzero_si512();
         ML_UNROLL(4) for (int v = 0; v < 4; v++) {
             __m512i lo[2], hi[2];
             ML_UNROLL(2) for (int g = 0; g < NG; g++) {
@@ -274,7 +290,7 @@ ML_INLINE void matmul_q4_groups(float *Y, int ldy, const ml_qtensor *W, const ml
                 lo[g] = _mm512_and_si512(w, m4);
                 hi[g] = _mm512_and_si512(_mm512_srli_epi16(w, 4), m4);
             }
-            ML_UNROLL(4) for (int t = 0; t < T; t++) {
+            ML_UNROLL(6) for (int t = 0; t < T; t++) {
                 const int32_t *xb = (const int32_t *)(X->q + (size_t)(t0 + t) * X->k + b * QK);
                 const __m512i xl = _mm512_set1_epi32(xb[v]), xh = _mm512_set1_epi32(xb[v + 4]);
                 ML_UNROLL(2) for (int g = 0; g < NG; g++) {
@@ -285,7 +301,7 @@ ML_INLINE void matmul_q4_groups(float *Y, int ldy, const ml_qtensor *W, const ml
         }
         ML_UNROLL(2) for (int g = 0; g < NG; g++) {
             const __m512 dv = pk_d16(d, g * gd + b * PK, f16);
-            ML_UNROLL(4) for (int t = 0; t < T; t++) {
+            ML_UNROLL(6) for (int t = 0; t < T; t++) {
                 const __m512i st = _mm512_sub_epi32(s[g][t], _mm512_set1_epi32(xsum[t][b]));
                 acc[g][t] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(st),
                                             _mm512_mul_ps(dv, _mm512_set1_ps(X->d[(size_t)(t0 + t) * nb + b])), acc[g][t]);
@@ -309,8 +325,8 @@ ML_INLINE void matmul_q4_tile(float *Y, int ldy, const ml_qtensor *W, const ml_q
 #define matmul_q4_tile_f(Y, ldy, W, X, r0, r1, t0, T) matmul_q4_tile(Y, ldy, W, X, r0, r1, t0, T, 0)
 
 void ml_k_matmul_q4_pk_avx512vnni(float *Y, int ldy, const ml_qtensor *W, const ml_qbatch *X, int r0, int r1) {
-    if (W->pd16) { PK_TILES(matmul_q4_tile_h, TILE) }
-    else { PK_TILES(matmul_q4_tile_f, TILE) }
+    if (W->pd16) { PK_TILES6(matmul_q4_tile_h) }
+    else { PK_TILES6(matmul_q4_tile_f) }
 }
 
 void ml_k_quantize_q8_avx512vnni(ml_qact *out, const float *x, int k) {
