@@ -126,13 +126,17 @@ python3 tools/convert.py hf ./TinyLlama-1.1B model.mlb --wtype q4 --max-seq 2048
   their model cards describe) are supported, with transformers' formulas. The
   converter refuses other types (dynamic, longrope) instead of writing a model
   that would compute wrong outputs.
-- **Architectures:** `model_type` must be `llama`, `mistral`, `qwen2`, `qwen3`
-  or `gemma3_text` (Gemma 3 1B), with no biases other than Qwen2's q/k/v
-  biases. A `head_dim` other than `hidden_size / num_attention_heads`, Qwen3's
-  per-head q/k RMSNorm, and Gemma 3's GELU, block output norms, embedding and
-  attention scales and local/global layers are supported; Gemma's `(1 + w)`
-  norm weights are stored with the 1 added. Others (Phi, Gemma 3's multimodal
-  4B and larger checkpoints, logit soft-capping, …) are refused.
+- **Architectures:** `model_type` must be `llama`, `mistral`, `qwen2`, `qwen3`,
+  `gemma2`, `gemma3_text` (Gemma 3 1B) or `gemma3` (Gemma 3 4B, 12B and 27B,
+  image-text checkpoints: the converter takes the text model and leaves the
+  vision tower out), with no biases other than Qwen2's q/k/v biases. A
+  `head_dim` other than `hidden_size / num_attention_heads`, Qwen3's per-head
+  q/k RMSNorm, Gemma's GELU, block output norms, embedding and attention
+  scales and local/global layers, and Gemma 2's soft-capped attention scores
+  and logits are supported; Gemma's `(1 + w)` norm weights are stored with the
+  1 added. Others (Phi, mixture of experts, …) are refused. Checkpoint tensors
+  are converted to float32 one at a time, so converting a 4B model needs about
+  as much memory as its largest tensor.
 - **Sliding window:** each position of a sliding layer attends to the last
   `sliding_window` positions: every layer for Mistral v0.1, the layers
   `layer_types` or Qwen2's `max_window_layers` select otherwise.

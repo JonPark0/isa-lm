@@ -2,7 +2,7 @@
 
   convert.py llama2c IN.bin OUT.mlb [--wtype q8|q4] [--q8 LIST]   llama2.c legacy (v0) export
   convert.py hf DIR OUT.mlb [--wtype q8|q4] [--q8 LIST] [--max-seq N] [--scales f16|f32]
-                                                      HF Llama, Mistral, Qwen2, Qwen3, Gemma 3 (text): config.json + *.safetensors
+                                                      HF Llama, Mistral, Qwen2, Qwen3, Gemma 2, Gemma 3: config.json + *.safetensors
   --imatrix FILE (q4): weight the Q4 fits by an importance matrix from
                        ml_run --imatrix, run on a Q8 conversion of the same model
   --q4-rule fit|round (q4): fit each block's scale, or llama.cpp's Q4_0 rounding;
