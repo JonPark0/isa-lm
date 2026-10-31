@@ -149,6 +149,11 @@ cubes do not underflow. `d` can be negative. With `f16` scales the fitted `d`
 is rounded to the nearest `f16`. Any `d` and nibbles are valid input to the
 runtime.
 
+With `tools/convert.py --q4-rule round`, Q4_0 blocks are rounded as
+llama.cpp does instead: `d` is the element of largest magnitude divided by −8,
+and each level is `trunc(x × (1/d) + 8.5)`, at most 15, minus 8.
+Quantization-aware checkpoints trained for Q4_0 expect exactly this rounding.
+
 With `tools/convert.py --imatrix`, each element's weight is instead, as in
 llama.cpp, `imp × sqrt(s² + x²)`: `s²` is the mean x² of the element's row,
 and `imp` the importance of its input channel, the channel's mean squared

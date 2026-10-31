@@ -268,8 +268,17 @@ Other models on the same text (Q8 against the F32 numpy reference):
 
 Gemma 3 1B loses the most to Q4_0. Keeping `emb,cls,v,down` in Q8 gives
 47.40 at 843 MB (Q4: 625 MB, Q8: 1125 MB). Google's quantization-aware
-checkpoint of it (`gemma-3-1b-it-qat-q4_0-unquantized`, trained for Q4_0)
-converts to Q4 at 47.43 for 625 MB, against 42.53 for its Q8.
+checkpoint of it (`gemma-3-1b-it-qat-q4_0-unquantized`) was trained for
+llama.cpp's Q4_0 rounding. With `--q4-rule round`, which rounds the same way,
+its Q4 conversion reaches 40.50 at 562 MB (f16 scales). That is below its own
+Q8 (42.53) and below the regular checkpoint's F32 reference. The fitted rule
+gives 47.43 on it:
+
+```sh
+python3 tools/convert.py hf ./gemma-3-1b-it-qat-q4_0-unquantized gemma-qat.mlb --wtype q4 --q4-rule round
+```
+
+Use the fitted rule (the default) for every other checkpoint.
 
 The converter fits each Q4 block's scale by weighted least squares over a few
 candidate mappings, rather than dividing the block's maximum by 7 (Llama 3.2

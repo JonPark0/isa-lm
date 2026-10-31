@@ -5,6 +5,8 @@
                                                       HF Llama, Mistral, Qwen2, Qwen3, Gemma 3 (text): config.json + *.safetensors
   --imatrix FILE (q4): weight the Q4 fits by an importance matrix from
                        ml_run --imatrix, run on a Q8 conversion of the same model
+  --q4-rule round (q4): llama.cpp's Q4_0 rounding instead of the fit, for
+                       quantization-aware checkpoints trained for Q4_0 (Gemma 3 QAT)
 """
 import argparse
 import glob
@@ -246,14 +248,19 @@ def main(argv=None):
                          "emb, cls, qk, v, o, up, down (e.g. emb,cls,v,down)")
     ap.add_argument("--max-seq", type=int, default=None, help="hf: cap the context length (KV cache size)")
     ap.add_argument("--imatrix", metavar="FILE", help="q4 only: importance matrix from ml_run --imatrix")
+    ap.add_argument("--q4-rule", choices=("fit", "round"), default="fit",
+                    help="q4 only: fit each block's scale (default), or round as llama.cpp's Q4_0 does, "
+                         "which quantization-aware checkpoints trained for Q4_0 expect")
     ap.add_argument("--scales", choices=("f16", "f32"), default="f16",
                     help="storage of the block scales (f16: Q4 4.5 bits per weight, Q8 8.5; f32: 5 and 9)")
     a = ap.parse_args(argv)
     if a.imatrix and a.wtype != "q4":
         ap.error("--imatrix needs --wtype q4")
+    if a.imatrix and a.q4_rule == "round":
+        ap.error("--imatrix weights the fitted Q4 rule only, not --q4-rule round")
     cfg, w = load_llama2c(a.src) if a.kind == "llama2c" else load_hf(a.src, a.max_seq)
     imat = mlb.read_imatrix(a.imatrix, cfg) if a.imatrix else None
-    mlb.write_mlb(a.out, cfg, w, a.wtype, [c for c in a.q8.split(",") if c], imat, a.scales)
+    mlb.write_mlb(a.out, cfg, w, a.wtype, [c for c in a.q8.split(",") if c], imat, a.scales, a.q4_rule)
     print(f"wrote {a.out}: dim={cfg['dim']} layers={cfg['n_layers']} vocab={cfg['vocab']} "
           f"max_seq={cfg['max_seq']} wtype={a.wtype}{' (q8: ' + a.q8 + ')' if a.q8 and a.wtype == 'q4' else ''} "
           f"shared_classifier={cfg['shared_classifier']}")
