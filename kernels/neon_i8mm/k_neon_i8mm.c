@@ -20,6 +20,14 @@ static inline void pk_store(float *y, float32x4_t acc, int row, int r1) {
     for (int i = 0; row + i < r1; i++) y[row + i] = t[i];
 }
 
+static void xsums(int *xsum, const int8_t *xq, int nb) {
+    for (int b = 0; b < nb; b++) {
+        int sum = 0;
+        for (int j = 0; j < QK; j++) sum += xq[b * QK + j];
+        xsum[b] = 8 * sum;
+    }
+}
+
 /* Steps 2j and 2j + 1 of a group block -> rows 0-1 and rows 2-3, 8 bytes each. */
 static inline void zip_steps(int8x16_t *w01, int8x16_t *w23, int8x16_t a, int8x16_t b) {
     *w01 = vreinterpretq_s8_s32(vzip1q_s32(vreinterpretq_s32_s8(a), vreinterpretq_s32_s8(b)));
@@ -97,25 +105,21 @@ static void make_pairs(const ml_qbatch *X, int t0, int T, int nb) {
         for (int t = 0; t < 2 * (NP); t++) if (t < T) pk_store(Y + (size_t)(t0 + t) * ldy, acc[t], row, r1); \
     } while (0)
 
-/* Rows go in L2-sized blocks (pk_row_block), each read by every tile of tokens. */
 #define PK_MATMUL(OPERANDS, PTYPE, STEPS, Q4)                                     \
     const int nb = W->cols / QK;                                                  \
-    static ML_THREAD_LOCAL int xsum[PK_TILE][PK_MAX_BLOCKS];                      \
-    for (int rb = pk_row_block(W, PK), b0 = r0; b0 < r1; b0 += rb) {              \
-        const int b1 = r1 - b0 < rb ? r1 : b0 + rb;                               \
-        for (int t0 = 0; t0 < X->n; t0 += PK_TILE) {                              \
-            const int T = X->n - t0 < PK_TILE ? X->n - t0 : PK_TILE;              \
-            if (Q4) for (int t = 0; t < T; t++) block_sums(xsum[t], X->q + (size_t)(t0 + t) * X->k, nb, 8); \
-            make_pairs(X, t0, T, nb);                                             \
-            for (int row = b0; row < b1; row += PK) {                             \
-                const PTYPE *p = (const PTYPE *)W->pq + (size_t)(row / PK) * nb * (STEPS * PK * 4); \
-                const float *d = W->pd + (size_t)(row / PK) * nb * PK;            \
-                switch ((T + 1) / 2) {                                            \
-                case 4: GROUP_TILE(OPERANDS, PTYPE, STEPS, Q4, 4); break;         \
-                case 3: GROUP_TILE(OPERANDS, PTYPE, STEPS, Q4, 3); break;         \
-                case 2: GROUP_TILE(OPERANDS, PTYPE, STEPS, Q4, 2); break;         \
-                default: GROUP_TILE(OPERANDS, PTYPE, STEPS, Q4, 1); break;        \
-                }                                                                 \
+    static ML_THREAD_LOCAL int xsum[PK_TILE][PK_MAX_BLOCKS];                        \
+    for (int t0 = 0; t0 < X->n; t0 += PK_TILE) {                                  \
+        const int T = X->n - t0 < PK_TILE ? X->n - t0 : PK_TILE;                  \
+        if (Q4) for (int t = 0; t < T; t++) xsums(xsum[t], X->q + (size_t)(t0 + t) * X->k, nb); \
+        make_pairs(X, t0, T, nb);                                                 \
+        for (int row = r0; row < r1; row += PK) {                                 \
+            const PTYPE *p = (const PTYPE *)W->pq + (size_t)(row / PK) * nb * (STEPS * PK * 4); \
+            const float *d = W->pd + (size_t)(row / PK) * nb * PK;                \
+            switch ((T + 1) / 2) {                                                \
+            case 4: GROUP_TILE(OPERANDS, PTYPE, STEPS, Q4, 4); break;             \
+            case 3: GROUP_TILE(OPERANDS, PTYPE, STEPS, Q4, 3); break;             \
+            case 2: GROUP_TILE(OPERANDS, PTYPE, STEPS, Q4, 2); break;             \
+            default: GROUP_TILE(OPERANDS, PTYPE, STEPS, Q4, 1); break;            \
             }                                                                     \
         }                                                                         \
     }
