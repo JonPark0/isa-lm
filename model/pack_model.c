@@ -65,8 +65,10 @@ static void release_originals(ml_model *m, const pack_job *job) {
         if (W->q == m->tok_emb.q) continue;
         const size_t nq = W->type == ML_Q4_0 ? (size_t)W->rows * W->cols / 2 : (size_t)W->rows * W->cols;
         ml_file_release(&m->file, W->q, nq);
-        ml_file_release(&m->file, W->d, (size_t)W->rows * (W->cols / QK) * sizeof(float));
+        if (W->dh) ml_file_release(&m->file, W->dh, (size_t)W->rows * (W->cols / QK) * sizeof(uint16_t));
+        else ml_file_release(&m->file, W->d, (size_t)W->rows * (W->cols / QK) * sizeof(float));
     }
+    (void)ml_model_trim_scales(m);   /* on failure the full float copy stays */
 }
 
 static ml_status pack_now(ml_model *m, ml_pool *pool, pack_job *job) {

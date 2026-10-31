@@ -21,19 +21,57 @@ static const void *take(cursor *c, size_t nbytes) {
     return p;
 }
 
-static ml_qtensor take_mat(cursor *c, int rows, int cols, int type) {
-    ml_qtensor t = { NULL, NULL, rows, cols, (uint8_t)type, NULL, NULL };
+static ml_qtensor take_mat(cursor *c, int rows, int cols, int type, int f16) {
+    ml_qtensor t = { NULL, NULL, rows, cols, (uint8_t)type, NULL, NULL, NULL };
     size_t n, nd;
-    if (!ml_mul_size((size_t)rows, (size_t)cols, &n) || !ml_mul_size(n / QK, sizeof(float), &nd)) {
+    if (!ml_mul_size((size_t)rows, (size_t)cols, &n) || !ml_mul_size(n / QK, f16 ? 2 : sizeof(float), &nd)) {
         c->ok = 0;   /* cannot fit in this address space, let alone this file */
         return t;
     }
     t.q = take(c, type == ML_Q4_0 ? n / 2 : n);
-    t.d = take(c, nd);
+    if (f16) t.dh = take(c, nd);
+    else t.d = take(c, nd);
     /* Q8 quants must be in [-127, 127]: kernels negate weights by the
      * activation's sign, and -128 has no int8 negation. */
     if (c->ok && type == ML_Q8_0 && memchr(t.q, 0x80, n)) c->ok = 0;
     return t;
+}
+
+/* f16-scale files: converts the scales of the matrices that need floats into
+ * one buffer, the embedding table's always, the others' when all is set or
+ * they have no packed copy (the rest get d = NULL). The classifier shares
+ * the table's when it is the table. */
+static ml_status expand_scales(ml_model *m, int all) {
+    const int nl = m->cfg.n_layers, shared = m->wcls.dh == m->tok_emb.dh;
+    ml_qtensor **ws = malloc(sizeof(ml_qtensor *) * ((size_t)nl * 7 + 2));
+    if (!ws) return ML_E_NOMEM;
+    int n = 0;
+    ws[n++] = &m->tok_emb;
+    for (int l = 0; l < nl; l++) {
+        ml_layer *L = &m->layers[l];
+        ml_qtensor *lw[7] = { &L->wq, &L->wk, &L->wv, &L->wo, &L->w1, &L->w2, &L->w3 };
+        for (int k = 0; k < 7; k++) ws[n++] = lw[k];
+    }
+    if (!shared) ws[n++] = &m->wcls;
+    size_t total = 0;
+    for (int i = 0; i < n; i++)
+        if (i == 0 || all || !ws[i]->pq) total += (size_t)ws[i]->rows * (ws[i]->cols / QK);
+    float *buf = ml_aligned_alloc(total * sizeof(float));
+    if (!buf) { free(ws); return ML_E_NOMEM; }
+    size_t off = 0;
+    for (int i = 0; i < n; i++) {
+        ml_qtensor *W = ws[i];
+        if (i && !all && W->pq) { W->d = NULL; continue; }
+        const size_t nb = (size_t)W->rows * (W->cols / QK);
+        for (size_t j = 0; j < nb; j++) buf[off + j] = ml_f16_to_f32(W->dh[j]);
+        W->d = buf + off;
+        off += nb;
+    }
+    if (shared) m->wcls.d = m->tok_emb.d;
+    free(ws);
+    ml_aligned_free(m->scales);
+    m->scales = buf;
+    return ML_OK;
 }
 
 static uint32_t rd32(const uint8_t *p) { uint32_t v; memcpy(&v, p, 4); return v; }
@@ -86,6 +124,9 @@ static ml_status parse_header(ml_config *cfg, int *shared, const uint8_t *h) {
         return ML_E_FORMAT;
     if (cfg->embed_scale == 0.0f) cfg->embed_scale = 1.0f;
     if (cfg->attn_scale == 0.0f) cfg->attn_scale = 1.0f / sqrtf((float)cfg->head_dim);
+    const uint32_t f16 = rd32(h + 120);
+    if (f16 > 1) return ML_E_FORMAT;
+    cfg->scale_f16 = (int)f16;
     if (!(cfg->rope_theta > 0.0f) || !(cfg->norm_eps >= 0.0f)) return ML_E_FORMAT;
     cfg->rope_type = (int)rd32(h + 52);
     cfg->rope_factor = rdf(h + 56);
@@ -136,16 +177,16 @@ ml_status ml_model_load(ml_model *m, const char *path) {
             ml_model_free(m);
             return ML_E_FORMAT;
         }
-    m->tok_emb = take_mat(&cur, c->vocab, c->dim, WT(ML_Q8M_EMB | (shared ? ML_Q8M_CLS : 0)));
+    m->tok_emb = take_mat(&cur, c->vocab, c->dim, WT(ML_Q8M_EMB | (shared ? ML_Q8M_CLS : 0)), c->scale_f16);
     for (int l = 0; l < c->n_layers; l++) {
         ml_layer *L = &m->layers[l];
         L->window = !lf || (lf[l] & ML_LAYER_SLIDING) ? c->sliding_window : 0;
         L->local_rope = lf && (lf[l] & ML_LAYER_LOCAL_ROPE);
         L->attn_norm = take(&cur, normsz);
-        L->wq = take_mat(&cur, c->q_dim, c->dim, WT(ML_Q8M_QK));
-        L->wk = take_mat(&cur, c->kv_dim, c->dim, WT(ML_Q8M_QK));
-        L->wv = take_mat(&cur, c->kv_dim, c->dim, WT(ML_Q8M_V));
-        L->wo = take_mat(&cur, c->dim, c->q_dim, WT(ML_Q8M_O));
+        L->wq = take_mat(&cur, c->q_dim, c->dim, WT(ML_Q8M_QK), c->scale_f16);
+        L->wk = take_mat(&cur, c->kv_dim, c->dim, WT(ML_Q8M_QK), c->scale_f16);
+        L->wv = take_mat(&cur, c->kv_dim, c->dim, WT(ML_Q8M_V), c->scale_f16);
+        L->wo = take_mat(&cur, c->dim, c->q_dim, WT(ML_Q8M_O), c->scale_f16);
         if (c->qkv_bias) {
             L->bq = take(&cur, (size_t)c->q_dim * sizeof(float));
             L->bk = take(&cur, (size_t)c->kv_dim * sizeof(float));
@@ -156,24 +197,31 @@ ml_status ml_model_load(ml_model *m, const char *path) {
             L->k_norm = take(&cur, (size_t)c->head_dim * sizeof(float));
         }
         L->ffn_norm = take(&cur, normsz);
-        L->w1 = take_mat(&cur, c->hidden_dim, c->dim, WT(ML_Q8M_UP));
-        L->w2 = take_mat(&cur, c->dim, c->hidden_dim, WT(ML_Q8M_DOWN));
-        L->w3 = take_mat(&cur, c->hidden_dim, c->dim, WT(ML_Q8M_UP));
+        L->w1 = take_mat(&cur, c->hidden_dim, c->dim, WT(ML_Q8M_UP), c->scale_f16);
+        L->w2 = take_mat(&cur, c->dim, c->hidden_dim, WT(ML_Q8M_DOWN), c->scale_f16);
+        L->w3 = take_mat(&cur, c->hidden_dim, c->dim, WT(ML_Q8M_UP), c->scale_f16);
         if (c->post_norms) {
             L->post_attn_norm = take(&cur, normsz);
             L->post_ffn_norm = take(&cur, normsz);
         }
     }
     m->final_norm = take(&cur, normsz);
-    m->wcls = shared ? m->tok_emb : take_mat(&cur, c->vocab, c->dim, WT(ML_Q8M_CLS));
+    m->wcls = shared ? m->tok_emb : take_mat(&cur, c->vocab, c->dim, WT(ML_Q8M_CLS), c->scale_f16);
 #undef WT
     if (!cur.ok) { ml_model_free(m); return ML_E_FORMAT; }
+    if (c->scale_f16 && (s = expand_scales(m, 1)) != ML_OK) { ml_model_free(m); return s; }
     return ML_OK;
+}
+
+ml_status ml_model_trim_scales(ml_model *m) {
+    return m->cfg.scale_f16 ? expand_scales(m, 0) : ML_OK;
 }
 
 void ml_model_free(ml_model *m) {
     ml_aligned_free(m->pack_mem);
     m->pack_mem = NULL;
+    ml_aligned_free(m->scales);
+    m->scales = NULL;
     if (m->pack_file.data) ml_file_unmap(&m->pack_file);
     m->packed = 0;
     free(m->layers);

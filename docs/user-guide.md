@@ -139,6 +139,9 @@ python3 tools/convert.py hf ./TinyLlama-1.1B model.mlb --wtype q4 --max-seq 2048
 - **Context length:** `--max-seq` caps the context, and with it the KV cache.
   Without it the converter uses `max_position_embeddings`, which is often
   131072 for Llama 3.
+- **Scales:** each block's scale is stored as `f16` by default (Q4 at 4.5 bits
+  per weight, Q8 at 8.5). `--scales f32` keeps the older 4-byte scales (5 and
+  9 bits per weight). Files of both kinds load in every build.
 - **Tokenizer:** convert the checkpoint's `tokenizer.json` separately, see
   [Tokenizers](#tokenizers).
 

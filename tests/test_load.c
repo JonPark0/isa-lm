@@ -4,7 +4,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include "core/quant_ref.h"
+#include "core/threads.h"
 #include "model/mlb.h"
+#include "model/pack_model.h"
 #include "model/transformer.h"
 #include "tests/tt.h"
 
@@ -218,6 +220,33 @@ static void test_load_rejects_bad_attention_fields(void) {
     TT_EQ_INT(load_patched(0, 108, 2), ML_E_FORMAT);         /* post_norms is a 0/1 flag */
     TT_EQ_INT(load_patched(0, 112, 0xbf800000u), ML_E_FORMAT);   /* negative embedding scale */
     TT_EQ_INT(load_patched(0, 116, 0x7fc00000u), ML_E_FORMAT);   /* NaN attention scale */
+    TT_EQ_INT(load_patched(0, 120, 2), ML_E_FORMAT);         /* scale_f16 is a 0/1 flag */
+}
+
+/* f16 scales (offset 120; lwin_q8.mlb): the loader converts them to floats,
+ * and after packing keeps only those still read: the embedding table's (which
+ * a shared classifier uses too) and those of matrices left unpacked. */
+static void test_load_f16_scales(void) {
+    if (!lwin_path) return;
+    ml_model m;
+    TT_EQ_INT(ml_model_load(&m, lwin_path), ML_OK);
+    TT_EQ_INT(m.cfg.scale_f16, 1);
+    const ml_qtensor *W = &m.layers[1].w2;
+    TT_ASSERT(W->dh && W->d);
+    int same = 1;
+    for (int i = 0; i < W->rows * (W->cols / QK); i++) same &= W->d[i] == ml_f16_to_f32(W->dh[i]);
+    TT_ASSERT(same);
+    ml_pool *pool = NULL;
+    TT_EQ_INT(ml_pool_create(&pool, 1), ML_OK);
+    TT_EQ_INT(ml_model_pack(&m, pool), ML_OK);
+    TT_ASSERT(m.tok_emb.d != NULL);
+    if (m.packed) TT_ASSERT(m.layers[1].w2.d == NULL);
+    else TT_ASSERT(m.layers[1].w2.d != NULL);
+    float row[64];
+    ml_dequant_row(row, &m.tok_emb, 5);   /* still readable after trimming */
+    TT_ASSERT(row[0] == row[0]);
+    ml_pool_destroy(pool);
+    ml_model_free(&m);
 }
 
 /* q8_mask (offset 72): only Q4 models may keep classes in Q8, and only known
@@ -260,6 +289,7 @@ int TT_ENTRY(int argc, char **argv) {
     TT_RUN(test_load_rejects_bad_q8_mask);
     TT_RUN(test_load_rejects_bad_attention_fields);
     TT_RUN(test_load_rejects_bad_layer_flags);
+    TT_RUN(test_load_f16_scales);
     TT_RUN(test_load_rejects_overflowing_dims);
     TT_RUN(test_load_rejects_tiny_vocab);
     TT_RUN(test_load_rejects_q8_minus_128);

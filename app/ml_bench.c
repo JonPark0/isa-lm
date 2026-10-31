@@ -29,7 +29,7 @@ static void bench_matvec(int type, int rows, int cols, int iters) {
     const size_t nq = type == ML_Q8_0 ? (size_t)rows * cols : (size_t)rows * cols / 2;
     float *d = xalloc(sizeof(float) * rows * cols / QK);
     for (int i = 0; i < rows * cols / QK; i++) d[i] = 0.01f;
-    ml_qtensor W = { xalloc(nq), d, rows, cols, (uint8_t)type, NULL, NULL };
+    ml_qtensor W = { xalloc(nq), d, rows, cols, (uint8_t)type, NULL, NULL, NULL };
     ml_qact x = { xalloc(cols), xalloc(sizeof(float) * cols / QK), cols };
     for (int i = 0; i < cols / QK; i++) x.d[i] = 0.01f;
     float *y = xalloc(sizeof(float) * rows);

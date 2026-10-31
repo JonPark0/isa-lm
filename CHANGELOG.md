@@ -14,8 +14,15 @@
   (offset 100). The converter writes them when only some layers slide
   (`layer_types`, Qwen2's `max_window_layers`) instead of capping the context.
 
+- f16 block scales (`.mlb` header offset 120): Q4_0 takes 4.5 bits per
+  weight instead of 5, Q8_0 8.5 instead of 9. Both kinds of file load in every
+  build.
+
 ### Changed
 
+- `tools/convert.py` writes f16 scales by default (`--scales f32` keeps the
+  older files): perplexity changes by at most 0.15% (Qwen2.5 0.5B, Llama 3.2
+  1B), and Qwen2.5 0.5B Q4 shrinks from 309 to 278 MB.
 - AArch64 dotprod builds (neon_dotprod, neon_i8mm, sve): Q4 nibbles are packed
   in signed form, so no per-block activation sums are subtracted; the dotprod
   batched kernels take 8 tokens per weight block, and the i8mm ones
