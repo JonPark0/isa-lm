@@ -133,9 +133,9 @@ jobs:
           # build output in a log; its error lines become annotations (logs are
           # not always at hand)
           for isa in scalar sse2 avx2; do
-            cmake -S . -B build/msvc-$isa -G "Visual Studio 17 2022" -A x64 -DML_ISA=$isa > build-$isa.log 2>&1 &&
+            cmake -S . -B build/msvc-$isa -A x64 -DML_ISA=$isa > build-$isa.log 2>&1 &&
               cmake --build build/msvc-$isa --config Release -j 4 >> build-$isa.log 2>&1 || {
-                grep -E "error|warning C4(013|047|133)" build-$isa.log | head -n 9 |
+                grep -E "CMake Error|error|warning C4(013|047|133)" -A2 build-$isa.log | grep -v "^--$" | head -n 9 |
                   while IFS= read -r l; do echo "::error title=msvc $isa build::$l"; done
                 exit 1
               }
