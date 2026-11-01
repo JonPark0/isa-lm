@@ -1,0 +1,84 @@
+name: Hugging Face models
+
+# Converts the models of scripts/hf_models.json with this commit's tools,
+# measures each file on the runner (wikitext-2 perplexity, ml_bench speed, a
+# chat reply) and writes a model card (scripts/hf_publish.py). With upload on,
+# publishes each model as <account>/<source name>-isa-lm on the Hugging Face
+# Hub: the repository secret HF_TOKEN needs write access, and for Llama and
+# Gemma its account must have accepted their licenses on Hugging Face.
+on:
+  workflow_dispatch:
+    inputs:
+      models:
+        description: "Catalog ids, comma-separated, or 'default' / 'all' (scripts/hf_models.json)"
+        default: default
+      upload:
+        description: "Upload to Hugging Face (off: convert, measure and show the cards only)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hf-models
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      models: ${{ steps.p.outputs.models }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: p
+        env:
+          MODELS: ${{ inputs.models }}
+        run: echo "models=$(python3 scripts/hf_publish.py --list "$MODELS")" >> "$GITHUB_OUTPUT"
+
+  model:
+    needs: plan
+    name: ${{ matrix.id }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        id: ${{ fromJSON(needs.plan.outputs.models) }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Python deps
+        run: |
+          .github/scripts/apt-install.sh python3-numpy
+          pip install --user --break-system-packages huggingface_hub "pyarrow<18"   # pyarrow: the last before NumPy 2
+      - name: Build
+        run: |
+          make -j"$(nproc)" ISA=avx2 THREADS=pthread apps
+          echo "BUILD=$(make -s ISA=avx2 THREADS=pthread print-build)" >> "$GITHUB_ENV"
+          echo "::notice title=cpu::$(sed -n 's/^model name\s*: //p' /proc/cpuinfo | head -n 1), $(nproc) CPUs"
+      - name: Evaluation text
+        run: |
+          mkdir -p ../data
+          curl -fsSL --retry 3 --retry-delay 5 -o ../data/wiki.parquet \
+            https://huggingface.co/datasets/Salesforce/wikitext/resolve/main/wikitext-2-raw-v1/test-00000-of-00001.parquet
+          python3 -c "import pyarrow.parquet as pq, sys; open(sys.argv[2], 'w').write(''.join(pq.read_table(sys.argv[1])['text'].to_pylist()))" \
+            ../data/wiki.parquet ../data/wiki.txt
+      - name: Convert, measure${{ inputs.upload && ' and upload' || '' }}
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_HUB_DISABLE_PROGRESS_BARS: "1"
+          ID: ${{ matrix.id }}
+          UPLOAD: ${{ inputs.upload && '--upload' || '' }}
+        run: python3 scripts/hf_publish.py "$ID" --build "$BUILD" --text ../data/wiki.txt --work ../work --threads "$(nproc)" $UPLOAD
+      - name: Summary
+        if: always()
+        env:
+          ID: ${{ matrix.id }}
+        run: |
+          card=$(ls ../work/out/*/README.md 2>/dev/null | head -n 1)
+          [ -n "$card" ] && cat "$card" >> "$GITHUB_STEP_SUMMARY"
+          # the results in one annotation (readable through the checks API)
+          [ -f "../work/$ID.json" ] && echo "::notice title=hf $ID::$(tr -d '\n' < "../work/$ID.json")"
+          exit 0

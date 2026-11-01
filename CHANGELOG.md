@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `.github/workflows/hf-models.yml` and `scripts/hf_publish.py`: convert the
+  models of `scripts/hf_models.json` (Qwen2.5, Qwen3, SmolLM2, TinyLlama;
+  Llama 3.2 and Gemma 3 on request), measure each file (perplexity, speed, a
+  chat reply) and publish them on Hugging Face with a model card.
+
 ## 0.5.0 — 2026-11-01
 
 ### Added
