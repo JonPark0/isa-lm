@@ -4,6 +4,13 @@
 
 ### Added
 
+- Documentation site on Just the Docs: a sidebar, search, dark mode (following
+  the system, with a switch), heading links, copy buttons on code, "Edit this
+  page" links, a 404 page and icons. The home page gains download and model
+  buttons, a chart of decode speed against llama.cpp
+  (`docs/assets/decode-ratio.svg`, drawn from `docs/benchmarks.md` by
+  `scripts/sync_docs.py` and checked in CI) and a table of supported CPUs.
+
 - `.github/workflows/hf-models.yml` and `scripts/hf_publish.py`: convert the
   models of `scripts/hf_models.json` (Qwen2.5, Qwen3, SmolLM2, TinyLlama;
   Llama 3.2 and Gemma 3 on request), measure each file (perplexity, speed, a

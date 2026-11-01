@@ -1,6 +1,8 @@
 ---
 title: "isa-lm vs llama.cpp: CPU speed and perplexity benchmarks"
 description: "isa-lm and llama.cpp on the same model and Q8_0/Q4_0 formats at each ISA level, from SSE2 to AVX-512 VNNI and ARM NEON to i8mm: prefill, decode and perplexity."
+nav_order: 4
+nav_title: "Comparison with llama.cpp"
 ---
 
 # Comparison with llama.cpp
@@ -10,6 +12,11 @@ model with the same weight formats on one machine, at four x86 instruction-set
 levels; the [GitHub runners](#github-runners) section repeats the comparison
 on an x86-64 machine without AVX-512 and on AArch64 at three levels.
 `scripts/compare_llamacpp.sh` reproduces each run.
+
+![isa-lm decode speed relative to llama.cpp at each ISA level, one thread](assets/decode-ratio.svg)
+
+The chart shows the one-thread decode ratios of the tables below
+(`scripts/sync_docs.py` draws it from them).
 
 ## Setup
 

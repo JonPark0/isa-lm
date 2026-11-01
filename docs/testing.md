@@ -1,6 +1,8 @@
 ---
 title: "Testing and benchmarking"
 description: "How isa-lm is tested (kernels against scalar and double-precision references, logits against numpy, qemu for ARM and old x86) and benchmarked on each ISA."
+nav_order: 8
+nav_title: "Testing and benchmarking"
 ---
 
 # Testing and benchmarking

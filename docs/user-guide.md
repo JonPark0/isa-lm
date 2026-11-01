@@ -1,6 +1,8 @@
 ---
 title: "User guide: build, convert models and run LLMs on a CPU"
 description: "Build isa-lm for your CPU (SSE2 to AVX-512 VNNI, ARMv7 NEON to SVE), convert Hugging Face Llama, Qwen, Gemma and Mistral models to INT8/INT4, and run or chat with them."
+nav_order: 3
+nav_title: "User guide"
 ---
 
 # User guide

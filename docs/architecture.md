@@ -1,6 +1,8 @@
 ---
 title: "Architecture: compile-time kernel binding for CPU LLM inference"
 description: "How isa-lm binds each operator to a per-ISA SIMD kernel at compile time, guards against unsupported CPUs, packs weights, batches prompts and threads LLM inference."
+nav_order: 5
+nav_title: "Architecture"
 ---
 
 # Architecture

@@ -37,6 +37,7 @@ SIDEBAR = """**isa-lm**
 """
 
 LINK = re.compile(r"\]\(([^)\s]+)\)")
+IMAGES = (".png", ".svg", ".jpg", ".jpeg", ".gif", ".webp")
 FRONT_MATTER = re.compile(r"\A---\n.*?\n---\n+", re.S)   # Jekyll's title/description
 
 
@@ -51,6 +52,8 @@ def convert_links(text, src, repo, branch):
         rel = os.path.normpath(os.path.join(base, path)).replace(os.sep, "/")
         if rel in PAGES:
             return f"]({PAGES[rel]}{'#' + anchor if anchor else ''})"
+        if rel.lower().endswith(IMAGES):   # served raw, so that the wiki can show them
+            return f"](https://raw.githubusercontent.com/{repo}/{branch}/{rel})"
         kind = "tree" if os.path.isdir(os.path.join(ROOT, rel)) else "blob"
         return f"](https://github.com/{repo}/{kind}/{branch}/{rel}{'#' + anchor if anchor else ''})"
 
