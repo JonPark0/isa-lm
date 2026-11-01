@@ -3,6 +3,7 @@ they are current (--check, run in CI):
 
   docs/assets/decode-ratio.svg   the decode ratios of docs/benchmarks.md's
                                  x86-64 and AArch64 tables, one thread
+  docs/changelog.md              CHANGELOG.md, as a page of the docs site
 
     python3 scripts/sync_docs.py            # rewrite
     python3 scripts/sync_docs.py --check    # exit 1 if a file is stale
@@ -15,6 +16,17 @@ import sys
 ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 BENCH = os.path.join(ROOT, "docs", "benchmarks.md")
 CHART = os.path.join(ROOT, "docs", "assets", "decode-ratio.svg")
+CHANGELOG = os.path.join(ROOT, "CHANGELOG.md")
+CHANGELOG_PAGE = os.path.join(ROOT, "docs", "changelog.md")
+CHANGELOG_FRONT = """---
+title: "Changelog: what changed in each isa-lm release"
+description: "Release notes of isa-lm: new models, kernels, formats, speed-ups and fixes in each version."
+nav_order: 9
+nav_title: "Changelog"
+---
+<!-- Generated from CHANGELOG.md by scripts/sync_docs.py; edit CHANGELOG.md instead. -->
+
+"""
 
 
 def bench_tables(path):
@@ -121,8 +133,13 @@ def svg_chart(groups):
     return "\n".join(out) + "\n"
 
 
+def changelog_page():
+    with open(CHANGELOG, encoding="utf-8") as f:
+        return CHANGELOG_FRONT + f.read()
+
+
 def targets():
-    return {CHART: svg_chart(chart_groups())}
+    return {CHART: svg_chart(chart_groups()), CHANGELOG_PAGE: changelog_page()}
 
 
 def main():

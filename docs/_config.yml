@@ -56,6 +56,7 @@ aux_links:
   "GitHub": "https://github.com/JonPark0/isa-lm"
   "Releases": "https://github.com/JonPark0/isa-lm/releases"
   "Models": "https://huggingface.co/models?other=isa-lm"
+  "한국어": "/isa-lm/ko/"
 aux_links_new_tab: false
 gh_edit_link: true
 gh_edit_link_text: "Edit this page on GitHub"
@@ -63,6 +64,8 @@ gh_edit_repository: "https://github.com/JonPark0/isa-lm"
 gh_edit_branch: main
 gh_edit_source: docs
 gh_edit_view_mode: tree
+mermaid:
+  version: "11.4.1"          # loaded only where a page sets mermaid: true
 callouts:
   note:
     title: Note

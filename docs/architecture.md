@@ -3,6 +3,7 @@ title: "Architecture: compile-time kernel binding for CPU LLM inference"
 description: "How isa-lm binds each operator to a per-ISA SIMD kernel at compile time, guards against unsupported CPUs, packs weights, batches prompts and threads LLM inference."
 nav_order: 5
 nav_title: "Architecture"
+mermaid: true
 ---
 
 # Architecture
@@ -68,6 +69,14 @@ highest-priority implementation present:
 The binding is static. There are no function pointers and no runtime dispatch,
 and LTO can inline kernels into their callers.
 
+```mermaid
+flowchart TD
+    make["make ISA=avx2"] --> flags["-DML_ISA_AVX2<br/>-DML_ENABLE_ for SCALAR, SSE2, SSE41, AVX2"]
+    flags --> headers["each enabled kernels/&lt;isa&gt;/k_&lt;isa&gt;.h<br/>defines ML_HAS_&lt;OP&gt;_&lt;ISA&gt;"]
+    headers --> config["config/ml_config.h binds ml_k_&lt;op&gt;<br/>to the highest ISA that has it"]
+    config --> calls["ops/ and model/ call ml_k_&lt;op&gt; directly<br/>(no function pointers; LTO can inline it)"]
+```
+
 The `avx512vnni` chain skips `avxvnni` on purpose. Some CPUs with AVX512-VNNI
 (Ice Lake, Cascade Lake) lack the VEX-encoded AVX-VNNI, and `avxvnni` only
 implements the matvecs, which `avx512vnni` covers itself.
@@ -81,6 +90,13 @@ by the first line of `ml_bench`.
 are compiled **without** ISA flags. `main` checks the CPU first and only then
 calls `ml_main`, which is compiled with the ISA flags. As a result no AVX or SVE
 instruction can execute on an unsupported CPU, not even in a function prologue.
+
+```mermaid
+flowchart LR
+    start["main() in app/main_guard.c<br/>(no ISA flags)"] --> check{"CPU has the<br/>build's ISA?"}
+    check -- "no" --> refuse["exit code 3,<br/>names the missing feature"]
+    check -- "yes" --> run["ml_main() (ISA flags):<br/>load, pack, prefill, decode"]
+```
 
 | Platform | How the CPU is checked |
 |----------|------------------------|

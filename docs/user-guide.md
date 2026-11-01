@@ -39,8 +39,9 @@ also hold the model tools (`tools/convert.py`, `tools/convert_tokenizer.py`,
 
 `scripts/package_release.sh` builds the same archives locally, and
 `scripts/smoke_release.sh` runs them. A release is cut by merging a version
-bump into main: `ML_VERSION` in `core/ml.h` raised to X.Y.Z and the
-`## Unreleased` heading of `CHANGELOG.md` renamed to `## X.Y.Z — date`.
+bump into main: `ML_VERSION` in `core/ml.h` raised to X.Y.Z, the
+`## Unreleased` heading of `CHANGELOG.md` renamed to `## X.Y.Z — date`, and
+`python3 scripts/sync_docs.py` run to refresh the site's changelog page.
 `.github/workflows/auto-release.yml` sees the new version, and
 `release.yml` builds and runs the archives and publishes release vX.Y.Z,
 creating the tag on that commit. Pushing a tag vX.Y.Z still works too; CI
