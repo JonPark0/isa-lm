@@ -16,6 +16,10 @@ defaults:
       path: ""
     values:
       image: /assets/social-preview.png   # og:image, twitter:image
+  - scope:
+      path: google0f5a07030fefb89e.html   # Search Console ownership file
+    values:
+      sitemap: false
 # Search engine ownership checks: paste the codes from Google Search Console
 # (HTML tag method) and Bing Webmaster Tools and uncomment; jekyll-seo-tag
 # writes the meta tags.
