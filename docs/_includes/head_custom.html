@@ -2,6 +2,8 @@
 Included by Just the Docs at the end of <head>.
 - Dark mode: the reader's choice (saved by the header button), else the
   system setting; switched before the page is drawn.
+- Pages in another language (lang: ko) set <html lang>; the English and Korean
+  home pages point to each other (hreflang).
 - On the home page: schema.org metadata for search engines and AI assistants.
 {%- endcomment -%}
 <script>
@@ -12,6 +14,15 @@ Included by Just the Docs at the end of <head>.
     if (t === "dark") jtd.setTheme("dark");
   })();
 </script>
+{%- if page.lang and page.lang != site.lang %}
+<script>document.documentElement.lang = "{{ page.lang }}";</script>
+{%- endif %}
+<style>:lang(ko) { word-break: keep-all; overflow-wrap: anywhere; }</style>
+{%- if page.url == "/" or page.url == "/ko/" %}
+<link rel="alternate" hreflang="en" href="{{ '/' | absolute_url }}">
+<link rel="alternate" hreflang="ko" href="{{ '/ko/' | absolute_url }}">
+<link rel="alternate" hreflang="x-default" href="{{ '/' | absolute_url }}">
+{%- endif %}
 <link rel="icon" type="image/png" sizes="32x32" href="{{ '/assets/favicon-32.png' | relative_url }}">
 <link rel="apple-touch-icon" href="{{ '/assets/apple-touch-icon.png' | relative_url }}">
 {%- if page.url == "/" %}

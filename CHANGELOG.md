@@ -10,6 +10,10 @@
   buttons, a chart of decode speed against llama.cpp
   (`docs/assets/decode-ratio.svg`, drawn from `docs/benchmarks.md` by
   `scripts/sync_docs.py` and checked in CI) and a table of supported CPUs.
+- A Korean home page (`/ko/`, linked both ways with hreflang), a changelog
+  page generated from `CHANGELOG.md` (`scripts/sync_docs.py`), and Mermaid
+  diagrams of compile-time kernel binding and the CPU guard in the
+  architecture page.
 
 - `.github/workflows/hf-models.yml` and `scripts/hf_publish.py`: convert the
   models of `scripts/hf_models.json` (Qwen2.5, Qwen3, SmolLM2, TinyLlama;
