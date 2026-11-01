@@ -7,7 +7,9 @@
 - `.github/workflows/hf-models.yml` and `scripts/hf_publish.py`: convert the
   models of `scripts/hf_models.json` (Qwen2.5, Qwen3, SmolLM2, TinyLlama;
   Llama 3.2 and Gemma 3 on request), measure each file (perplexity, speed, a
-  chat reply) and publish them on Hugging Face with a model card.
+  chat reply) and publish them on Hugging Face with a model card. Converted
+  SmolLM2 135M/360M, Qwen2.5 0.5B/1.5B, Qwen3 0.6B and TinyLlama 1.1B files are
+  at `jonpark0/<model>-isa-lm` (README, user guide and FAQ link them).
 
 ## 0.5.0 — 2026-11-01
 

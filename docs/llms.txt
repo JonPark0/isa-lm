@@ -7,6 +7,7 @@ Key facts:
 - On the same model (Qwen2.5 0.5B) and formats, isa-lm decodes faster than llama.cpp at every ISA level measured: 1.2–1.5× with AVX-512 VNNI, 1.0–2.3× with AVX2, 2.1–10× with SSE2 and SSE4.1, 1.04–1.7× on AArch64.
 - Models: Llama 2/3/3.1/3.2, TinyLlama, SmolLM2, Mistral, Qwen2/2.5, Qwen3, Gemma 2 and Gemma 3, converted from Hugging Face safetensors; Hugging Face tokenizer.json files; chat mode.
 - Results are bit-identical for any thread count and prompt batch size and are checked against a numpy reference.
+- Converted models (Qwen2.5, Qwen3, SmolLM2, TinyLlama; Q4_0, Q8_0 and mixed files with tokenizers): https://huggingface.co/models?other=isa-lm
 - Not supported: GPUs, K-quant formats, mixture-of-experts models, image input, Phi (partial rotary embeddings).
 
 ## Docs

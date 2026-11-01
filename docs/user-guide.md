@@ -113,6 +113,34 @@ optimization. The pthread pool (`-DML_THREADS=ON`) is not available with MSVC.
 
 ## Getting a model
 
+### Converted models on Hugging Face
+
+These models are converted and published by `.github/workflows/hf-models.yml`
+(see [Prebuilt binaries](#prebuilt-binaries)), so they need no Python:
+
+| Model | Q4_0 | Q8_0 | Perplexity Q4 / Q8 | `--chat` |
+|-------|-----:|-----:|-------------------:|----------|
+| [SmolLM2 135M Instruct](https://huggingface.co/jonpark0/SmolLM2-135M-Instruct-isa-lm) | 72 MiB | 136 MiB | 31.6 / 23.5 | `smollm` |
+| [SmolLM2 360M Instruct](https://huggingface.co/jonpark0/SmolLM2-360M-Instruct-isa-lm) | 194 MiB | 367 MiB | 21.7 / 17.4 | `smollm` |
+| [Qwen2.5 0.5B Instruct](https://huggingface.co/jonpark0/Qwen2.5-0.5B-Instruct-isa-lm) | 265 MiB | 501 MiB | 21.7 / 19.0 | `qwen` |
+| [Qwen3 0.6B](https://huggingface.co/jonpark0/Qwen3-0.6B-isa-lm) | 320 MiB | 604 MiB | 31.7 / 27.9 | `chatml` |
+| [TinyLlama 1.1B Chat](https://huggingface.co/jonpark0/TinyLlama-1.1B-Chat-v1.0-isa-lm) | 590 MiB | 1115 MiB | 10.6 / 10.3 | `zephyr` |
+| [Qwen2.5 1.5B Instruct](https://huggingface.co/jonpark0/Qwen2.5-1.5B-Instruct-isa-lm) | 829 MiB | 1565 MiB | 14.7 / 12.7 | `qwen` |
+
+Each repository holds the Q4_0 and Q8_0 files, a mixed Q4 file with some
+matrices in Q8 (all but SmolLM2), `tokenizer.mlt`, `SHA256SUMS` and a model
+card with the speed of each file. Perplexity is on wikitext-2 (4 chunks of 512
+tokens) and compares only files of the same model. Small models lose more to
+Q4: take Q8 or the mixed file for SmolLM2. The files need isa-lm 0.5.0 or
+later and hold a 4096-position context; convert the model yourself for another.
+Every model with the `isa-lm` tag: <https://huggingface.co/models?other=isa-lm>.
+
+```sh
+curl -LO https://huggingface.co/jonpark0/Qwen2.5-0.5B-Instruct-isa-lm/resolve/main/Qwen2.5-0.5B-Instruct-Q4_0.mlb
+curl -LO https://huggingface.co/jonpark0/Qwen2.5-0.5B-Instruct-isa-lm/resolve/main/tokenizer.mlt
+./ml_run Qwen2.5-0.5B-Instruct-Q4_0.mlb -z tokenizer.mlt --chat qwen -t 4
+```
+
 ### From a llama2.c checkpoint
 
 ```sh

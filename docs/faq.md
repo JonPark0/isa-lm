@@ -68,6 +68,17 @@ checkpoint to the `.mlb` format and `tools/convert_tokenizer.py` its
 SmolLM2 135M and Gemma 3 1B and 4B have been run end to end; see
 [Getting a model](user-guide.md#getting-a-model).
 
+## Where do I get a model?
+
+Converted files of SmolLM2 135M and 360M Instruct, Qwen2.5 0.5B and 1.5B
+Instruct, Qwen3 0.6B and TinyLlama 1.1B Chat are on Hugging Face, in Q4_0, Q8_0
+and (for most) a mixed Q4 file, each with its tokenizer and a model card with
+perplexity and speed: see
+[Converted models on Hugging Face](user-guide.md#converted-models-on-hugging-face).
+Download a `.mlb` file and `tokenizer.mlt` next to a release and run it; no
+Python is needed. For other models, convert the Hugging Face safetensors with
+`tools/convert.py`.
+
 ## Which build should I use?
 
 The release archives start the fastest build your CPU supports on their own:
