@@ -50,7 +50,17 @@ the missing feature. It does not crash with SIGILL.
 
 Prebuilt binaries for Linux (x86-64, AArch64, ARMv7) and Windows (x86-64) are on the
 [releases page](https://github.com/JonPark0/isa-lm/releases); their `ml_run` wrapper starts the
-fastest build your CPU supports. To build from source:
+fastest build your CPU supports. Converted models (Qwen2.5, Qwen3, SmolLM2, TinyLlama) are on
+[Hugging Face](docs/user-guide.md#converted-models-on-hugging-face), so a first run needs no Python:
+
+```sh
+# in the unpacked release
+curl -LO https://huggingface.co/jonpark0/Qwen2.5-0.5B-Instruct-isa-lm/resolve/main/Qwen2.5-0.5B-Instruct-Q4_0.mlb
+curl -LO https://huggingface.co/jonpark0/Qwen2.5-0.5B-Instruct-isa-lm/resolve/main/tokenizer.mlt
+./ml_run Qwen2.5-0.5B-Instruct-Q4_0.mlb -z tokenizer.mlt --chat qwen -t 4
+```
+
+To build from source:
 
 ```sh
 pip install numpy
@@ -156,7 +166,8 @@ Please also cite the models you run; their licenses are separate from this one.
   빌드가 있습니다(라즈베리 파이 실기에서는 아직 측정하지 않았습니다). GPU나 외부 라이브러리가 필요 없습니다.
 - **모델과 토크나이저:** llama2.c 체크포인트와 Hugging Face safetensors(Llama 2, Llama 3/3.1/3.2, TinyLlama,
   SmolLM2, Mistral, Qwen2/Qwen2.5, Qwen3, Gemma 2, Gemma 3)를 변환합니다. Hugging Face `tokenizer.json`은 `tokenizers` 라이브러리와 같은 결과로 인코딩합니다.
-- **사용:** 텍스트 생성, 대화 모드(`--chat`), top-k·top-p·반복 패널티, 퍼플렉서티 측정을 제공합니다.
+- **사용:** 텍스트 생성, 대화 모드(`--chat`), top-k·top-p·반복 패널티, 퍼플렉서티 측정을 제공합니다. 변환된 모델(Qwen2.5,
+  Qwen3, SmolLM2, TinyLlama)은 [Hugging Face](https://huggingface.co/models?other=isa-lm)에서 바로 받을 수 있습니다.
 - **검증:** 커널은 스칼라·배정밀도 기준과, 전체 결과는 numpy 참조 구현과 비교합니다. ARM과 구형 x86은 qemu로,
   Arm 실기는 CI에서 확인합니다.
 

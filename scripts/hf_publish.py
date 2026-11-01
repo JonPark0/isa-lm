@@ -106,7 +106,7 @@ def variants(model):
     return out
 
 
-def measure(build, path, tok, text, threads, chat):
+def measure(build, path, tok, text, threads, chat, prompt):
     ppl = run([sys.executable, os.path.join(ROOT, "tools", "perplexity.py"), os.path.join(build, "ml_run"), path,
                tok, text, "--ml-tok", os.path.join(build, "ml_tok"), "--ctx", "512", "--chunks", "4",
                "-t", str(threads)], capture_output=True).stdout
@@ -116,7 +116,7 @@ def measure(build, path, tok, text, threads, chat):
     m_bench = re.search(r"prefill ([0-9.]+) tok/s, decode ([0-9.]+) tok/s", bench)
     if not m_ppl or not m_bench:
         sys.exit(f"could not parse measurements:\n{ppl}\n{bench}")
-    reply = run([os.path.join(build, "ml_run"), path, "-z", tok, "--chat", chat, "-i", CHAT_PROMPT,
+    reply = run([os.path.join(build, "ml_run"), path, "-z", tok, "--chat", chat, "-i", prompt,
                  "-n", "64", "-t", str(threads)], capture_output=True).stdout.strip()
     if not reply:
         sys.exit(f"{os.path.basename(path)}: empty chat reply")
@@ -179,7 +179,7 @@ def model_card(model, repo_id, base, files, info):
         "```",
         "",
         "`ml_run` picks the fastest build your CPU supports. A greedy one-turn reply from "
-        f"`{q4}` to \"{CHAT_PROMPT}\":",
+        f"`{q4}` to \"{CHAT_PROMPT + model.get('prompt_suffix', '')}\":",
         "",
         "```text",
         files[0]["measure"]["reply"],
@@ -245,7 +245,8 @@ def publish(model, a):
         run([sys.executable, os.path.join(ROOT, "tools", "convert.py"), "hf", src, path, *args,
              "--max-seq", str(catalog["max_seq"])])
         f = {"name": name, "args": args, "desc": desc, "size": os.path.getsize(path), "sha256": sha256(path)}
-        f["measure"] = measure(a.build, path, tok, a.text, a.threads, model["chat"])
+        f["measure"] = measure(a.build, path, tok, a.text, a.threads, model["chat"],
+                               CHAT_PROMPT + model.get("prompt_suffix", ""))
         print(f"{name}: {json.dumps(f['measure'])}", flush=True)
         files.append(f)
 

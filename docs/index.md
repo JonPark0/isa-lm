@@ -44,6 +44,9 @@ python3 tools/convert_tokenizer.py ./Llama-3.2-1B-Instruct/tokenizer.json llama.
 build/avx2/ml_run llama.mlb -z llama.mlt --chat llama3 -t 4
 ```
 
+Converted models (Qwen2.5, Qwen3, SmolLM2, TinyLlama) are ready on Hugging Face:
+see [Converted models](user-guide.md#converted-models-on-hugging-face).
+
 ## Documentation
 
 [FAQ](faq.md) · [User guide](user-guide.md) · [Architecture](architecture.md) · [File formats](file-format.md) ·
