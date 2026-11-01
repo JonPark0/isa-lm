@@ -36,7 +36,7 @@ int ml_main(int argc, char **argv) {
         if (!strcmp(argv[i], "--decode")) decode = 1;
         else if (!strcmp(argv[i], "--no-bos")) bos = 0;
         else if (!strcmp(argv[i], "--vocab") && i + 1 < argc) vocab = atoi(argv[++i]);
-        else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) { printf("%sisa-lm %s\n", USAGE, ML_VERSION); return 0; }
+        else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) { printf("%skrafla %s\n", USAGE, ML_VERSION); return 0; }
         else if (argv[i][0] != '-' && !path) path = argv[i];
         else { fputs(USAGE, stderr); return 2; }
     }

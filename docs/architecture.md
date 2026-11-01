@@ -1,6 +1,6 @@
 ---
 title: "Architecture: compile-time kernel binding for CPU LLM inference"
-description: "How isa-lm binds each operator to a per-ISA SIMD kernel at compile time, guards against unsupported CPUs, packs weights, batches prompts and threads LLM inference."
+description: "How Krafla binds each operator to a per-ISA SIMD kernel at compile time, guards against unsupported CPUs, packs weights, batches prompts and threads LLM inference."
 nav_order: 5
 nav_title: "Architecture"
 mermaid: true
@@ -136,7 +136,7 @@ The row-major matvec kernels spend most of their instructions on per-row
 bookkeeping: every 32-weight block costs one integer dot product but several
 float operations to apply its scale. At load, `ml_model_pack` therefore
 repacks every weight matrix, except the embedding table, into a
-**row-interleaved** layout ([`core/pack.h`](https://github.com/JonPark0/isa-lm/blob/main/core/pack.h)):
+**row-interleaved** layout ([`core/pack.h`](https://github.com/JonPark0/krafla/blob/main/core/pack.h)):
 
 - **Row groups:** rows are grouped by G, the SIMD lane count: 16 for AVX-512
   VNNI, 8 for AVX2 and AVX-VNNI, 4 for SSE2, SSE4.1 and the NEON builds. One

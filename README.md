@@ -1,13 +1,15 @@
-# isa-lm — Portable INT8/INT4 LLM Inference for Legacy x86-64 and ARM CPUs (C11)
+# Krafla — Portable INT8/INT4 LLM Inference for Legacy x86-64 and ARM CPUs (C11)
 
-[![CI](https://github.com/JonPark0/isa-lm/actions/workflows/ci.yml/badge.svg)](https://github.com/JonPark0/isa-lm/actions/workflows/ci.yml)
+[![CI](https://github.com/JonPark0/krafla/actions/workflows/ci.yml/badge.svg)](https://github.com/JonPark0/krafla/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![C11](https://img.shields.io/badge/C-11-blue.svg)](docs/user-guide.md)
-[![Docs](https://img.shields.io/badge/docs-site-green.svg)](https://jonpark0.github.io/isa-lm/)
+[![Docs](https://img.shields.io/badge/docs-site-green.svg)](https://jonpark0.github.io/krafla/)
 
-A dependency-free C11 inference runtime for Llama-style decoder Transformers with
-INT8 and INT4 weights. It runs on x86-64 CPUs from SSE2 up to AVX-512 VNNI, and
-on ARM CPUs from ARMv7 NEON up to i8mm and SVE.
+**Krafla** (**K**ernels **R**etargeted **A**cross **F**amilies of **L**egacy
+**A**rchitectures; formerly isa-lm) is a dependency-free C11 inference runtime
+for Llama-style decoder Transformers with INT8 and INT4 weights. It runs on
+x86-64 CPUs from SSE2 up to AVX-512 VNNI, and on ARM CPUs from ARMv7 NEON up to
+i8mm and SVE.
 
 - **Faster decoding than llama.cpp** at every ISA level measured, on the same
   model and formats: 1.2–1.5× with AVX-512 VNNI, 1.0–2.3× with AVX2, 2.1–10×
@@ -49,14 +51,14 @@ the missing feature. It does not crash with SIGILL.
 ## Quick start
 
 Prebuilt binaries for Linux (x86-64, AArch64, ARMv7) and Windows (x86-64) are on the
-[releases page](https://github.com/JonPark0/isa-lm/releases); their `ml_run` wrapper starts the
+[releases page](https://github.com/JonPark0/krafla/releases); their `ml_run` wrapper starts the
 fastest build your CPU supports. Converted models (Qwen2.5, Qwen3, SmolLM2, TinyLlama) are on
 [Hugging Face](docs/user-guide.md#converted-models-on-hugging-face), so a first run needs no Python:
 
 ```sh
 # in the unpacked release
-curl -LO https://huggingface.co/jonpark0/Qwen2.5-0.5B-Instruct-isa-lm/resolve/main/Qwen2.5-0.5B-Instruct-Q4_0.mlb
-curl -LO https://huggingface.co/jonpark0/Qwen2.5-0.5B-Instruct-isa-lm/resolve/main/tokenizer.mlt
+curl -LO https://huggingface.co/jonpark0/Qwen2.5-0.5B-Instruct-krafla/resolve/main/Qwen2.5-0.5B-Instruct-Q4_0.mlb
+curl -LO https://huggingface.co/jonpark0/Qwen2.5-0.5B-Instruct-krafla/resolve/main/tokenizer.mlt
 ./ml_run Qwen2.5-0.5B-Instruct-Q4_0.mlb -z tokenizer.mlt --chat qwen -t 4
 ```
 
@@ -105,7 +107,7 @@ More answers in the [FAQ](docs/faq.md).
 
 ## Documentation
 
-Site: <https://jonpark0.github.io/isa-lm/> · Wiki: <https://github.com/JonPark0/isa-lm/wiki> (both generated from [`docs/`](docs))
+Site: <https://jonpark0.github.io/krafla/> · Wiki: <https://github.com/JonPark0/krafla/wiki> (both generated from [`docs/`](docs))
 
 | Document | Contents |
 |----------|----------|
@@ -136,15 +138,15 @@ Site: <https://jonpark0.github.io/isa-lm/> · Wiki: <https://github.com/JonPark0
 
 ## Citing
 
-If isa-lm helps your research, please cite it (GitHub's *Cite this repository* uses [`CITATION.cff`](CITATION.cff)):
+If Krafla helps your research, please cite it (GitHub's *Cite this repository* uses [`CITATION.cff`](CITATION.cff)):
 
 ```bibtex
-@software{isalm2026,
+@software{krafla2026,
   author  = {Park, Yeochoon},
-  title   = {isa-lm: a portable C11 runtime for INT8/INT4 Llama-style language model inference on legacy x86-64 and ARM instruction sets},
+  title   = {Krafla: a portable C11 runtime for INT8/INT4 Llama-style language model inference on legacy x86-64 and ARM instruction sets},
   year    = {2026},
   version = {0.5.0},
-  url     = {https://github.com/JonPark0/isa-lm}
+  url     = {https://github.com/JonPark0/krafla}
 }
 ```
 
@@ -152,7 +154,8 @@ Please also cite the models you run; their licenses are separate from this one.
 
 ## 한국어 요약
 
-**isa-lm**은 INT8/INT4로 양자화한 Llama 계열 언어 모델을 CPU에서 실행하는 C11 추론 런타임입니다.
+**Krafla**(크라플라, 옛 이름 isa-lm)는 INT8/INT4로 양자화한 Llama 계열 언어 모델을 CPU에서 실행하는 C11 추론 런타임입니다.
+이름은 지열 발전소가 있는 아이슬란드의 화산 칼데라에서 따왔고, Kernels Retargeted Across Families of Legacy Architectures의 약자이기도 합니다.
 외부 라이브러리 없이 구형·저전력 프로세서까지 지원하는 것이 목표입니다.
 
 - **지원 명령어 집합:** x86-64는 SSE2부터 SSE4.1, AVX2, AVX-VNNI, AVX-512 VNNI까지, ARM은 ARMv7 NEON부터
@@ -167,11 +170,11 @@ Please also cite the models you run; their licenses are separate from this one.
 - **모델과 토크나이저:** llama2.c 체크포인트와 Hugging Face safetensors(Llama 2, Llama 3/3.1/3.2, TinyLlama,
   SmolLM2, Mistral, Qwen2/Qwen2.5, Qwen3, Gemma 2, Gemma 3)를 변환합니다. Hugging Face `tokenizer.json`은 `tokenizers` 라이브러리와 같은 결과로 인코딩합니다.
 - **사용:** 텍스트 생성, 대화 모드(`--chat`), top-k·top-p·반복 패널티, 퍼플렉서티 측정을 제공합니다. 변환된 모델(Qwen2.5,
-  Qwen3, SmolLM2, TinyLlama)은 [Hugging Face](https://huggingface.co/models?other=isa-lm)에서 바로 받을 수 있습니다.
+  Qwen3, SmolLM2, TinyLlama)은 [Hugging Face](https://huggingface.co/models?other=krafla)에서 바로 받을 수 있습니다.
 - **검증:** 커널은 스칼라·배정밀도 기준과, 전체 결과는 numpy 참조 구현과 비교합니다. ARM과 구형 x86은 qemu로,
   Arm 실기는 CI에서 확인합니다.
 
-자세한 문서는 [문서 사이트](https://jonpark0.github.io/isa-lm/)와 [위키](https://github.com/JonPark0/isa-lm/wiki)를 참고하세요.
+자세한 문서는 [문서 사이트](https://jonpark0.github.io/krafla/)와 [위키](https://github.com/JonPark0/krafla/wiki)를 참고하세요.
 
 ## License
 

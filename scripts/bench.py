@@ -1,4 +1,4 @@
-"""A/B speed comparison of two isa-lm source trees on this machine.
+"""A/B speed comparison of two Krafla source trees on this machine.
 
   python3 scripts/bench.py --new DIR [--base DIR] [--reps N] [--threads LIST]
                            [--model PATH ...] [--isa LIST] [--out FILE.md]

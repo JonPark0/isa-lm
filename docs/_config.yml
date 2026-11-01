@@ -1,11 +1,11 @@
 # GitHub Pages (Settings → Pages → Deploy from branch: main, folder /docs)
-title: isa-lm
+title: Krafla
 description: >-
   Portable C11 LLM inference for legacy and modern CPUs — INT8/INT4 Llama, Qwen and Gemma models on x86-64 (SSE2, SSE4.1, AVX2,
   AVX-VNNI, AVX-512 VNNI) and ARM (ARMv7 NEON, dotprod, i8mm, SVE) with compile-time kernel selection, Hugging Face
   tokenizers, chat mode and a numpy-checked reference.
 url: https://jonpark0.github.io
-baseurl: /isa-lm
+baseurl: /krafla
 # Just the Docs (https://just-the-docs.com), pinned; with the plugins below.
 remote_theme: just-the-docs/just-the-docs@v0.12.0
 lang: en
@@ -53,14 +53,14 @@ enable_copy_code_button: true
 back_to_top: true
 back_to_top_text: "Back to top"
 aux_links:
-  "GitHub": "https://github.com/JonPark0/isa-lm"
-  "Releases": "https://github.com/JonPark0/isa-lm/releases"
-  "Models": "https://huggingface.co/models?other=isa-lm"
-  "한국어": "/isa-lm/ko/"
+  "GitHub": "https://github.com/JonPark0/krafla"
+  "Releases": "https://github.com/JonPark0/krafla/releases"
+  "Models": "https://huggingface.co/models?other=krafla"
+  "한국어": "/krafla/ko/"
 aux_links_new_tab: false
 gh_edit_link: true
 gh_edit_link_text: "Edit this page on GitHub"
-gh_edit_repository: "https://github.com/JonPark0/isa-lm"
+gh_edit_repository: "https://github.com/JonPark0/krafla"
 gh_edit_branch: main
 gh_edit_source: docs
 gh_edit_view_mode: tree

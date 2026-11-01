@@ -86,7 +86,7 @@ jobs:
         run: |
           scripts/compare_llamacpp.sh ../llama.cpp ../data/qwen ../data/f16.gguf ../data/wiki.txt build/compare
           {
-            echo "# $NAME: isa-lm ${GITHUB_SHA::7} against llama.cpp ${{ inputs.llama_cpp || 'b11835' }}"
+            echo "# $NAME: Krafla ${GITHUB_SHA::7} against llama.cpp ${{ inputs.llama_cpp || 'b11835' }}"
             echo
             cat build/compare/results.md
           } >> "$GITHUB_STEP_SUMMARY"

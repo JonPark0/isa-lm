@@ -1,6 +1,6 @@
 ---
 title: "Writing SIMD kernels (SSE2 to AVX-512, NEON to SVE)"
-description: "How to add an int8/int4 SIMD kernel or a new instruction set to isa-lm: kernel rules, packed layouts, per-ISA idioms for x86 and ARM, and assembly overrides."
+description: "How to add an int8/int4 SIMD kernel or a new instruction set to Krafla: kernel rules, packed layouts, per-ISA idioms for x86 and ARM, and assembly overrides."
 nav_order: 7
 nav_title: "Writing kernels"
 ---
@@ -74,7 +74,7 @@ deferred reduction, precision is bounded by the magnitude of the products, and
 ## Packed kernels
 
 ISAs with packed kernels implement four more functions over the layout in
-[`core/pack.h`](https://github.com/JonPark0/isa-lm/blob/main/core/pack.h):
+[`core/pack.h`](https://github.com/JonPark0/krafla/blob/main/core/pack.h):
 
 ```c
 void ml_k_matvec_q8_pk_<isa>(float *y, const ml_qtensor *W, const ml_qact *x, int r0, int r1);

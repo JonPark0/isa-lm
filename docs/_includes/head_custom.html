@@ -9,7 +9,7 @@ Included by Just the Docs at the end of <head>.
 <script>
   (function () {
     var t = null;
-    try { t = localStorage.getItem("isa-lm-theme"); } catch (e) {}
+    try { t = localStorage.getItem("krafla-theme"); } catch (e) {}
     if (!t && window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) t = "dark";
     if (t === "dark") jtd.setTheme("dark");
   })();
@@ -30,10 +30,11 @@ Included by Just the Docs at the end of <head>.
 {
   "@context": "https://schema.org",
   "@type": "SoftwareSourceCode",
-  "name": "isa-lm",
+  "name": "Krafla",
+  "alternateName": ["isa-lm", "Kernels Retargeted Across Families of Legacy Architectures"],
   "description": {{ page.description | jsonify }},
   "url": {{ "/" | absolute_url | jsonify }},
-  "codeRepository": "https://github.com/JonPark0/isa-lm",
+  "codeRepository": "https://github.com/JonPark0/krafla",
   "programmingLanguage": "C",
   "license": "https://opensource.org/licenses/MIT",
   "author": {
@@ -48,11 +49,11 @@ Included by Just the Docs at the end of <head>.
   "keywords": ["LLM inference", "CPU inference", "INT8", "INT4", "quantization", "SIMD", "SSE2", "AVX2", "AVX-512 VNNI", "ARM NEON", "SVE", "Llama", "Qwen", "Gemma", "C11"],
   "targetProduct": {
     "@type": "SoftwareApplication",
-    "name": "isa-lm",
+    "name": "Krafla",
     "applicationCategory": "DeveloperApplication",
     "operatingSystem": "Linux, Windows",
     "processorRequirements": "x86-64 (SSE2 or later) or ARMv7 NEON / AArch64",
-    "downloadUrl": "https://github.com/JonPark0/isa-lm/releases",
+    "downloadUrl": "https://github.com/JonPark0/krafla/releases",
     "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"}
   }
 }

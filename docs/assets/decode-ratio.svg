@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 442" width="760" height="442" role="img" aria-labelledby="dr-title dr-desc" font-family="system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif">
-<title id="dr-title">isa-lm decode speed relative to llama.cpp, one thread</title>
+<title id="dr-title">Krafla decode speed relative to llama.cpp, one thread</title>
 <desc id="dr-desc">AVX-512 VNNI: Q4_0 1.52x, Q8_0 1.17x; AVX2: Q4_0 2.31x, Q8_0 2.04x; SSE4.1 / SSE4.2: Q4_0 2.72x, Q8_0 3.25x; SSE2: Q4_0 7.34x, Q8_0 3.32x; i8mm: Q4_0 1.31x, Q8_0 1.04x; dotprod: Q4_0 1.26x, Q8_0 1.11x; NEON (Armv8.0): Q4_0 1.68x, Q8_0 1.38x</desc>
 <style>
 .bg{fill:#fff;stroke:#e5e7eb}.t{fill:#1f2937}.m{fill:#6b7280}.g{stroke:#e5e7eb}.one{stroke:#6b7280;stroke-dasharray:4 3}.q4{fill:#2563eb}.q8{fill:#ea580c}.lb{fill:#fff}
@@ -7,7 +7,7 @@
 </style>
 <rect class="bg" x="0.5" y="0.5" width="759" height="441" rx="8"/>
 <text class="t" x="20" y="32" font-size="17" font-weight="600">Decode speed against llama.cpp, one thread</text>
-<text class="m" x="20" y="54" font-size="13">Qwen2.5 0.5B Instruct, same Q4_0 and Q8_0 formats; above 1× isa-lm is faster</text>
+<text class="m" x="20" y="54" font-size="13">Qwen2.5 0.5B Instruct, same Q4_0 and Q8_0 formats; above 1× Krafla is faster</text>
 <rect class="q4" x="560" y="68" width="12" height="12" rx="2"/><text class="t" x="577" y="79" font-size="13">Q4_0</text>
 <rect class="q8" x="630" y="68" width="12" height="12" rx="2"/><text class="t" x="647" y="79" font-size="13">Q8_0</text>
 <line class="g" x1="170.0" y1="86" x2="170.0" y2="398"/>

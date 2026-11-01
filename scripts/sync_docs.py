@@ -19,8 +19,8 @@ CHART = os.path.join(ROOT, "docs", "assets", "decode-ratio.svg")
 CHANGELOG = os.path.join(ROOT, "CHANGELOG.md")
 CHANGELOG_PAGE = os.path.join(ROOT, "docs", "changelog.md")
 CHANGELOG_FRONT = """---
-title: "Changelog: what changed in each isa-lm release"
-description: "Release notes of isa-lm: new models, kernels, formats, speed-ups and fixes in each version."
+title: "Changelog: what changed in each Krafla release"
+description: "Release notes of Krafla: new models, kernels, formats, speed-ups and fixes in each version."
 nav_order: 9
 nav_title: "Changelog"
 ---
@@ -82,7 +82,7 @@ def svg_chart(groups):
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" width="{W}" height="{H}" '
         'role="img" aria-labelledby="dr-title dr-desc" font-family="system-ui, -apple-system, '
         'Segoe UI, Roboto, Helvetica, Arial, sans-serif">',
-        '<title id="dr-title">isa-lm decode speed relative to llama.cpp, one thread</title>',
+        '<title id="dr-title">Krafla decode speed relative to llama.cpp, one thread</title>',
         '<desc id="dr-desc">' + "; ".join(
             f"{isa}: Q4_0 {d.get('Q4_0', 0):.2f}x, Q8_0 {d.get('Q8_0', 0):.2f}x"
             for _, rows in groups for isa, d in rows) + "</desc>",
@@ -97,7 +97,7 @@ def svg_chart(groups):
         '<text class="t" x="20" y="32" font-size="17" font-weight="600">Decode speed against llama.cpp, '
         'one thread</text>',
         '<text class="m" x="20" y="54" font-size="13">Qwen2.5 0.5B Instruct, same Q4_0 and Q8_0 formats; '
-        'above 1× isa-lm is faster</text>',
+        'above 1× Krafla is faster</text>',
         f'<rect class="q4" x="{W - 200}" y="68" width="12" height="12" rx="2"/>'
         f'<text class="t" x="{W - 183}" y="79" font-size="13">Q4_0</text>',
         f'<rect class="q8" x="{W - 130}" y="68" width="12" height="12" rx="2"/>'

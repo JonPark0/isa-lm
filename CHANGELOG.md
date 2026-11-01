@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Changed
+
+- Renamed from isa-lm to **Krafla** (Kernels Retargeted Across Families of
+  Legacy Architectures): repository `JonPark0/krafla`, site
+  <https://jonpark0.github.io/krafla/>, release archives `krafla-VER-*`,
+  converted models `jonpark0/<model>-krafla` with the `krafla` tag, and
+  `KRAFLA_ISA` for the release wrappers (`ISA_LM_ISA` still works). Programs
+  (`ml_run`, `ml_bench`, `ml_tok`), the C API and the `.mlb`/`.mlt` formats are
+  unchanged.
+
 ### Added
 
 - Documentation site on Just the Docs: a sidebar, search, dark mode (following
@@ -14,13 +24,12 @@
   page generated from `CHANGELOG.md` (`scripts/sync_docs.py`), and Mermaid
   diagrams of compile-time kernel binding and the CPU guard in the
   architecture page.
-
 - `.github/workflows/hf-models.yml` and `scripts/hf_publish.py`: convert the
   models of `scripts/hf_models.json` (Qwen2.5, Qwen3, SmolLM2, TinyLlama;
   Llama 3.2 and Gemma 3 on request), measure each file (perplexity, speed, a
   chat reply) and publish them on Hugging Face with a model card. Converted
   SmolLM2 135M/360M, Qwen2.5 0.5B/1.5B, Qwen3 0.6B and TinyLlama 1.1B files are
-  at `jonpark0/<model>-isa-lm` (README, user guide and FAQ link them).
+  at `jonpark0/<model>-krafla` (README, user guide and FAQ link them).
 
 ## 0.5.0 — 2026-11-01
 

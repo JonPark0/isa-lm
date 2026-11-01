@@ -24,7 +24,7 @@ PAGES = {   # source file -> wiki page name
     "docs/benchmarks.md": "Comparison-with-llama-cpp",
 }
 
-SIDEBAR = """**isa-lm**
+SIDEBAR = """**Krafla**
 
 - [[Home]]
 - [[FAQ]]
