@@ -118,7 +118,7 @@ every option; the [FAQ](faq.md) answers the common questions.
   author  = {Park, Yeochoon},
   title   = {Krafla: a portable C11 runtime for INT8/INT4 Llama-style language model inference on legacy x86-64 and ARM instruction sets},
   year    = {2026},
-  version = {0.5.0},
+  version = {0.6.0},
   url     = {https://github.com/JonPark0/krafla}
 }
 ```
