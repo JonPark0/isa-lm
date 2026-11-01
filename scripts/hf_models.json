@@ -1,0 +1,22 @@
+{
+  "comment": "Models that .github/workflows/hf-models.yml converts and publishes (scripts/hf_publish.py). source: Hugging Face repository; chat: ml_run --chat template; mixed: --q8 classes of the mixed Q4 file (none: no mixed file); default: part of the 'default' set. Llama and Gemma need the token's account to have accepted their licenses on Hugging Face.",
+  "max_seq": 4096,
+  "models": [
+    {"id": "qwen2.5-0.5b-instruct", "source": "Qwen/Qwen2.5-0.5B-Instruct", "license": "apache-2.0",
+     "chat": "qwen", "mixed": "emb,v,o,down", "default": true},
+    {"id": "qwen2.5-1.5b-instruct", "source": "Qwen/Qwen2.5-1.5B-Instruct", "license": "apache-2.0",
+     "chat": "qwen", "mixed": "v,o,down", "default": true},
+    {"id": "qwen3-0.6b", "source": "Qwen/Qwen3-0.6B", "license": "apache-2.0",
+     "chat": "chatml", "mixed": "emb,v,o,down", "default": true},
+    {"id": "smollm2-135m-instruct", "source": "HuggingFaceTB/SmolLM2-135M-Instruct", "license": "apache-2.0",
+     "chat": "smollm", "default": true},
+    {"id": "smollm2-360m-instruct", "source": "HuggingFaceTB/SmolLM2-360M-Instruct", "license": "apache-2.0",
+     "chat": "smollm", "default": true},
+    {"id": "tinyllama-1.1b-chat", "source": "TinyLlama/TinyLlama-1.1B-Chat-v1.0", "license": "apache-2.0",
+     "chat": "zephyr", "mixed": "v,o,down", "default": true},
+    {"id": "llama-3.2-1b-instruct", "source": "meta-llama/Llama-3.2-1B-Instruct", "license": "llama3.2",
+     "chat": "llama3", "mixed": "v,o,down", "default": false, "notice": "llama"},
+    {"id": "gemma-3-1b-it", "source": "google/gemma-3-1b-it", "license": "gemma",
+     "chat": "gemma", "default": false, "notice": "gemma"}
+  ]
+}

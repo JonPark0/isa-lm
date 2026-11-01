@@ -44,6 +44,16 @@ bump into main: `ML_VERSION` in `core/ml.h` raised to X.Y.Z and the
 creating the tag on that commit. Pushing a tag vX.Y.Z still works too; CI
 fails a pull request that raises `ML_VERSION` without its CHANGELOG section.
 
+Converted models are published on Hugging Face by
+`.github/workflows/hf-models.yml`, run by hand. For each model of
+`scripts/hf_models.json` it converts the Q4_0, mixed and Q8_0 files and the
+tokenizer with that commit's tools, measures them on the runner (wikitext-2
+perplexity, `ml_bench` speed, one chat reply) and writes the model card
+(`scripts/hf_publish.py`). With `upload` on, it pushes them to
+`<account>/<model>-isa-lm`, using the repository secret `HF_TOKEN`.
+`python3 scripts/hf_publish.py MODEL --text wiki.txt` does the same locally,
+without uploading.
+
 ## Building
 
 ```sh
