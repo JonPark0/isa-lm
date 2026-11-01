@@ -49,7 +49,7 @@ make ISA=avx2
 python3 tools/convert.py llama2c stories15M.bin stories15M.mlb --wtype q8
 build/avx2/ml_run stories15M.mlb -z tokenizer.bin -i "Once upon a time" -n 128 -T 0.8
 
-# Hugging Face Llama, Mistral, Qwen2 or Qwen3 (safetensors), and its tokenizer.json
+# Hugging Face Llama, Mistral, Qwen2, Qwen3, Gemma 2 or Gemma 3 (safetensors), and its tokenizer.json
 python3 tools/convert.py hf ./Llama-3.2-1B-Instruct llama.mlb --wtype q4 --q8 v,o,down --max-seq 4096
 python3 tools/convert_tokenizer.py ./Llama-3.2-1B-Instruct/tokenizer.json llama.mlt
 build/avx2/ml_run llama.mlb -z llama.mlt --chat llama3 -t 4     # one message per line
@@ -95,7 +95,7 @@ If isa-lm helps your research, please cite it (GitHub's *Cite this repository* u
   author  = {Park, Yeochoon},
   title   = {isa-lm: a portable C11 runtime for INT8/INT4 Llama-style language model inference on legacy x86-64 and ARM instruction sets},
   year    = {2026},
-  version = {0.4.0},
+  version = {0.5.0},
   url     = {https://github.com/JonPark0/isa-lm}
 }
 ```
