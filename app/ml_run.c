@@ -52,7 +52,7 @@ static const char USAGE[] =
 
 static int usage(const char *msg) {
     if (msg) fprintf(stderr, "error: %s\n", msg);
-    fprintf(stderr, "%sisa-lm %s, build ISA: %s\n", USAGE, ML_VERSION, ML_ISA_NAME);
+    fprintf(stderr, "%skrafla %s, build ISA: %s\n", USAGE, ML_VERSION, ML_ISA_NAME);
     return 2;
 }
 
@@ -247,7 +247,7 @@ int ml_main(int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
         if (!strcmp(a, "-h") || !strcmp(a, "--help")) {
-            printf("%sisa-lm %s, build ISA: %s\npack group: %d rows\n", USAGE, ML_VERSION, ML_ISA_NAME, ml_pack_group());
+            printf("%skrafla %s, build ISA: %s\npack group: %d rows\n", USAGE, ML_VERSION, ML_ISA_NAME, ml_pack_group());
             return 0;
         }
         if (!strcmp(a, "--profile")) { profile = 1; continue; }

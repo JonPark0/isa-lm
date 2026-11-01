@@ -1,6 +1,6 @@
 ---
 title: "Testing and benchmarking"
-description: "How isa-lm is tested (kernels against scalar and double-precision references, logits against numpy, qemu for ARM and old x86) and benchmarked on each ISA."
+description: "How Krafla is tested (kernels against scalar and double-precision references, logits against numpy, qemu for ARM and old x86) and benchmarked on each ISA."
 nav_order: 8
 nav_title: "Testing and benchmarking"
 ---
@@ -168,8 +168,8 @@ To compare two versions, build both and run them alternately on one machine,
 so that the machine's noise falls on both:
 
 ```sh
-git worktree add ../isa-lm-main main
-python3 scripts/bench.py --new . --base ../isa-lm-main --model bench.mlb --reps 5
+git worktree add ../krafla-main main
+python3 scripts/bench.py --new . --base ../krafla-main --model bench.mlb --reps 5
 ```
 
 `scripts/bench.py` builds `ml_bench` for every ISA the CPU runs and prints
@@ -272,10 +272,10 @@ python3 tools/perplexity.py build/avx2/ml_run llama.mlb llama.mlt wikitext-2-tes
 
 ## Docs site and wiki
 
-`docs/` is also the [GitHub Pages site](https://jonpark0.github.io/isa-lm/)
+`docs/` is also the [GitHub Pages site](https://jonpark0.github.io/krafla/)
 (Settings → Pages → Deploy from branch `main`, folder `/docs`;
 `docs/_config.yml`, landing page `docs/index.md`). To preview it with the
-`github-pages` gem: `PAGES_REPO_NWO=JonPark0/isa-lm bundle exec jekyll serve -s docs`.
+`github-pages` gem: `PAGES_REPO_NWO=JonPark0/krafla bundle exec jekyll serve -s docs`.
 
 The GitHub wiki is generated from `README.md` and `docs/`; edit those, never
 the wiki. `.github/workflows/wiki.yml` runs `tools/sync_wiki.py` on every push
@@ -283,7 +283,7 @@ to `main` that touches them and pushes the result with `GITHUB_TOKEN`; it can
 also be started by hand from the Actions tab. To sync without Actions:
 
 ```sh
-git clone https://github.com/JonPark0/isa-lm.wiki.git wiki
-python3 tools/sync_wiki.py wiki --repo JonPark0/isa-lm
+git clone https://github.com/JonPark0/krafla.wiki.git wiki
+python3 tools/sync_wiki.py wiki --repo JonPark0/krafla
 cd wiki && git add -A && git commit -m "Sync from docs" && git push
 ```

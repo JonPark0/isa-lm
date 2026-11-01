@@ -71,6 +71,6 @@ jobs:
         with:
           tag_name: ${{ env.TAG }}
           target_commitish: ${{ inputs.sha || github.sha }}
-          name: isa-lm ${{ env.TAG }}
+          name: Krafla ${{ env.TAG }}
           body_path: notes.md
           files: dist/*

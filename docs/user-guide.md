@@ -1,13 +1,13 @@
 ---
 title: "User guide: build, convert models and run LLMs on a CPU"
-description: "Build isa-lm for your CPU (SSE2 to AVX-512 VNNI, ARMv7 NEON to SVE), convert Hugging Face Llama, Qwen, Gemma and Mistral models to INT8/INT4, and run or chat with them."
+description: "Build Krafla for your CPU (SSE2 to AVX-512 VNNI, ARMv7 NEON to SVE), convert Hugging Face Llama, Qwen, Gemma and Mistral models to INT8/INT4, and run or chat with them."
 nav_order: 3
 nav_title: "User guide"
 ---
 
 # User guide
 
-This guide covers building isa-lm, getting a model into the `.mlb` format, and
+This guide covers building Krafla, getting a model into the `.mlb` format, and
 running it.
 
 ## Requirements
@@ -21,19 +21,20 @@ running it.
 
 ## Prebuilt binaries
 
-Each [release](https://github.com/JonPark0/isa-lm/releases) has static
+Each [release](https://github.com/JonPark0/krafla/releases) has static
 binaries for every ISA:
 
 | Archive | Builds |
 |---------|--------|
-| `isa-lm-VER-linux-x86_64.tar.gz` | `sse2`, `sse41`, `avx2`, `avxvnni`, `avx512vnni` |
-| `isa-lm-VER-linux-aarch64.tar.gz` | `neon`, `neon_dotprod`, `neon_i8mm`, `sve` |
-| `isa-lm-VER-linux-armv7hf.tar.gz` | `neon`, `scalar` |
-| `isa-lm-VER-windows-x86_64.zip` | `sse2`, `sse41`, `avx2`, `avxvnni`, `avx512vnni` |
+| `krafla-VER-linux-x86_64.tar.gz` | `sse2`, `sse41`, `avx2`, `avxvnni`, `avx512vnni` |
+| `krafla-VER-linux-aarch64.tar.gz` | `neon`, `neon_dotprod`, `neon_i8mm`, `sve` |
+| `krafla-VER-linux-armv7hf.tar.gz` | `neon`, `scalar` |
+| `krafla-VER-windows-x86_64.zip` | `sse2`, `sse41`, `avx2`, `avxvnni`, `avx512vnni` |
 
 The top-level `ml_run`, `ml_bench` and `ml_tok` (`.cmd` on Windows) try the
 builds in `bin/` from the fastest down and start the first one the CPU
-supports. `ISA_LM_ISA=avx2` (for example) picks one yourself. The archives
+supports. `KRAFLA_ISA=avx2` (for example) picks one yourself; the name from
+before the rename, `ISA_LM_ISA`, still works. The archives
 also hold the model tools (`tools/convert.py`, `tools/convert_tokenizer.py`,
 `tools/perplexity.py`; they need Python 3 with numpy).
 
@@ -53,7 +54,7 @@ Converted models are published on Hugging Face by
 tokenizer with that commit's tools, measures them on the runner (wikitext-2
 perplexity, `ml_bench` speed, one chat reply) and writes the model card
 (`scripts/hf_publish.py`). With `upload` on, it pushes them to
-`<account>/<model>-isa-lm`, using the repository secret `HF_TOKEN`.
+`<account>/<model>-krafla`, using the repository secret `HF_TOKEN`.
 `python3 scripts/hf_publish.py MODEL --text wiki.txt` does the same locally,
 without uploading.
 
@@ -123,24 +124,24 @@ These models are converted and published by `.github/workflows/hf-models.yml`
 
 | Model | Q4_0 | Q8_0 | Perplexity Q4 / Q8 | `--chat` |
 |-------|-----:|-----:|-------------------:|----------|
-| [SmolLM2 135M Instruct](https://huggingface.co/jonpark0/SmolLM2-135M-Instruct-isa-lm) | 72 MiB | 136 MiB | 31.6 / 23.5 | `smollm` |
-| [SmolLM2 360M Instruct](https://huggingface.co/jonpark0/SmolLM2-360M-Instruct-isa-lm) | 194 MiB | 367 MiB | 21.7 / 17.4 | `smollm` |
-| [Qwen2.5 0.5B Instruct](https://huggingface.co/jonpark0/Qwen2.5-0.5B-Instruct-isa-lm) | 265 MiB | 501 MiB | 21.7 / 19.0 | `qwen` |
-| [Qwen3 0.6B](https://huggingface.co/jonpark0/Qwen3-0.6B-isa-lm) | 320 MiB | 604 MiB | 31.7 / 27.9 | `chatml` |
-| [TinyLlama 1.1B Chat](https://huggingface.co/jonpark0/TinyLlama-1.1B-Chat-v1.0-isa-lm) | 590 MiB | 1115 MiB | 10.6 / 10.3 | `zephyr` |
-| [Qwen2.5 1.5B Instruct](https://huggingface.co/jonpark0/Qwen2.5-1.5B-Instruct-isa-lm) | 829 MiB | 1565 MiB | 14.7 / 12.7 | `qwen` |
+| [SmolLM2 135M Instruct](https://huggingface.co/jonpark0/SmolLM2-135M-Instruct-krafla) | 72 MiB | 136 MiB | 31.6 / 23.5 | `smollm` |
+| [SmolLM2 360M Instruct](https://huggingface.co/jonpark0/SmolLM2-360M-Instruct-krafla) | 194 MiB | 367 MiB | 21.7 / 17.4 | `smollm` |
+| [Qwen2.5 0.5B Instruct](https://huggingface.co/jonpark0/Qwen2.5-0.5B-Instruct-krafla) | 265 MiB | 501 MiB | 21.7 / 19.0 | `qwen` |
+| [Qwen3 0.6B](https://huggingface.co/jonpark0/Qwen3-0.6B-krafla) | 320 MiB | 604 MiB | 31.7 / 27.9 | `chatml` |
+| [TinyLlama 1.1B Chat](https://huggingface.co/jonpark0/TinyLlama-1.1B-Chat-v1.0-krafla) | 590 MiB | 1115 MiB | 10.6 / 10.3 | `zephyr` |
+| [Qwen2.5 1.5B Instruct](https://huggingface.co/jonpark0/Qwen2.5-1.5B-Instruct-krafla) | 829 MiB | 1565 MiB | 14.7 / 12.7 | `qwen` |
 
 Each repository holds the Q4_0 and Q8_0 files, a mixed Q4 file with some
 matrices in Q8 (all but SmolLM2), `tokenizer.mlt`, `SHA256SUMS` and a model
 card with the speed of each file. Perplexity is on wikitext-2 (4 chunks of 512
 tokens) and compares only files of the same model. Small models lose more to
-Q4: take Q8 or the mixed file for SmolLM2. The files need isa-lm 0.5.0 or
+Q4: take Q8 or the mixed file for SmolLM2. The files need Krafla 0.5.0 or
 later and hold a 4096-position context; convert the model yourself for another.
-Every model with the `isa-lm` tag: <https://huggingface.co/models?other=isa-lm>.
+Every model with the `krafla` tag: <https://huggingface.co/models?other=krafla>.
 
 ```sh
-curl -LO https://huggingface.co/jonpark0/Qwen2.5-0.5B-Instruct-isa-lm/resolve/main/Qwen2.5-0.5B-Instruct-Q4_0.mlb
-curl -LO https://huggingface.co/jonpark0/Qwen2.5-0.5B-Instruct-isa-lm/resolve/main/tokenizer.mlt
+curl -LO https://huggingface.co/jonpark0/Qwen2.5-0.5B-Instruct-krafla/resolve/main/Qwen2.5-0.5B-Instruct-Q4_0.mlb
+curl -LO https://huggingface.co/jonpark0/Qwen2.5-0.5B-Instruct-krafla/resolve/main/tokenizer.mlt
 ./ml_run Qwen2.5-0.5B-Instruct-Q4_0.mlb -z tokenizer.mlt --chat qwen -t 4
 ```
 

@@ -1,21 +1,25 @@
 ---
 title: "FAQ: running LLMs on old and low-power CPUs"
-description: Answers about isa-lm, a C11 runtime for INT8/INT4 language models on CPUs without a GPU — CPUs without AVX, Raspberry Pi-class ARM boards, speed against llama.cpp, models, memory and limits.
+description: Answers about Krafla, a C11 runtime for INT8/INT4 language models on CPUs without a GPU — CPUs without AVX, Raspberry Pi-class ARM boards, speed against llama.cpp, models, memory and limits.
 nav_order: 2
 nav_title: "FAQ"
 ---
 
 # FAQ
 
-## What is isa-lm?
+## What is Krafla?
 
-isa-lm is a dependency-free C11 inference runtime for Llama-style language
+Krafla is a dependency-free C11 inference runtime for Llama-style language
 models with INT8 (Q8_0) and INT4 (Q4_0) weights. It runs on the CPU only, on
 x86-64 from SSE2 up to AVX-512 VNNI and on ARM from 32-bit ARMv7 NEON up to
 i8mm and SVE. You pick the instruction set (ISA) when you compile, and every
 operator is bound to the kernel written for that ISA, with no runtime
-dispatch. The name stands for the instruction set architecture each build
-targets; it is unrelated to the IS-LM model of economics.
+dispatch.
+
+The project was called isa-lm until version 0.5.0. Krafla is a volcanic
+caldera in north Iceland with a geothermal power station, and the name also
+reads as **K**ernels **R**etargeted **A**cross **F**amilies of **L**egacy
+**A**rchitectures.
 
 ## Can I run an LLM on a CPU without AVX or AVX2?
 
@@ -27,26 +31,26 @@ Qwen2.5 0.5B Q4_0 at 25.7 tokens/s on one core and 77.3 on four. That machine
 is a modern Xeon running the SSE2 code, so an old CPU will be slower; the
 ratio to llama.cpp's SSE2 build on the same machine was 6–7×.
 
-## How does isa-lm compare with llama.cpp?
+## How does Krafla compare with llama.cpp?
 
 On Qwen2.5 0.5B with the same Q8_0 and Q4_0 formats on the same machines
 ([details](benchmarks.md)):
 
-- **Decode** is faster with isa-lm at every ISA level measured: 1.2–1.5× with
+- **Decode** is faster with Krafla at every ISA level measured: 1.2–1.5× with
   AVX-512 VNNI, 1.0–2.3× with AVX2, 2.1–10× on the SSE2 and SSE4.1 builds,
   and 1.04–1.7× on AArch64.
-- **Prompt processing** is faster with isa-lm from AVX2 down and on AArch64,
+- **Prompt processing** is faster with Krafla from AVX2 down and on AArch64,
   except dotprod Q4_0, where llama.cpp leads by 1.10–1.13×. On a CPU with
-  AMX, llama.cpp's AMX kernels prefill 1.03–1.17× faster than isa-lm's AVX-512
+  AMX, llama.cpp's AMX kernels prefill 1.03–1.17× faster than Krafla's AVX-512
   VNNI build.
-- **Quality:** isa-lm's Q4_0 scores perplexity 15.09–15.14 against
+- **Quality:** Krafla's Q4_0 scores perplexity 15.09–15.14 against
   15.82–15.93 for llama.cpp's Q4_0, because each block's scale is fitted
   rather than rounded from its maximum; Q8_0 scores 13.32–13.35 against 13.34
   for llama.cpp's F16.
 
 llama.cpp does much more: GPU back ends, K-quant and i-quant formats, many
 more architectures (mixture of experts, image input) and an HTTP server.
-isa-lm covers Q8_0 and Q4_0 on the CPU, for the ISAs listed above.
+Krafla covers Q8_0 and Q4_0 on the CPU, for the ISAs listed above.
 
 ## Does it run on a Raspberry Pi?
 
@@ -121,4 +125,4 @@ binaries, MSVC through CMake). Other systems are untested.
 Other tokenizers (WordPiece, Unigram), RoPE scaling of the dynamic and
 longrope kinds, partial rotary embeddings (Phi), mixture-of-experts models,
 image input, K-quant formats, GPUs and AMX. The full list is under
-[Status](https://github.com/JonPark0/isa-lm#status) in the README.
+[Status](https://github.com/JonPark0/krafla#status) in the README.

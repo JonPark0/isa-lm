@@ -1,5 +1,5 @@
 #!/bin/sh
-# Compares isa-lm with llama.cpp on one Hugging Face model: speed per ISA
+# Compares Krafla with llama.cpp on one Hugging Face model: speed per ISA
 # level (x86-64 or AArch64) and perplexity, with the same weight formats (Q8_0,
 # and Q4_0 for every matrix). Results go to $OUT/results.md;
 # docs/benchmarks.md describes the runs.
@@ -21,7 +21,7 @@
 #
 # Environment: THREADS (default "1 4"), TOKENS (prompt and generated tokens,
 # default 128), REPS (default 3), CTX and CHUNKS for perplexity (512, 4),
-# NATIVE_ISA (isa-lm ISA matching build-native; default: the best the host runs).
+# NATIVE_ISA (Krafla ISA matching build-native; default: the best the host runs).
 set -eu
 [ $# -ge 4 ] || { sed -n '2,20p' "$0"; exit 2; }
 LCPP=$1 HF=$2 F16=$3 TEXT=$4 OUT=${5:-build/compare}
@@ -44,7 +44,7 @@ fi
 PAIRS="$NATIVE_ISA:build-native"
 for pair in $LEVELS; do [ "${pair%%:*}" = "$NATIVE_ISA" ] || PAIRS="$PAIRS $pair"; done
 
-# isa-lm builds (threaded) and models
+# Krafla builds (threaded) and models
 for pair in $PAIRS; do make -s ISA=${pair%%:*} THREADS=pthread -j4 >/dev/null; done
 make -s ISA=$NATIVE_ISA -j4 >/dev/null
 [ -f "$OUT/tok.mlt" ] || python3 tools/convert_tokenizer.py "$HF/tokenizer.json" "$OUT/tok.mlt" >/dev/null
@@ -52,7 +52,7 @@ for wt in q8 q4; do
     [ -f "$OUT/isa_$wt.mlb" ] || python3 tools/convert.py hf "$HF" "$OUT/isa_$wt.mlb" --wtype $wt --max-seq 4096 >/dev/null
 done
 # llama.cpp models: --pure keeps every tensor (embeddings and output too) in the
-# one type, like isa-lm's plain Q8 and Q4 files
+# one type, like Krafla's plain Q8 and Q4 files
 for wt in q8_0 q4_0; do
     [ -f "$OUT/lcpp_$wt.gguf" ] || "$LCPP/build-native/bin/llama-quantize" --pure "$F16" "$OUT/lcpp_$wt.gguf" \
         $(echo $wt | tr a-z A-Z) >/dev/null 2>&1
@@ -81,9 +81,9 @@ echo "|-----------|---------|---------|-----:|--------:|--------------:|--------
 for pair in $PAIRS; do
     isa=${pair%%:*} dir=${pair#*:}
     for wt in q8 q4; do for t in $THREADS; do
-        log "isa-lm $isa $wt -t $t"
+        log "Krafla $isa $wt -t $t"
         set -- $(isa_speed $isa "$OUT/isa_$wt.mlb" $t)
-        echo "| $isa | isa-lm | ${wt}_0 | $(size_mb "$OUT/isa_$wt.mlb") MB | $t | $1 | $2 |"
+        echo "| $isa | Krafla | ${wt}_0 | $(size_mb "$OUT/isa_$wt.mlb") MB | $t | $1 | $2 |"
         if [ -x "$LCPP/$dir/bin/llama-bench" ]; then
             log "llama.cpp $dir $wt -t $t"
             set -- $(lcpp_speed $dir "$OUT/lcpp_${wt}_0.gguf" $t)
@@ -105,6 +105,6 @@ for wt in q8 q4; do
     echo "| llama.cpp | ${wt}_0 | $(ppl_lcpp "$OUT/lcpp_${wt}_0.gguf") |"
     p=$(python3 tools/perplexity.py build/$NATIVE_ISA-pt/ml_run "$OUT/isa_$wt.mlb" "$OUT/tok.mlt" "$TEXT" \
         --ml-tok build/$NATIVE_ISA/ml_tok --ctx $CTX --chunks $CHUNKS -t 4 --llama-cpp | sed 's/.*perplexity \([0-9.]*\).*/\1/')
-    echo "| isa-lm | ${wt}_0 | $p |"
+    echo "| Krafla | ${wt}_0 | $p |"
 done
 } | tee "$OUT/results.md"

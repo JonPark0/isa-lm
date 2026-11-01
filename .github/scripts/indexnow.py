@@ -17,7 +17,7 @@ import sys
 import urllib.request
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
-SITE = "https://jonpark0.github.io/isa-lm/"
+SITE = "https://jonpark0.github.io/krafla/"
 ENDPOINT = "https://api.indexnow.org/indexnow"
 
 

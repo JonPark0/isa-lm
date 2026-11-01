@@ -1,9 +1,9 @@
 #!/bin/sh
 # Builds the release archives into $DIST (default dist/):
-#   isa-lm-VER-linux-x86_64.tar.gz    sse2 sse41 avx2 avxvnni avx512vnni   (static)
-#   isa-lm-VER-linux-aarch64.tar.gz   neon neon_dotprod neon_i8mm sve      (static)
-#   isa-lm-VER-linux-armv7hf.tar.gz   neon scalar                          (static)
-#   isa-lm-VER-windows-x86_64.zip     sse2 sse41 avx2 avxvnni avx512vnni   (MinGW, static)
+#   krafla-VER-linux-x86_64.tar.gz    sse2 sse41 avx2 avxvnni avx512vnni   (static)
+#   krafla-VER-linux-aarch64.tar.gz   neon neon_dotprod neon_i8mm sve      (static)
+#   krafla-VER-linux-armv7hf.tar.gz   neon scalar                          (static)
+#   krafla-VER-windows-x86_64.zip     sse2 sse41 avx2 avxvnni avx512vnni   (MinGW, static)
 # Each holds bin/<isa>/{ml_run,ml_bench,ml_tok}, wrappers that pick the best
 # build the CPU supports, the model tools, and the license files.
 # Usage: scripts/package_release.sh [TAG]   (TAG, e.g. v0.1.0, must match ML_VERSION)
@@ -28,14 +28,14 @@ unix_wrappers() {   # unix_wrappers DIR "ISAS best first"
         cat > "$1/$tool" <<EOF
 #!/bin/sh
 # Runs $tool from the best build in bin/ that this CPU supports.
-# ISA_LM_ISA=<isa> picks one instead (see bin/).
+# KRAFLA_ISA=<isa> (or the older ISA_LM_ISA) picks one instead (see bin/).
 here=\$(cd "\$(dirname "\$0")" && pwd)
-for isa in \${ISA_LM_ISA:-$2}; do
+for isa in \${KRAFLA_ISA:-\${ISA_LM_ISA:-$2}}; do
     [ -x "\$here/bin/\$isa/ml_tok" ] || continue
     "\$here/bin/\$isa/ml_tok" --help >/dev/null 2>&1
     [ \$? -ne 3 ] && exec "\$here/bin/\$isa/$tool" "\$@"   # 3: the CPU lacks this ISA
 done
-echo "isa-lm: no build in \$here/bin runs on this CPU" >&2
+echo "krafla: no build in \$here/bin runs on this CPU" >&2
 exit 3
 EOF
         chmod +x "$1/$tool"
@@ -43,7 +43,7 @@ EOF
 }
 
 linux() {   # linux NAME CROSS-PREFIX "ISAS best first"
-    d="$STAGE/isa-lm-$VER-$1"
+    d="$STAGE/krafla-$VER-$1"
     common "$d"
     for isa in $3; do
         if [ -n "$2" ]; then set -- "$1" "$2" "$3" "CROSS=$2"; else set -- "$1" "$2" "$3" "EXTRA_LDFLAGS=-static"; fi
@@ -54,11 +54,11 @@ linux() {   # linux NAME CROSS-PREFIX "ISAS best first"
         "${2}strip" "$d/bin/$isa/"*
     done
     unix_wrappers "$d" "$3"
-    tar -C "$STAGE" -czf "$DIST/isa-lm-$VER-$1.tar.gz" "isa-lm-$VER-$1"
+    tar -C "$STAGE" -czf "$DIST/krafla-$VER-$1.tar.gz" "krafla-$VER-$1"
 }
 
 windows() {   # windows "ISAS best first"
-    d="$STAGE/isa-lm-$VER-windows-x86_64"
+    d="$STAGE/krafla-$VER-windows-x86_64"
     common "$d"
     printf 'set(CMAKE_SYSTEM_NAME Windows)\nset(CMAKE_C_COMPILER x86_64-w64-mingw32-gcc)\n' > "$STAGE/mingw.cmake"
     for isa in $1; do
@@ -77,26 +77,27 @@ windows() {   # windows "ISAS best first"
         {
             printf '@echo off\r\n'
             printf 'rem Runs %s from the best build in bin\\ that this CPU supports.\r\n' "$tool"
-            printf 'rem set ISA_LM_ISA=avx2 (for example) picks one instead.\r\n'
+            printf 'rem set KRAFLA_ISA=avx2 (for example) picks one instead.\r\n'
             printf 'setlocal\r\n'
             printf 'set "ISAS=%s"\r\n' "$1"
             printf 'if defined ISA_LM_ISA set "ISAS=%%ISA_LM_ISA%%"\r\n'
+            printf 'if defined KRAFLA_ISA set "ISAS=%%KRAFLA_ISA%%"\r\n'
             printf 'for %%%%I in (%%ISAS%%) do (\r\n'
             printf '  if exist "%%~dp0bin\\%%%%I\\ml_tok.exe" (\r\n'
             printf '    "%%~dp0bin\\%%%%I\\ml_tok.exe" --help >nul 2>&1\r\n'
             printf '    if not errorlevel 3 ( "%%~dp0bin\\%%%%I\\%s.exe" %%* & exit /b )\r\n' "$tool"
             printf '  )\r\n'
             printf ')\r\n'
-            printf 'echo isa-lm: no build in %%~dp0bin runs on this CPU 1>&2\r\n'
+            printf 'echo krafla: no build in %%~dp0bin runs on this CPU 1>&2\r\n'
             printf 'exit /b 3\r\n'
         } > "$d/$tool.cmd"
     done
-    (cd "$STAGE" && zip -qr "../../$DIST/isa-lm-$VER-windows-x86_64.zip" "isa-lm-$VER-windows-x86_64")
+    (cd "$STAGE" && zip -qr "../../$DIST/krafla-$VER-windows-x86_64.zip" "krafla-$VER-windows-x86_64")
 }
 
 linux linux-x86_64 "" "avx512vnni avxvnni avx2 sse41 sse2"
 linux linux-aarch64 aarch64-linux-gnu- "neon_i8mm sve neon_dotprod neon"
 linux linux-armv7hf arm-linux-gnueabihf- "neon scalar"
 windows "avx512vnni avxvnni avx2 sse41 sse2"
-(cd "$DIST" && sha256sum isa-lm-$VER-* > SHA256SUMS)
+(cd "$DIST" && sha256sum krafla-$VER-* > SHA256SUMS)
 ls -l "$DIST"

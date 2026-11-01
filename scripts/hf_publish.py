@@ -1,6 +1,6 @@
-"""Converts a model of scripts/hf_models.json to isa-lm files, measures them,
+"""Converts a model of scripts/hf_models.json to Krafla files, measures them,
 writes a model card and, with --upload, publishes them on the Hugging Face Hub
-as <account>/<source name>-isa-lm. Run by .github/workflows/hf-models.yml.
+as <account>/<source name>-krafla. Run by .github/workflows/hf-models.yml.
 
     python3 scripts/hf_publish.py --list default          # ids of a selection, as JSON
     python3 scripts/hf_publish.py smollm2-135m-instruct --build build/avx2 \\
@@ -23,7 +23,7 @@ import sys
 
 ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 CATALOG = os.path.join(ROOT, "scripts", "hf_models.json")
-REPO_URL = "https://github.com/JonPark0/isa-lm"
+REPO_URL = "https://github.com/JonPark0/krafla"
 CHAT_PROMPT = "What is the capital of France? Answer in one sentence."
 APACHE_URL = "https://www.apache.org/licenses/LICENSE-2.0.txt"
 
@@ -135,18 +135,18 @@ def model_card(model, repo_id, base, files, info):
         "base_model_relation: quantized",
         "pipeline_tag: text-generation",
         "tags:",
-        *[f"- {t}" for t in ["isa-lm", "int4", "int8", "q4_0", "q8_0", "cpu", "sse2", "avx2", "avx512",
+        *[f"- {t}" for t in ["krafla", "int4", "int8", "q4_0", "q8_0", "cpu", "sse2", "avx2", "avx512",
                               "arm-neon", "sve"]],
         "---",
         "",
-        f"# {base} for isa-lm",
+        f"# {base} for Krafla",
         "",
     ]
     if notice == "llama":
         lines += ["**Built with Llama.**", ""]
     lines += [
         f"INT4 and INT8 conversions of [{model['source']}](https://huggingface.co/{model['source']}) for "
-        f"[isa-lm]({REPO_URL}), a dependency-free C11 runtime that runs language models on CPUs "
+        f"[Krafla]({REPO_URL}), a dependency-free C11 runtime that runs language models on CPUs "
         "without a GPU: x86-64 from SSE2 up to AVX-512 VNNI and ARM from ARMv7 NEON up to i8mm and SVE.",
         "",
         "## Files",
@@ -161,7 +161,7 @@ def model_card(model, repo_id, base, files, info):
     lines += [
         f"| `tokenizer.mlt` | tokenizer | {info['tok_size'] / 2**10:.0f} KiB | | | | `{info['tok_sha256'][:16]}…` |",
         "",
-        f"Measured on {info['machine']} ({info['cpu']}, {info['threads']} threads) with isa-lm's "
+        f"Measured on {info['machine']} ({info['cpu']}, {info['threads']} threads) with Krafla's "
         f"`{info['isa']}` build. Perplexity: wikitext-2 test set, 4 chunks of 512 tokens (`tools/perplexity.py --ctx 512 "
         "--chunks 4`); lower is better, and only files of the same model compare. Speed: `ml_bench -n 128`, "
         "128 prompt tokens and 128 decoded tokens. Context: "
@@ -169,7 +169,7 @@ def model_card(model, repo_id, base, files, info):
         "",
         "## Run",
         "",
-        f"Download a [release]({REPO_URL}/releases) of isa-lm (version {info['version']} or later; Linux "
+        f"Download a [release]({REPO_URL}/releases) of Krafla (version {info['version']} or later; Linux "
         "x86-64, AArch64 and ARMv7, Windows x86-64) and two files from here:",
         "",
         "```sh",
@@ -187,7 +187,7 @@ def model_card(model, repo_id, base, files, info):
         "",
         "## How these files were made",
         "",
-        f"With isa-lm {info['version']} (commit [`{info['commit'][:7]}`]({REPO_URL}/commit/{info['commit']})) "
+        f"With Krafla {info['version']} (commit [`{info['commit'][:7]}`]({REPO_URL}/commit/{info['commit']})) "
         f"on {info['date']}, from the safetensors of [{model['source']}](https://huggingface.co/{model['source']}):",
         "",
         "```sh",
@@ -273,7 +273,7 @@ def publish(model, a):
     shutil.rmtree(src, ignore_errors=True)   # disk space on the runner
     api = HfApi(token=token)
     owner = a.owner or (api.whoami()["name"] if token else "OWNER")
-    repo_id = f"{owner}/{base}-isa-lm"
+    repo_id = f"{owner}/{base}-krafla"
     card = model_card(model, repo_id, base, files, info)
     with open(os.path.join(out, "README.md"), "w", encoding="utf-8") as fh:
         fh.write(card)
@@ -288,7 +288,7 @@ def publish(model, a):
             sys.exit("--upload needs HF_TOKEN")
         api.create_repo(repo_id, repo_type="model", exist_ok=True)
         api.upload_folder(repo_id=repo_id, folder_path=out, delete_patterns=["*.mlb"],
-                          commit_message=f"isa-lm {info['version']} ({info['commit'][:7]})")
+                          commit_message=f"Krafla {info['version']} ({info['commit'][:7]})")
         print(f"uploaded https://huggingface.co/{repo_id}", flush=True)
     else:
         print(f"not uploaded; files in {out}", flush=True)

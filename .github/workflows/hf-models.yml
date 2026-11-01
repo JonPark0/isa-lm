@@ -3,7 +3,7 @@ name: Hugging Face models
 # Converts the models of scripts/hf_models.json with this commit's tools,
 # measures each file on the runner (wikitext-2 perplexity, ml_bench speed, a
 # chat reply) and writes a model card (scripts/hf_publish.py). With upload on,
-# publishes each model as <account>/<source name>-isa-lm on the Hugging Face
+# publishes each model as <account>/<source name>-krafla on the Hugging Face
 # Hub: the repository secret HF_TOKEN needs write access, and for Llama and
 # Gemma its account must have accepted their licenses on Hugging Face.
 on:

@@ -1,24 +1,25 @@
 ---
-title: isa-lm — portable INT8/INT4 LLM inference for legacy x86-64 and ARM CPUs
+title: Krafla — portable INT8/INT4 LLM inference for legacy x86-64 and ARM CPUs
 description: Dependency-free C11 runtime that runs quantized Llama-style language models on CPUs from SSE2 and ARMv7 NEON up to AVX-512 VNNI and SVE, with each operator bound at compile time to the best kernel for the instruction set.
 nav_order: 1
 nav_title: "Home"
 ---
 
-# isa-lm
+# Krafla
 {: .fs-9 }
 
 Portable INT8/INT4 LLM inference in C11 for CPUs without a GPU, from SSE2 and
 ARMv7 NEON up to AVX-512 VNNI and SVE.
 {: .fs-6 .fw-300 }
 
-[Download a release](https://github.com/JonPark0/isa-lm/releases){: .btn .btn-primary .fs-5 .mb-4 .mb-md-0 .mr-2 }
+[Download a release](https://github.com/JonPark0/krafla/releases){: .btn .btn-primary .fs-5 .mb-4 .mb-md-0 .mr-2 }
 [Get a converted model](user-guide.md#converted-models-on-hugging-face){: .btn .fs-5 .mb-4 .mb-md-0 .mr-2 }
 [Quick start](#quick-start){: .btn .fs-5 .mb-4 .mb-md-0 }
 
 ---
 
-**isa-lm** is a dependency-free **C11 inference runtime** for Llama-style **large language models** with
+**Krafla** (**K**ernels **R**etargeted **A**cross **F**amilies of **L**egacy **A**rchitectures, formerly
+isa-lm) is a dependency-free **C11 inference runtime** for Llama-style **large language models** with
 **INT8 and INT4 weights**. It runs on **x86-64 CPUs from SSE2 up to AVX-512 VNNI** and on **ARM CPUs from ARMv7
 NEON up to i8mm and SVE**, including the legacy and low-power processors that GPU-first runtimes leave out.
 The code is written against a portable baseline; you choose the instruction set when you compile, and every
@@ -37,7 +38,7 @@ operator is bound to the best kernel for it, with no runtime dispatch.
 
 ## Decode speed against llama.cpp
 
-![isa-lm decode speed relative to llama.cpp at each ISA level, one thread: 1.2 to 7.3 times on x86-64, 1.04 to 1.7 times on AArch64](assets/decode-ratio.svg)
+![Krafla decode speed relative to llama.cpp at each ISA level, one thread: 1.2 to 7.3 times on x86-64, 1.04 to 1.7 times on AArch64](assets/decode-ratio.svg)
 
 Same model (Qwen2.5 0.5B Instruct), same Q4_0 and Q8_0 formats, same machine
 for both runtimes. Prefill, four threads and perplexity are in the
@@ -68,14 +69,14 @@ measured yet.
 
 ## Quick start
 
-With a [release](https://github.com/JonPark0/isa-lm/releases) and a
+With a [release](https://github.com/JonPark0/krafla/releases) and a
 [converted model](user-guide.md#converted-models-on-hugging-face), no Python
 is needed:
 
 ```sh
 # in the unpacked release
-curl -LO https://huggingface.co/jonpark0/Qwen2.5-0.5B-Instruct-isa-lm/resolve/main/Qwen2.5-0.5B-Instruct-Q4_0.mlb
-curl -LO https://huggingface.co/jonpark0/Qwen2.5-0.5B-Instruct-isa-lm/resolve/main/tokenizer.mlt
+curl -LO https://huggingface.co/jonpark0/Qwen2.5-0.5B-Instruct-krafla/resolve/main/Qwen2.5-0.5B-Instruct-Q4_0.mlb
+curl -LO https://huggingface.co/jonpark0/Qwen2.5-0.5B-Instruct-krafla/resolve/main/tokenizer.mlt
 ./ml_run Qwen2.5-0.5B-Instruct-Q4_0.mlb -z tokenizer.mlt --chat qwen -t 4
 ```
 
@@ -113,13 +114,13 @@ every option; the [FAQ](faq.md) answers the common questions.
 ## Citing
 
 ```bibtex
-@software{isalm2026,
+@software{krafla2026,
   author  = {Park, Yeochoon},
-  title   = {isa-lm: a portable C11 runtime for INT8/INT4 Llama-style language model inference on legacy x86-64 and ARM instruction sets},
+  title   = {Krafla: a portable C11 runtime for INT8/INT4 Llama-style language model inference on legacy x86-64 and ARM instruction sets},
   year    = {2026},
   version = {0.5.0},
-  url     = {https://github.com/JonPark0/isa-lm}
+  url     = {https://github.com/JonPark0/krafla}
 }
 ```
 
-Source code: <https://github.com/JonPark0/isa-lm> · License: MIT
+Source code: <https://github.com/JonPark0/krafla> · License: MIT

@@ -1,6 +1,6 @@
 ---
 title: "File formats: .mlb models and .mlt tokenizers"
-description: "Specification of the .mlb model format (header, tensors, Q8_0/Q4_0 quantization, RoPE scaling, sliding windows) and the .mlt tokenizer format used by isa-lm."
+description: "Specification of the .mlb model format (header, tensors, Q8_0/Q4_0 quantization, RoPE scaling, sliding windows) and the .mlt tokenizer format used by Krafla."
 nav_order: 6
 nav_title: "File formats"
 ---

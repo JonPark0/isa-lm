@@ -89,7 +89,7 @@ int ml_main(int argc, char **argv) {
         else if (argv[i][0] != '-') model = argv[i];
         else { fprintf(stderr, "usage: ml_bench [MODEL.mlb] [-t threads] [-n tokens] [--no-pack] [--kv f32|f16|q8]\n"); return 2; }
     }
-    printf("isa-lm %s, ISA: %s  (matvec_q8 -> %s, matvec_q4 -> %s, quantize_q8 -> %s)\n", ML_VERSION, ML_ISA_NAME,
+    printf("krafla %s, ISA: %s  (matvec_q8 -> %s, matvec_q4 -> %s, quantize_q8 -> %s)\n", ML_VERSION, ML_ISA_NAME,
            ML_STR(ml_k_matvec_q8), ML_STR(ml_k_matvec_q4), ML_STR(ml_k_quantize_q8));
     printf("%-12s %11s %12s %8s %8s\n", "op", "shape", "ns/iter", "GB/s", "GOPS");
     bench_matvec(ML_Q8_0, 768, 768, 20);

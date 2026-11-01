@@ -1,6 +1,6 @@
 # Third-party notices
 
-isa-lm is licensed under the [MIT License](LICENSE). It builds on the
+Krafla is licensed under the [MIT License](LICENSE). It builds on the
 following work.
 
 ## llama2.c
@@ -56,6 +56,6 @@ Llama 3 `tokenizer.json`.
 
 ## Models
 
-No model weights are distributed with isa-lm. Models converted with
+No model weights are distributed with Krafla. Models converted with
 `tools/convert.py` keep their own licenses (for example the Llama Community
 License for Llama 2 and 3, or Apache 2.0 for TinyLlama).

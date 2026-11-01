@@ -1,19 +1,19 @@
 ---
-title: "isa-lm vs llama.cpp: CPU speed and perplexity benchmarks"
-description: "isa-lm and llama.cpp on the same model and Q8_0/Q4_0 formats at each ISA level, from SSE2 to AVX-512 VNNI and ARM NEON to i8mm: prefill, decode and perplexity."
+title: "Krafla vs llama.cpp: CPU speed and perplexity benchmarks"
+description: "Krafla and llama.cpp on the same model and Q8_0/Q4_0 formats at each ISA level, from SSE2 to AVX-512 VNNI and ARM NEON to i8mm: prefill, decode and perplexity."
 nav_order: 4
 nav_title: "Comparison with llama.cpp"
 ---
 
 # Comparison with llama.cpp
 
-isa-lm and [llama.cpp](https://github.com/ggml-org/llama.cpp) run the same
+Krafla and [llama.cpp](https://github.com/ggml-org/llama.cpp) run the same
 model with the same weight formats on one machine, at four x86 instruction-set
 levels; the [GitHub runners](#github-runners) section repeats the comparison
 on an x86-64 machine without AVX-512 and on AArch64 at three levels.
 `scripts/compare_llamacpp.sh` reproduces each run.
 
-![isa-lm decode speed relative to llama.cpp at each ISA level, one thread](assets/decode-ratio.svg)
+![Krafla decode speed relative to llama.cpp at each ISA level, one thread](assets/decode-ratio.svg)
 
 The chart shows the one-thread decode ratios of the tables below
 (`scripts/sync_docs.py` draws it from them).
@@ -23,7 +23,7 @@ The chart shows the one-thread decode ratios of the tables below
 - **Machine:** 4 vCPUs of an Intel Xeon at 2.10 GHz (Emerald Rapids) with
   AVX-512 VNNI and AMX, 15 GB of RAM; GCC 13.3 for both runtimes. llama.cpp's
   native build uses AMX tiles for prompt processing on this CPU (see below);
-  isa-lm has no AMX kernels.
+  Krafla has no AMX kernels.
 - **llama.cpp:** release b11835 (commit `f64a498`), CPU backend, built four
   times:
 
@@ -34,13 +34,13 @@ The chart shows the one-thread decode ratios of the tables below
   | SSE4.2 | `GGML_NATIVE=OFF`, SSE4.2 only |
   | SSE2 | `GGML_NATIVE=OFF`, every x86 extension off |
 
-  isa-lm builds for `avx512vnni`, `avx2`, `sse41` and `sse2`, with
-  `THREADS=pthread`. The SSE4.2 llama.cpp build sits against isa-lm's SSE4.1
+  Krafla builds for `avx512vnni`, `avx2`, `sse41` and `sse2`, with
+  `THREADS=pthread`. The SSE4.2 llama.cpp build sits against Krafla's SSE4.1
   build: SSE4.2 adds only string and CRC instructions.
 - **Model:** Qwen2.5 0.5B Instruct. llama.cpp quantizes the official
   `qwen2.5-0.5b-instruct-fp16.gguf` with `llama-quantize --pure`, so that
   every matrix, embeddings and classifier included, is Q8_0 or Q4_0, as in
-  isa-lm's `--wtype q8` and `--wtype q4` files. The GGUF files are larger
+  Krafla's `--wtype q8` and `--wtype q4` files. The GGUF files are larger
   because they store the tied classifier a second time; each runtime reads one
   copy per token.
 - **Speed:** prefill of 128 tokens, then 128 tokens decoded after them
@@ -52,9 +52,9 @@ The chart shows the one-thread decode ratios of the tables below
 
 ## Speed
 
-Tokens per second; the ratio is isa-lm's decode speed over llama.cpp's.
+Tokens per second; the ratio is Krafla's decode speed over llama.cpp's.
 
-| ISA level | Weights | Threads | isa-lm prefill | llama.cpp prefill | isa-lm decode | llama.cpp decode | Decode ratio |
+| ISA level | Weights | Threads | Krafla prefill | llama.cpp prefill | Krafla decode | llama.cpp decode | Decode ratio |
 |-----------|---------|--------:|---------------:|------------------:|--------------:|-----------------:|-------------:|
 | AVX-512 VNNI | Q8_0 | 1 | 318.5 | 368.5 | 24.0 | 20.5 | 1.17× |
 | AVX-512 VNNI | Q8_0 | 4 | 870.8 | 935.1 | 72.8 | 60.7 | 1.20× |
@@ -73,20 +73,20 @@ Tokens per second; the ratio is isa-lm's decode speed over llama.cpp's.
 | SSE2 | Q4_0 | 1 | 36.7 | 5.7 | 25.7 | 3.5 | 7.34× |
 | SSE2 | Q4_0 | 4 | 124.4 | 21.8 | 77.3 | 12.7 | 6.09× |
 
-- **Decode** is faster with isa-lm at every level: 1.2–1.5× with AVX-512
+- **Decode** is faster with Krafla at every level: 1.2–1.5× with AVX-512
   VNNI, 1.9–2.3× with AVX2, and 2.1–7.3× on the SSE builds.
 - **Prefill** with AVX-512 VNNI is within 1.07–1.16× of the native llama.cpp
   build for Q8_0 and level to 1.17× for Q4_0, where llama.cpp led by 1.6–1.8×
-  for Q8_0 before 0.4.0 (prefill steps of 128 tokens). From AVX2 down, isa-lm
+  for Q8_0 before 0.4.0 (prefill steps of 128 tokens). From AVX2 down, Krafla
   prefills faster (1.4–6.4×).
 
 The native llama.cpp build owes its prefill to AMX, not to AVX-512 VNNI: its
 weights are repacked for AMX tiles by default. With that off
 (`llama-bench --repack 0`, same machine, later run) it prefills Q8_0 at 93
 tok/s on one thread and 318 on four, and Q4_0 at 83 and 320, about a third of
-isa-lm's AVX-512 VNNI rows.
+Krafla's AVX-512 VNNI rows.
 
-An AMX kernel for isa-lm's packed layout is kept on the `exp/amx` branch and
+An AMX kernel for Krafla's packed layout is kept on the `exp/amx` branch and
 is not part of the build. Every 32-weight block has its own scale, so each
 16×16 tile product has to be stored and rescaled with AVX-512 in the matvec's
 order, which keeps prefill bit-identical to decoding. Microbenchmarks on this
@@ -115,7 +115,7 @@ Against the first version, the kernels alone got faster:
 On Qwen2.5 0.5B the prefill speed is level with the AVX-512 VNNI build on one
 thread and 15–20% slower on four, so AMX stays out of the build.
 
-Measured with isa-lm at commit `1c6db5a` (the 0.4.0 code; f16 scales, files
+Measured with Krafla at commit `1c6db5a` (the 0.4.0 code; f16 scales, files
 of 500 and 265 MB against llama.cpp's 644 and 343 MB). Against the previous
 run (`0cb4d16`), AVX-512 VNNI prefill went from 221 to 319 tok/s (Q8_0, 1
 thread) and from 890 to 1119 (Q4_0, 4 threads), and decode from 41.6 to 44.0
@@ -129,15 +129,15 @@ hand) builds both runtimes on GitHub's `ubuntu-24.04` (x86-64, 4 vCPUs with
 AVX2 but no AVX-512, so its native level is AVX2) and `ubuntu-24.04-arm`
 (AArch64, 4 vCPUs with dotprod and i8mm) runners and runs
 `scripts/compare_llamacpp.sh`. On AArch64 the llama.cpp builds are the native
-one (against isa-lm's best build, `neon_i8mm`), `armv8.2-a+dotprod` and
-`armv8-a`. Results of one run (isa-lm `1c6db5a`, the 0.4.0 code, and
-llama.cpp b11835). isa-lm's files have f16 scales and are 22–23% smaller
+one (against Krafla's best build, `neon_i8mm`), `armv8.2-a+dotprod` and
+`armv8-a`. Results of one run (Krafla `1c6db5a`, the 0.4.0 code, and
+llama.cpp b11835). Krafla's files have f16 scales and are 22–23% smaller
 (Q8_0 500 MB, Q4_0 265 MB against 644 and 343 MB): Qwen2.5 0.5B ties its
 classifier to the embedding, and llama.cpp's file stores it twice.
 
 ### x86-64 (AVX2)
 
-| ISA level | Weights | Threads | isa-lm prefill | llama.cpp prefill | isa-lm decode | llama.cpp decode | Decode ratio |
+| ISA level | Weights | Threads | Krafla prefill | llama.cpp prefill | Krafla decode | llama.cpp decode | Decode ratio |
 |-----------|---------|--------:|---------------:|------------------:|--------------:|-----------------:|-------------:|
 | AVX2 | Q8_0 | 1 | 133.4 | 94.4 | 38.8 | 29.7 | 1.31× |
 | AVX2 | Q8_0 | 4 | 261.3 | 180.1 | 62.5 | 61.0 | 1.02× |
@@ -154,7 +154,7 @@ classifier to the embedding, and llama.cpp's file stores it twice.
 
 ### AArch64
 
-| ISA level | Weights | Threads | isa-lm prefill | llama.cpp prefill | isa-lm decode | llama.cpp decode | Decode ratio |
+| ISA level | Weights | Threads | Krafla prefill | llama.cpp prefill | Krafla decode | llama.cpp decode | Decode ratio |
 |-----------|---------|--------:|---------------:|------------------:|--------------:|-----------------:|-------------:|
 | i8mm (native) | Q8_0 | 1 | 183.0 | 127.4 | 35.6 | 34.2 | 1.04× |
 | i8mm (native) | Q8_0 | 4 | 714.6 | 430.8 | 110.1 | 104.0 | 1.06× |
@@ -169,16 +169,16 @@ classifier to the embedding, and llama.cpp's file stores it twice.
 | NEON (Armv8.0) | Q4_0 | 1 | 41.1 | 24.3 | 26.5 | 15.8 | 1.68× |
 | NEON (Armv8.0) | Q4_0 | 4 | 160.8 | 96.1 | 81.2 | 53.3 | 1.52× |
 
-- **x86-64 without AVX-512:** isa-lm is ahead or level everywhere: decode 1.0–1.8×
+- **x86-64 without AVX-512:** Krafla is ahead or level everywhere: decode 1.0–1.8×
   with AVX2 and 2.5–10× on SSE builds, prefill 1.4–1.9× with AVX2 and 2.6–10×
   on SSE builds.
-- **AArch64:** isa-lm decodes 1.04–1.11× faster for Q8_0 and 1.20–1.31× for
+- **AArch64:** Krafla decodes 1.04–1.11× faster for Q8_0 and 1.20–1.31× for
   Q4_0 at dotprod and i8mm, and 1.3–1.7× faster in both prefill and decode on
   plain Armv8.0 NEON. With i8mm it prefills 1.4–1.7× faster for Q8_0 and
   1.2–1.4× for Q4_0, and with dotprod 1.14× for Q8_0. Only dotprod Q4_0
   prefill is still faster with llama.cpp (its repacked Q4_0 kernels), by
   1.10–1.13× where it was 1.34–1.37× before 0.4.0's signed-nibble kernels.
-- **Quality** is the same on all three machines: isa-lm's Q8_0 scores 13.32–13.35
+- **Quality** is the same on all three machines: Krafla's Q8_0 scores 13.32–13.35
   against 13.34 for llama.cpp's F16, and its Q4_0 15.09–15.14 against
   15.82–15.93 for llama.cpp's.
 
@@ -188,17 +188,17 @@ classifier to the embedding, and llama.cpp's file stores it twice.
 |---------|---------|-----------:|
 | llama.cpp | F16 | 13.34 |
 | llama.cpp | Q8_0 | 13.44 |
-| isa-lm | Q8_0 | 13.32 |
+| Krafla | Q8_0 | 13.32 |
 | llama.cpp | Q4_0 | 15.86 |
-| isa-lm | Q4_0 | 15.14 |
+| Krafla | Q4_0 | 15.14 |
 
-The two runtimes tokenize this text identically (no BOS for Qwen2.5). isa-lm's
+The two runtimes tokenize this text identically (no BOS for Qwen2.5). Krafla's
 Q8_0 matches F16. Its Q4_0 is closer to F16 because `tools/convert.py` fits
 each block's scale (see [Q8, Q4, or mixed?](user-guide.md#q8-q4-or-mixed)), while
 `llama-quantize` without an importance matrix maps the largest weight to -8.
 llama.cpp's default Q4_0 (without `--pure`) keeps the classifier in a higher
-precision type, which isa-lm can do with `--q8 cls`. Neither row uses an
-importance matrix; with one from wikitext-2 train, isa-lm's Q4_0 scores 14.52
+precision type, which Krafla can do with `--q8 cls`. Neither row uses an
+importance matrix; with one from wikitext-2 train, Krafla's Q4_0 scores 14.52
 ([importance matrix](user-guide.md#q8-q4-or-mixed)).
 
 ## Reproducing
@@ -214,7 +214,7 @@ scripts/compare_llamacpp.sh ../llama.cpp ./Qwen2.5-0.5B-Instruct \
     qwen2.5-0.5b-instruct-fp16.gguf wikitext-2-test.txt build/compare
 ```
 
-The script converts the model for isa-lm, quantizes the GGUF, runs both
+The script converts the model for Krafla, quantizes the GGUF, runs both
 benchmarks and writes `build/compare/results.md`. It picks the ISA levels
 from the host: on AArch64 the llama.cpp build directories are `build-native`,
 `build-dotprod` (`-DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH=armv8.2-a+dotprod`) and
