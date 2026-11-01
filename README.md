@@ -9,6 +9,17 @@ A dependency-free C11 inference runtime for Llama-style decoder Transformers wit
 INT8 and INT4 weights. It runs on x86-64 CPUs from SSE2 up to AVX-512 VNNI, and
 on ARM CPUs from ARMv7 NEON up to i8mm and SVE.
 
+- **Faster decoding than llama.cpp** at every ISA level measured, on the same
+  model and formats: 1.2–1.5× with AVX-512 VNNI, 1.0–2.3× with AVX2, 2.1–10×
+  with SSE2 and SSE4.1, 1.04–1.7× on AArch64 ([comparison](docs/benchmarks.md)).
+- **No AVX, GPU or libraries needed:** any x86-64 CPU (SSE2) and 32-bit ARMv7
+  NEON boards, up to AVX-512 VNNI, i8mm and SVE; static binaries for each ISA.
+- **Accurate Q4:** fitted block scales give Qwen2.5 0.5B Q4_0 perplexity 15.1
+  against 15.8–15.9 for llama.cpp's Q4_0; Q8 matches an F32 reference, and the
+  output is bit-identical for any thread count.
+- **Models:** Llama 2/3, Mistral, Qwen2.5, Qwen3, SmolLM2, Gemma 2 and Gemma 3
+  from Hugging Face safetensors, with their tokenizers and chat templates.
+
 The code is written against a portable baseline. You pick the acceleration when
 you compile, and each op is bound to the best kernel for that ISA, with no
 runtime dispatch:
@@ -22,13 +33,13 @@ make ISA=avx512vnni THREADS=pthread             # with the worker pool
 | `ISA` | Minimum CPU | Accelerated |
 |-------|-------------|-------------|
 | `scalar` | any | reference implementation of all ops |
-| `sse2` | any x86-64 | all ops, packed int8 matvec (`pmaddwd`) |
+| `sse2` | any x86-64 (Athlon 64, Core 2) | all ops, packed int8 matvec (`pmaddwd`) |
 | `sse41` | Penryn / Nehalem | int8 matvec (`pmaddubsw`) |
 | `avx2` | Haswell / Zen | all ops, FMA; f16 packed scales (F16C) |
 | `avxvnni` | Alder Lake / Zen 5 | int8 matvec (`vpdpbusd` ymm) |
 | `avx512vnni` | Cascade Lake / Ice Lake / Zen 4 | matvec, quantize, norms, dot, axpy |
-| `neon` | ARMv7 + NEON, any AArch64 | all ops |
-| `neon_dotprod` | Cortex-A55/A76, Apple M1 | int8 matvec (`sdot`) |
+| `neon` | ARMv7 + NEON, any AArch64 (Raspberry Pi 2–4) | all ops |
+| `neon_dotprod` | Cortex-A55/A76 (Raspberry Pi 5), Apple M1 | int8 matvec (`sdot`) |
 | `neon_i8mm` | Cortex-A710, Neoverse N2/V1, Apple M2 | prompt prefill (`smmla`) |
 | `sve` | Neoverse V1/N2, Graviton 3 | matvec, quantize, norms, dot, axpy (any vector length) |
 
@@ -56,12 +67,39 @@ build/avx2/ml_run llama.mlb -z llama.mlt --chat llama3 -t 4     # one message pe
 build/avx2/ml_run qwen.mlb -z qwen.mlt --chat qwen -t 4         # Qwen2.5 Instruct
 ```
 
+## FAQ
+
+### Can I run an LLM on a CPU without AVX?
+
+Yes. The `sse2` build runs on any x86-64 CPU and the `sse41` build on Penryn,
+Nehalem and later, both with hand-written int8 SIMD kernels.
+
+### Is it faster than llama.cpp?
+
+For decoding, yes, at every ISA level measured (above). llama.cpp does much
+more: GPU back ends, K-quants, more architectures and an HTTP server. See the
+[comparison](docs/benchmarks.md).
+
+### Does it run on a Raspberry Pi?
+
+The `neon` builds match the Raspberry Pi 2 to 4 and `neon_dotprod` the
+Raspberry Pi 5. They are tested under qemu and on GitHub's Arm runners, not yet
+on a Raspberry Pi.
+
+### How much memory does a model need?
+
+Its `.mlb` file plus the KV cache: Qwen2.5 0.5B takes 265 MB in Q4, Llama 3.2
+1B 663 MB.
+
+More answers in the [FAQ](docs/faq.md).
+
 ## Documentation
 
 Site: <https://jonpark0.github.io/isa-lm/> · Wiki: <https://github.com/JonPark0/isa-lm/wiki> (both generated from [`docs/`](docs))
 
 | Document | Contents |
 |----------|----------|
+| [FAQ](docs/faq.md) | CPUs without AVX, Raspberry Pi, speed against llama.cpp, models, memory, limits |
 | [User guide](docs/user-guide.md) | building, cross builds, converting models, CLI options, threads, limits |
 | [Architecture](docs/architecture.md) | layers, compile-time kernel binding, ISA guard, data flow, memory, threading, numerics |
 | [File format](docs/file-format.md) | the `.mlb` model format (header, tensor layout, quantization rule, RoPE scaling) and the `.mlt` tokenizer format |
@@ -112,7 +150,10 @@ Please also cite the models you run; their licenses are separate from this one.
   묶입니다. 지원하지 않는 CPU에서 실행하면 비정상 종료 대신 오류 코드 3과 누락된 기능을 알려 줍니다.
 - **양자화:** Q8_0, Q4_0, 그리고 일부 행렬만 Q8로 두는 혼합 정밀도를 지원합니다. KV 캐시도 F16이나 Q8로 줄일 수 있습니다.
 - **속도:** 명령어 집합별 정수 내적에 맞춘 가중치 재배치, 프롬프트 일괄 처리, 소프트웨어 프리페치, GQA 블록
-  어텐션을 씁니다. 스레드 수를 바꿔도 결과는 비트 단위로 같습니다.
+  어텐션을 씁니다. 같은 모델·형식에서 llama.cpp보다 디코딩이 측정한 모든 명령어 집합에서 빠릅니다(AVX-512 VNNI
+  1.2–1.5배, AVX2 1.0–2.3배, SSE2·SSE4.1 2.1–10배, AArch64 1.04–1.7배). 스레드 수를 바꿔도 결과는 비트 단위로 같습니다.
+- **구형·저전력 기기:** AVX가 없는 x86-64 CPU(Core 2, Athlon 64)와 32비트 ARMv7 보드, 라즈베리 파이 2–5에 맞는
+  빌드가 있습니다(라즈베리 파이 실기에서는 아직 측정하지 않았습니다). GPU나 외부 라이브러리가 필요 없습니다.
 - **모델과 토크나이저:** llama2.c 체크포인트와 Hugging Face safetensors(Llama 2, Llama 3/3.1/3.2, TinyLlama,
   SmolLM2, Mistral, Qwen2/Qwen2.5, Qwen3, Gemma 2, Gemma 3)를 변환합니다. Hugging Face `tokenizer.json`은 `tokenizers` 라이브러리와 같은 결과로 인코딩합니다.
 - **사용:** 텍스트 생성, 대화 모드(`--chat`), top-k·top-p·반복 패널티, 퍼플렉서티 측정을 제공합니다.

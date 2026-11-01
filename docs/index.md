@@ -11,6 +11,17 @@ NEON up to i8mm and SVE** — including the legacy and low-power processors that
 The code is written against a portable baseline; you choose the instruction set when you compile, and every
 operator is bound to the best kernel for it, with no runtime dispatch.
 
+- **Faster decoding than llama.cpp** at every ISA level measured, on the same
+  model and formats: 1.2–1.5× with AVX-512 VNNI, 1.0–2.3× with AVX2, 2.1–10×
+  with SSE2 and SSE4.1, 1.04–1.7× on AArch64 ([comparison](benchmarks.md)).
+- **No AVX, GPU or libraries needed:** any x86-64 CPU (SSE2) and 32-bit ARMv7
+  NEON boards, up to AVX-512 VNNI, i8mm and SVE; static binaries for each ISA.
+- **Accurate Q4:** fitted block scales give Qwen2.5 0.5B Q4_0 perplexity 15.1
+  against 15.8–15.9 for llama.cpp's Q4_0; Q8 matches an F32 reference, and the
+  output is bit-identical for any thread count.
+- **Models:** Llama 2/3, Mistral, Qwen2.5, Qwen3, SmolLM2, Gemma 2 and Gemma 3
+  from Hugging Face safetensors, with their tokenizers and chat templates.
+
 - **Instruction sets:** scalar, SSE2, SSE4.1, AVX2, AVX-VNNI, AVX-512 VNNI, ARMv7/AArch64 NEON, NEON dotprod,
   i8mm (`smmla`), SVE (any vector length); a CPU guard refuses unsupported processors instead of crashing
 - **Quantization:** Q8_0, Q4_0, and mixed models that keep chosen matrices in Q8; optional Q8 KV cache
@@ -33,7 +44,7 @@ build/avx2/ml_run llama.mlb -z llama.mlt --chat llama3 -t 4
 
 ## Documentation
 
-[User guide](user-guide.md) · [Architecture](architecture.md) · [File formats](file-format.md) ·
+[FAQ](faq.md) · [User guide](user-guide.md) · [Architecture](architecture.md) · [File formats](file-format.md) ·
 [Writing kernels](kernels.md) · [Testing and benchmarks](testing.md) ·
 [Comparison with llama.cpp](benchmarks.md) ·
 [Design spec](design/2026-10-22-legacy-isa-ml-runtime-design.md)
