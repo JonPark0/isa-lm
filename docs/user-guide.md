@@ -1,3 +1,8 @@
+---
+title: "User guide: build, convert models and run LLMs on a CPU"
+description: "Build isa-lm for your CPU (SSE2 to AVX-512 VNNI, ARMv7 NEON to SVE), convert Hugging Face Llama, Qwen, Gemma and Mistral models to INT8/INT4, and run or chat with them."
+---
+
 # User guide
 
 This guide covers building isa-lm, getting a model into the `.mlb` format, and
@@ -423,7 +428,8 @@ On a 4-vCPU VM with the avx512vnni build, `-t 4` decodes a 4-layer dim-2048 Q4 m
   `n_layers × max_seq × (kv_dim + 4 × n_kv_heads) × 2` with `--kv q8`. All size
   arithmetic is overflow-checked, so on 32-bit ARMv7 an oversized model fails
   with `out of memory` instead of crashing.
-- **Architecture:** Llama-family decoders (Llama, Mistral, Qwen2, Qwen3):
-  RMSNorm, SwiGLU, GQA, RoPE, biases only on the q, k and v projections
-  (Qwen2), optional per-head q/k RMSNorm (Qwen3), and a sliding window and a
-  second RoPE base for chosen layers. `tools/convert.py` refuses other architectures.
+- **Architecture:** Llama-family decoders (Llama, Mistral, Qwen2, Qwen3) and
+  Gemma 2 and 3: RMSNorm, SwiGLU or GELU, GQA, RoPE, biases only on the q, k
+  and v projections (Qwen2), optional per-head q/k RMSNorm (Qwen3), block
+  output norms and soft-capping (Gemma), and a sliding window and a second
+  RoPE base for chosen layers. `tools/convert.py` refuses other architectures.

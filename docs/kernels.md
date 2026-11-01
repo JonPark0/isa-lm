@@ -1,3 +1,8 @@
+---
+title: "Writing SIMD kernels (SSE2 to AVX-512, NEON to SVE)"
+description: "How to add an int8/int4 SIMD kernel or a new instruction set to isa-lm: kernel rules, packed layouts, per-ISA idioms for x86 and ARM, and assembly overrides."
+---
+
 # Writing kernels
 
 ## Add a kernel for an existing ISA

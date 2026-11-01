@@ -1,0 +1,53 @@
+name: IndexNow
+
+# After GitHub Pages has published a push to docs/, tells the IndexNow search
+# engines (Bing, Yandex, Seznam, Naver, ...) which pages changed
+# (.github/scripts/indexnow.py). Run by hand, it submits every page.
+on:
+  push:
+    branches: [main]
+    paths:
+      - docs/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: read       # to wait for the Pages build of this commit
+
+concurrency:
+  group: indexnow
+  cancel-in-progress: false
+
+jobs:
+  submit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Wait for the Pages build of this commit
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for i in $(seq 1 60); do
+            status=$(gh api "repos/${{ github.repository }}/pages/builds?per_page=20" \
+                       --jq '[.[] | select(.commit == "${{ github.sha }}")][0].status // empty')
+            echo "Pages build: ${status:-not started}"
+            case "$status" in
+              built) exit 0 ;;
+              errored) exit 1 ;;
+            esac
+            sleep 15
+          done
+          echo "no finished Pages build for ${{ github.sha }} after 15 minutes"
+          exit 1
+      - name: Submit changed pages
+        if: github.event_name == 'push'
+        run: |
+          git diff --name-only "${{ github.event.before }}" "${{ github.sha }}" -- docs \
+            | xargs python3 .github/scripts/indexnow.py
+      - name: Submit every page
+        if: github.event_name == 'workflow_dispatch'
+        run: python3 .github/scripts/indexnow.py --all

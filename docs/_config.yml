@@ -1,12 +1,27 @@
 # GitHub Pages (Settings → Pages → Deploy from branch: main, folder /docs)
 title: isa-lm
 description: >-
-  Portable C11 LLM inference for legacy and modern CPUs — INT8/INT4 Llama models on x86-64 (SSE2, SSE4.1, AVX2,
+  Portable C11 LLM inference for legacy and modern CPUs — INT8/INT4 Llama, Qwen and Gemma models on x86-64 (SSE2, SSE4.1, AVX2,
   AVX-VNNI, AVX-512 VNNI) and ARM (ARMv7 NEON, dotprod, i8mm, SVE) with compile-time kernel selection, Hugging Face
   tokenizers, chat mode and a numpy-checked reference.
 url: https://jonpark0.github.io
 baseurl: /isa-lm
 theme: jekyll-theme-cayman
+lang: en
+author:
+  name: Yeochoon Park
+  url: https://github.com/JonPark0
+defaults:
+  - scope:
+      path: ""
+    values:
+      image: /assets/social-preview.png   # og:image, twitter:image
+# Search engine ownership checks: paste the codes from Google Search Console
+# (HTML tag method) and Bing Webmaster Tools and uncomment; jekyll-seo-tag
+# writes the meta tags.
+# webmaster_verifications:
+#   google: CODE
+#   bing: CODE
 plugins:
   - jekyll-seo-tag
   - jekyll-sitemap

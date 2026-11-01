@@ -1,0 +1,25 @@
+# isa-lm
+
+> isa-lm is a dependency-free C11 inference runtime for Llama-style language models with INT8 (Q8_0) and INT4 (Q4_0) weights, for CPUs without a GPU. It runs on x86-64 from SSE2 up to AVX-512 VNNI and on ARM from 32-bit ARMv7 NEON up to i8mm and SVE; each build binds every operator at compile time to the kernel written for its instruction set. MIT license.
+
+Key facts:
+
+- On the same model (Qwen2.5 0.5B) and formats, isa-lm decodes faster than llama.cpp at every ISA level measured: 1.2–1.5× with AVX-512 VNNI, 1.0–2.3× with AVX2, 2.1–10× with SSE2 and SSE4.1, 1.04–1.7× on AArch64.
+- Models: Llama 2/3/3.1/3.2, TinyLlama, SmolLM2, Mistral, Qwen2/2.5, Qwen3, Gemma 2 and Gemma 3, converted from Hugging Face safetensors; Hugging Face tokenizer.json files; chat mode.
+- Results are bit-identical for any thread count and prompt batch size and are checked against a numpy reference.
+- Not supported: GPUs, K-quant formats, mixture-of-experts models, image input, Phi (partial rotary embeddings).
+
+## Docs
+
+- [FAQ](https://raw.githubusercontent.com/JonPark0/isa-lm/main/docs/faq.md): CPUs without AVX, Raspberry Pi, comparison with llama.cpp, models, memory, limits
+- [User guide](https://raw.githubusercontent.com/JonPark0/isa-lm/main/docs/user-guide.md): building, converting models, CLI options, threads, limits
+- [Comparison with llama.cpp](https://raw.githubusercontent.com/JonPark0/isa-lm/main/docs/benchmarks.md): speed and perplexity per ISA level
+- [Architecture](https://raw.githubusercontent.com/JonPark0/isa-lm/main/docs/architecture.md): compile-time kernel binding, CPU guard, packing, threading
+- [README](https://raw.githubusercontent.com/JonPark0/isa-lm/main/README.md): overview, quick start, status
+
+## Optional
+
+- [File formats](https://raw.githubusercontent.com/JonPark0/isa-lm/main/docs/file-format.md): the .mlb model and .mlt tokenizer formats
+- [Writing kernels](https://raw.githubusercontent.com/JonPark0/isa-lm/main/docs/kernels.md): adding a kernel or an ISA
+- [Testing](https://raw.githubusercontent.com/JonPark0/isa-lm/main/docs/testing.md): test layers and benchmarks
+- [Releases](https://github.com/JonPark0/isa-lm/releases): prebuilt binaries for Linux (x86-64, AArch64, ARMv7) and Windows (x86-64)

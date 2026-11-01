@@ -1,3 +1,8 @@
+---
+title: "isa-lm vs llama.cpp: CPU speed and perplexity benchmarks"
+description: "isa-lm and llama.cpp on the same model and Q8_0/Q4_0 formats at each ISA level, from SSE2 to AVX-512 VNNI and ARM NEON to i8mm: prefill, decode and perplexity."
+---
+
 # Comparison with llama.cpp
 
 isa-lm and [llama.cpp](https://github.com/ggml-org/llama.cpp) run the same

@@ -1,0 +1,37 @@
+{%- comment -%}
+Included by the Cayman theme's layout at the end of <head>. On the home page:
+schema.org metadata for search engines and AI assistants.
+{%- endcomment -%}
+{%- if page.url == "/" %}
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareSourceCode",
+  "name": "isa-lm",
+  "description": {{ page.description | jsonify }},
+  "url": {{ "/" | absolute_url | jsonify }},
+  "codeRepository": "https://github.com/JonPark0/isa-lm",
+  "programmingLanguage": "C",
+  "license": "https://opensource.org/licenses/MIT",
+  "author": {
+    "@type": "Person",
+    "name": "Yeochoon Park",
+    "alternateName": "JonPark0",
+    "url": "https://github.com/JonPark0"
+  },
+  {%- if site.github.latest_release %}
+  "version": {{ site.github.latest_release.tag_name | remove_first: "v" | jsonify }},
+  {%- endif %}
+  "keywords": ["LLM inference", "CPU inference", "INT8", "INT4", "quantization", "SIMD", "SSE2", "AVX2", "AVX-512 VNNI", "ARM NEON", "SVE", "Llama", "Qwen", "Gemma", "C11"],
+  "targetProduct": {
+    "@type": "SoftwareApplication",
+    "name": "isa-lm",
+    "applicationCategory": "DeveloperApplication",
+    "operatingSystem": "Linux, Windows",
+    "processorRequirements": "x86-64 (SSE2 or later) or ARMv7 NEON / AArch64",
+    "downloadUrl": "https://github.com/JonPark0/isa-lm/releases",
+    "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"}
+  }
+}
+</script>
+{%- endif %}

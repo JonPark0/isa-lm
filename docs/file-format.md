@@ -1,3 +1,8 @@
+---
+title: "File formats: .mlb models and .mlt tokenizers"
+description: "Specification of the .mlb model format (header, tensors, Q8_0/Q4_0 quantization, RoPE scaling, sliding windows) and the .mlt tokenizer format used by isa-lm."
+---
+
 # File formats: `.mlb` model, version 1, and `.mlt` tokenizer
 
 An `.mlb` file is a fixed 256-byte header followed by tensor arrays. Every array

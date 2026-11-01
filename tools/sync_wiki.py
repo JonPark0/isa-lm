@@ -15,6 +15,7 @@ ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 
 PAGES = {   # source file -> wiki page name
     "README.md": "Home",
+    "docs/faq.md": "FAQ",
     "docs/user-guide.md": "User-Guide",
     "docs/architecture.md": "Architecture",
     "docs/file-format.md": "File-Format",
@@ -26,6 +27,7 @@ PAGES = {   # source file -> wiki page name
 SIDEBAR = """**isa-lm**
 
 - [[Home]]
+- [[FAQ]]
 - [[User Guide|User-Guide]]
 - [[Architecture]]
 - [[File Format|File-Format]]
@@ -35,6 +37,7 @@ SIDEBAR = """**isa-lm**
 """
 
 LINK = re.compile(r"\]\(([^)\s]+)\)")
+FRONT_MATTER = re.compile(r"\A---\n.*?\n---\n+", re.S)   # Jekyll's title/description
 
 
 def convert_links(text, src, repo, branch):
@@ -62,7 +65,7 @@ def main():
     a = ap.parse_args()
     for src, page in PAGES.items():
         with open(os.path.join(ROOT, src), encoding="utf-8") as f:
-            text = convert_links(f.read(), src, a.repo, a.branch)
+            text = convert_links(FRONT_MATTER.sub("", f.read()), src, a.repo, a.branch)
         note = f"\n\n---\n_Generated from [`{src}`](https://github.com/{a.repo}/blob/{a.branch}/{src}); edit it there._\n"
         with open(os.path.join(a.wiki_dir, page + ".md"), "w", encoding="utf-8") as f:
             f.write(text.rstrip() + note)
