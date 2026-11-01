@@ -13,13 +13,15 @@ operator is bound to the best kernel for it, with no runtime dispatch.
 
 - **Instruction sets:** scalar, SSE2, SSE4.1, AVX2, AVX-VNNI, AVX-512 VNNI, ARMv7/AArch64 NEON, NEON dotprod,
   i8mm (`smmla`), SVE (any vector length); a CPU guard refuses unsupported processors instead of crashing
-- **Quantization:** Q8_0, Q4_0, and mixed models that keep chosen matrices in Q8; optional Q8 KV cache
+- **Quantization:** Q8_0, Q4_0 with f16 block scales, and mixed models that keep chosen matrices in Q8; optional
+  F16 or Q8 KV cache
 - **Speed:** row-interleaved weight packing for each ISA's integer dot products, batched prompt prefill,
   software prefetch, blocked GQA attention, a thread pool with bit-identical results, a pack cache for fast start-up
 - **Models:** llama2.c checkpoints and Hugging Face safetensors (Llama 2, Llama 3/3.1/3.2, TinyLlama, SmolLM2,
-  Mistral, Qwen2/2.5, Qwen3; llama3, linear and yarn RoPE scaling; sliding window), Hugging Face `tokenizer.json`
-  (SentencePiece-style, Llama 3, Qwen and GPT-2 byte-level BPE, identical to the `tokenizers` library)
-- **Use:** text generation, chat mode (`llama3`, `zephyr`, `llama2`, `qwen`, `smollm`, `chatml` templates), top-k /
+  Mistral, Qwen2/2.5, Qwen3, Gemma 2, Gemma 3 1B-27B text; llama3, linear and yarn RoPE scaling; per-layer
+  sliding windows; logit soft-capping), Hugging Face `tokenizer.json`
+  (SentencePiece-style including Gemma's, Llama 3, Qwen and GPT-2 byte-level BPE, identical to the `tokenizers` library)
+- **Use:** text generation, chat mode (`llama3`, `zephyr`, `llama2`, `qwen`, `smollm`, `chatml`, `gemma` templates), top-k /
   top-p / repetition penalty, perplexity measurement, importance matrices for Q4
 - **Verification:** kernel tests against scalar and double-precision references, end-to-end logits against a
   numpy reference, qemu for ARM and old x86 CPUs, native Arm CI
@@ -45,7 +47,7 @@ build/avx2/ml_run llama.mlb -z llama.mlt --chat llama3 -t 4
   author  = {Park, Yeochoon},
   title   = {isa-lm: a portable C11 runtime for INT8/INT4 Llama-style language model inference on legacy x86-64 and ARM instruction sets},
   year    = {2026},
-  version = {0.4.0},
+  version = {0.5.0},
   url     = {https://github.com/JonPark0/isa-lm}
 }
 ```

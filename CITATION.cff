@@ -9,12 +9,12 @@ authors:
 repository-code: "https://github.com/JonPark0/isa-lm"
 url: "https://jonpark0.github.io/isa-lm/"
 license: MIT
-version: 0.4.0
-date-released: "2026-10-31"
+version: 0.5.0
+date-released: "2026-11-01"
 abstract: >-
   isa-lm is a dependency-free C11 inference runtime for Llama-style decoder Transformers
   with INT8 (Q8_0) and INT4 (Q4_0) weights with f16 or f32 block scales, mixed Q4/Q8 models
-  and an optional Q8 KV cache.
+  and an optional F16 or Q8 KV cache.
   The code targets a portable baseline and binds every operator at compile time to the
   best kernel for the chosen instruction set, with no runtime dispatch: x86-64 from SSE2
   through SSE4.1, AVX2, AVX-VNNI and AVX-512 VNNI, and ARM from ARMv7 NEON through ARMv8.2
@@ -23,8 +23,8 @@ abstract: >-
   weight stream is prefetched in software, and attention is blocked for grouped-query heads.
   Results are bit-identical across thread counts and batch sizes and are checked against a
   numpy reference forward pass. It reads llama2.c checkpoints, Hugging Face safetensors
-  (Llama, Mistral, Qwen2, Qwen3, SmolLM2 and Gemma 3 text, with llama3, linear and yarn RoPE
-  scaling and per-layer sliding windows) and Hugging Face tokenizer.json files
+  (Llama, Mistral, Qwen2, Qwen3, SmolLM2, Gemma 2 and Gemma 3, with llama3, linear and yarn
+  RoPE scaling, per-layer sliding windows and logit soft-capping) and Hugging Face tokenizer.json files
   (SentencePiece-style including Gemma's, Llama 3, Qwen and GPT-2 byte-level BPE, identical
   to the tokenizers library), and includes a chat mode,
   a perplexity tool and a CPU feature guard that refuses unsupported processors.
@@ -46,4 +46,6 @@ keywords:
   - legacy hardware
   - edge computing
   - Llama
+  - Qwen
+  - Gemma
   - C11
