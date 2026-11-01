@@ -21,6 +21,9 @@ jobs:
       - name: Release version check
         # a new ML_VERSION needs its CHANGELOG.md section (auto-release.yml)
         run: scripts/release_check.sh
+      - name: Generated docs check
+        # docs/assets/decode-ratio.svg follows docs/benchmarks.md (scripts/sync_docs.py)
+        run: python3 scripts/sync_docs.py --check
       - name: Cache apt packages
         uses: actions/cache@v4
         with:

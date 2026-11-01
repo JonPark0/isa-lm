@@ -45,12 +45,19 @@ def excluded(docs):
     return out
 
 
-def page_url(rel):
-    """docs/ path of a Markdown page -> its URL on the site, or None."""
+def page_url(docs, rel):
+    """docs/ path of a Markdown page -> its URL on the site, or None (not a
+    page, or left out of the sitemap)."""
     if not rel.endswith(".md") or any(p.startswith("_") for p in rel.split("/")):
         return None
+    with open(os.path.join(docs, rel), encoding="utf-8") as f:
+        head = f.read(2048)
+    if re.match(r"---\n(?:.*\n)*?sitemap:\s*false\s*\n(?:.*\n)*?---", head):
+        return None
     stem = rel[:-3]
-    return SITE if stem == "index" else SITE + stem + ".html"
+    if stem == "index" or stem.endswith("/index"):
+        return SITE + stem[:-len("index")]
+    return SITE + stem + ".html"
 
 
 def main():
@@ -67,7 +74,7 @@ def main():
     else:
         files = [f[len("docs/"):] for f in a.files if f.startswith("docs/")]
     urls = sorted({u for f in files if f not in skip and os.path.exists(os.path.join(docs, f))
-                   for u in [page_url(f)] if u})
+                   for u in [page_url(docs, f)] if u})
     if not urls:
         print("no pages to submit")
         return

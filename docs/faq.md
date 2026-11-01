@@ -1,6 +1,8 @@
 ---
 title: "FAQ: running LLMs on old and low-power CPUs"
 description: Answers about isa-lm, a C11 runtime for INT8/INT4 language models on CPUs without a GPU — CPUs without AVX, Raspberry Pi-class ARM boards, speed against llama.cpp, models, memory and limits.
+nav_order: 2
+nav_title: "FAQ"
 ---
 
 # FAQ

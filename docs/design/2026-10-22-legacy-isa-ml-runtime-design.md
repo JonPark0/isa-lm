@@ -1,6 +1,8 @@
 ---
 title: "Design spec: an LLM runtime for legacy instruction sets"
 description: "The original design of isa-lm, a C11 INT8/INT4 inference runtime with compile-time kernels for legacy and modern x86-64 and ARM instruction sets."
+nav_order: 20
+nav_title: "Design spec"
 ---
 
 # Legacy-ISA ML Inference Runtime — Design Spec

@@ -1,7 +1,19 @@
 {%- comment -%}
-Included by the Cayman theme's layout at the end of <head>. On the home page:
-schema.org metadata for search engines and AI assistants.
+Included by Just the Docs at the end of <head>.
+- Dark mode: the reader's choice (saved by the header button), else the
+  system setting; switched before the page is drawn.
+- On the home page: schema.org metadata for search engines and AI assistants.
 {%- endcomment -%}
+<script>
+  (function () {
+    var t = null;
+    try { t = localStorage.getItem("isa-lm-theme"); } catch (e) {}
+    if (!t && window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) t = "dark";
+    if (t === "dark") jtd.setTheme("dark");
+  })();
+</script>
+<link rel="icon" type="image/png" sizes="32x32" href="{{ '/assets/favicon-32.png' | relative_url }}">
+<link rel="apple-touch-icon" href="{{ '/assets/apple-touch-icon.png' | relative_url }}">
 {%- if page.url == "/" %}
 <script type="application/ld+json">
 {
