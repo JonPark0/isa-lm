@@ -12,9 +12,9 @@ license: MIT
 version: 0.6.0
 date-released: "2026-11-01"
 abstract: >-
-  Krafla (formerly isa-lm) is a dependency-free C11 inference runtime for Llama-style decoder Transformers
-  with INT8 (Q8_0) and INT4 (Q4_0) weights with f16 or f32 block scales, mixed Q4/Q8 models
-  and an optional F16 or Q8 KV cache.
+  Krafla (formerly isa-lm) is a dependency-free C11 inference runtime for Llama-style decoder
+  Transformers. It supports INT8 (Q8_0) and INT4 (Q4_0) weights with f16 or f32 block scales,
+  mixed Q4/Q8 models and an optional F16 or Q8 KV cache.
   The code targets a portable baseline and binds every operator at compile time to the
   best kernel for the chosen instruction set, with no runtime dispatch: x86-64 from SSE2
   through SSE4.1, AVX2, AVX-VNNI and AVX-512 VNNI, and ARM from ARMv7 NEON through ARMv8.2

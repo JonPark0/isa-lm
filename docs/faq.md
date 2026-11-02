@@ -1,6 +1,6 @@
 ---
 title: "FAQ: running LLMs on old and low-power CPUs"
-description: Answers about Krafla, a C11 runtime for INT8/INT4 language models on CPUs without a GPU — CPUs without AVX, Raspberry Pi-class ARM boards, speed against llama.cpp, models, memory and limits.
+description: "Questions and answers about Krafla, a C11 runtime for INT8/INT4 language models on CPUs: running without AVX, Raspberry Pi-class ARM boards, speed against llama.cpp, models, memory and limits."
 nav_order: 2
 nav_title: "FAQ"
 ---
@@ -36,17 +36,17 @@ ratio to llama.cpp's SSE2 build on the same machine was 6–7×.
 On Qwen2.5 0.5B with the same Q8_0 and Q4_0 formats on the same machines
 ([details](benchmarks.md)):
 
-- **Decode** is faster with Krafla at every ISA level measured: 1.2–1.5× with
-  AVX-512 VNNI, 1.0–2.3× with AVX2, 2.1–10× on the SSE2 and SSE4.1 builds,
-  and 1.04–1.7× on AArch64.
-- **Prompt processing** is faster with Krafla from AVX2 down and on AArch64,
-  except dotprod Q4_0, where llama.cpp leads by 1.10–1.13×. On a CPU with
-  AMX, llama.cpp's AMX kernels prefill 1.03–1.17× faster than Krafla's AVX-512
-  VNNI build.
-- **Quality:** Krafla's Q4_0 scores perplexity 15.09–15.14 against
-  15.82–15.93 for llama.cpp's Q4_0, because each block's scale is fitted
-  rather than rounded from its maximum; Q8_0 scores 13.32–13.35 against 13.34
-  for llama.cpp's F16.
+- **Decode** is at least as fast with Krafla at every ISA level measured:
+  1.2–1.5× with AVX-512 VNNI, 1.0–2.3× with AVX2, 2.1–10× on the SSE2 and
+  SSE4.1 builds, and 1.04–1.7× on AArch64.
+- **Prefill** (prompt processing) is faster with Krafla from AVX2 down and on
+  AArch64, except dotprod Q4_0, where llama.cpp leads by 1.10–1.13×. On a CPU
+  with AMX, llama.cpp's AMX kernels prefill 1.03–1.17× faster than Krafla's
+  AVX-512 VNNI build.
+- **Perplexity** is lower with Krafla's Q4_0: 15.09–15.14 against 15.82–15.93
+  for llama.cpp's Q4_0, because each block's scale is fitted rather than
+  rounded from its maximum. Q8_0 scores 13.32–13.35 against 13.34 for
+  llama.cpp's F16.
 
 llama.cpp does much more: GPU back ends, K-quant and i-quant formats, many
 more architectures (mixture of experts, image input) and an HTTP server.
@@ -61,8 +61,8 @@ or the `aarch64` release, depending on the operating system; Raspberry Pi 5
 (Cortex-A76) takes `neon_dotprod`. The original Raspberry Pi 1 and Zero
 (ARMv6) have no NEON. These builds are tested under qemu and natively on
 GitHub's Arm runners (Neoverse), and the CPU guard is checked on emulated
-Cortex-A53 and Cortex-A76 cores; none of it ran on a Raspberry Pi itself, so
-there are no Raspberry Pi speed numbers yet.
+Cortex-A53 and Cortex-A76 cores; none of this has run on an actual Raspberry
+Pi yet, so there are no Raspberry Pi speed numbers.
 
 ## Which models does it run?
 
@@ -77,9 +77,9 @@ SmolLM2 135M and Gemma 3 1B and 4B have been run end to end; see
 ## Where do I get a model?
 
 Converted files of SmolLM2 135M and 360M Instruct, Qwen2.5 0.5B and 1.5B
-Instruct, Qwen3 0.6B and TinyLlama 1.1B Chat are on Hugging Face, in Q4_0, Q8_0
-and (for most) a mixed Q4 file, each with its tokenizer and a model card with
-perplexity and speed: see
+Instruct, Qwen3 0.6B and TinyLlama 1.1B Chat are on Hugging Face, in Q4_0 and
+Q8_0 and, for all but the two SmolLM2 models, a mixed Q4 file, each with its
+tokenizer and a model card with perplexity and speed: see
 [Converted models on Hugging Face](user-guide.md#converted-models-on-hugging-face).
 Download a `.mlb` file and `tokenizer.mlt` next to a release and run it; no
 Python is needed. For other models, convert the Hugging Face safetensors with
@@ -87,19 +87,19 @@ Python is needed. For other models, convert the Hugging Face safetensors with
 
 ## Which build should I use?
 
-The release archives start the fastest build your CPU supports on their own:
-their `ml_run` tries the builds from the fastest down. When you build from
+In a release archive, the `ml_run` wrapper tries the builds from fastest to
+slowest and starts the first one your CPU supports. When you build from
 source, `make ISA=...` picks one (see [Choosing the ISA](user-guide.md#choosing-the-isa)).
 A binary run on a CPU that lacks its ISA exits with code 3 and names the
 missing feature instead of crashing.
 
 ## How much memory does a model need?
 
-About the size of its `.mlb` file plus the KV cache. With f16 block scales,
-the default: Qwen2.5 0.5B takes 265 MB in Q4 and 500 MB in Q8, Llama 3.2 1B
-663 MB in Q4 and 1252 MB in Q8, Gemma 3 4B 2083 MiB in Q4. The KV cache is
-`n_layers × max_seq × kv_dim × 8` bytes, half that with `--kv f16` and about
-3.8× less with `--kv q8`; `--max-seq` at conversion sets `max_seq`.
+About the size of its `.mlb` file plus the KV cache. With the default f16
+block scales, Qwen2.5 0.5B takes 265 MiB in Q4 and 500 MiB in Q8, Llama 3.2 1B
+663 MiB in Q4 and 1252 MiB in Q8, Gemma 3 4B 2083 MiB in Q4. The KV cache is
+`n_layers × max_seq × kv_dim × 8` bytes; `--kv f16` halves it and `--kv q8`
+makes it about 3.8× smaller. `--max-seq` at conversion sets `max_seq`.
 
 ## Does it need a GPU, Python or other libraries?
 
@@ -111,9 +111,9 @@ with numpy is needed only to convert models and tokenizers.
 
 Yes: the logits are bit-identical for any thread count and any prompt batch
 size, and greedy decoding (`-T 0`, the default) gives the same text every
-run. The tests check this,
-and check every kernel against scalar and double-precision references and the
-whole forward pass against a numpy reference.
+run. The tests check this, and check every kernel against scalar and
+double-precision references and the whole forward pass against a numpy
+reference.
 
 ## Which operating systems are supported?
 

@@ -8,8 +8,8 @@ nav_title: "Home"
 # Krafla
 {: .fs-9 }
 
-Portable INT8/INT4 LLM inference in C11 for CPUs without a GPU, from SSE2 and
-ARMv7 NEON up to AVX-512 VNNI and SVE.
+Portable INT8/INT4 LLM inference in C11 for machines without a GPU, from SSE2
+and ARMv7 NEON up to AVX-512 VNNI and SVE.
 {: .fs-6 .fw-300 }
 
 [Download a release](https://github.com/JonPark0/krafla/releases){: .btn .btn-primary .fs-5 .mb-4 .mb-md-0 .mr-2 }
@@ -19,20 +19,24 @@ ARMv7 NEON up to AVX-512 VNNI and SVE.
 ---
 
 **Krafla** (**K**ernels **R**etargeted **A**cross **F**amilies of **L**egacy **A**rchitectures, formerly
-isa-lm) is a dependency-free **C11 inference runtime** for Llama-style **large language models** with
-**INT8 and INT4 weights**. It runs on **x86-64 CPUs from SSE2 up to AVX-512 VNNI** and on **ARM CPUs from ARMv7
-NEON up to i8mm and SVE**, including the legacy and low-power processors that GPU-first runtimes leave out.
+isa-lm) is a dependency-free C11 inference runtime for Llama-style large language models with
+INT8 and INT4 weights. It runs on x86-64 CPUs from SSE2 up to AVX-512 VNNI and on ARM CPUs from ARMv7
+NEON up to i8mm and SVE, including older and low-power processors.
 The code is written against a portable baseline; you choose the instruction set when you compile, and every
 operator is bound to the best kernel for it, with no runtime dispatch.
 
-- **Faster decoding than llama.cpp** at every ISA level measured, on the same
-  model and formats: 1.2–1.5× with AVX-512 VNNI, 1.0–2.3× with AVX2, 2.1–10×
-  with SSE2 and SSE4.1, 1.04–1.7× on AArch64 ([comparison](benchmarks.md)).
-- **No AVX, GPU or libraries needed:** any x86-64 CPU (SSE2) and 32-bit ARMv7
-  NEON boards, up to AVX-512 VNNI, i8mm and SVE; static binaries for each ISA.
-- **Accurate Q4:** fitted block scales give Qwen2.5 0.5B Q4_0 perplexity 15.1
-  against 15.8–15.9 for llama.cpp's Q4_0; Q8 matches an F32 reference, and the
-  output is bit-identical for any thread count.
+- **Decoding at least as fast as llama.cpp** at every ISA level measured, on the
+  same model and formats: 1.2–1.5× with AVX-512 VNNI, 1.0–2.3× with AVX2,
+  2.1–10× with SSE2 and SSE4.1, 1.04–1.7× on AArch64
+  ([comparison](benchmarks.md)).
+- **Old and low-power CPUs:** builds for any x86-64 CPU (SSE2) and for 32-bit
+  ARMv7 NEON boards, with no GPU or external libraries required; static
+  binaries for each ISA.
+- **Lower Q4 perplexity:** with fitted block scales, Qwen2.5 0.5B in Q4_0
+  reaches perplexity 15.1, against 15.8–15.9 for llama.cpp's Q4_0. Q8 matches
+  an F32 reference.
+- **Deterministic:** output is bit-identical for any thread count and prompt
+  batch size.
 - **Models:** Llama 2/3, Mistral, Qwen2.5, Qwen3, SmolLM2, Gemma 2 and Gemma 3
   from Hugging Face safetensors, with their tokenizers and chat templates.
 
@@ -40,8 +44,10 @@ operator is bound to the best kernel for it, with no runtime dispatch.
 
 ![Krafla decode speed relative to llama.cpp at each ISA level, one thread: 1.2 to 7.3 times on x86-64, 1.04 to 1.7 times on AArch64](assets/decode-ratio.svg)
 
-Same model (Qwen2.5 0.5B Instruct), same Q4_0 and Q8_0 formats, same machine
-for both runtimes. Prefill, four threads and perplexity are in the
+The chart shows one-thread results on the Xeon test machine, where both
+runtimes ran Qwen2.5 0.5B Instruct in the same Q4_0 and Q8_0 formats. The
+ranges in the list above also include the GitHub runners, hence up to 10× with
+SSE2. Prefill speed, four-thread results and perplexity are in the
 [comparison](benchmarks.md).
 
 ## Supported CPUs
@@ -80,9 +86,10 @@ curl -LO https://huggingface.co/jonpark0/Qwen2.5-0.5B-Instruct-krafla/resolve/ma
 ./ml_run Qwen2.5-0.5B-Instruct-Q4_0.mlb -z tokenizer.mlt --chat qwen -t 4
 ```
 
-Converted models: SmolLM2 135M and 360M, Qwen2.5 0.5B and 1.5B, Qwen3 0.6B
-and TinyLlama 1.1B, in Q4_0, Q8_0 and mixed files. From source, with any
-supported Hugging Face model:
+Converted models are available for SmolLM2 135M and 360M, Qwen2.5 0.5B and
+1.5B, Qwen3 0.6B and TinyLlama 1.1B, in Q4_0 and Q8_0 and, for all but
+SmolLM2, a mixed file. To build from source and convert any supported Hugging
+Face model:
 
 ```sh
 make ISA=avx2                                    # or sse2, neon, neon_dotprod, sve, ...
@@ -109,7 +116,7 @@ every option; the [FAQ](faq.md) answers the common questions.
 - **Use:** text generation, chat mode (`llama3`, `zephyr`, `llama2`, `qwen`, `smollm`, `chatml`, `gemma` templates), top-k /
   top-p / repetition penalty, perplexity measurement, importance matrices for Q4
 - **Verification:** kernel tests against scalar and double-precision references, end-to-end logits against a
-  numpy reference, qemu for ARM and old x86 CPUs, native Arm CI
+  numpy reference, qemu for ARM and old x86 CPUs, native CI on GitHub's Arm runners
 
 ## Citing
 

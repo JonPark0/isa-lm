@@ -11,20 +11,24 @@ for Llama-style decoder Transformers with INT8 and INT4 weights. It runs on
 x86-64 CPUs from SSE2 up to AVX-512 VNNI, and on ARM CPUs from ARMv7 NEON up to
 i8mm and SVE.
 
-- **Faster decoding than llama.cpp** at every ISA level measured, on the same
-  model and formats: 1.2–1.5× with AVX-512 VNNI, 1.0–2.3× with AVX2, 2.1–10×
-  with SSE2 and SSE4.1, 1.04–1.7× on AArch64 ([comparison](docs/benchmarks.md)).
-- **No AVX, GPU or libraries needed:** any x86-64 CPU (SSE2) and 32-bit ARMv7
-  NEON boards, up to AVX-512 VNNI, i8mm and SVE; static binaries for each ISA.
-- **Accurate Q4:** fitted block scales give Qwen2.5 0.5B Q4_0 perplexity 15.1
-  against 15.8–15.9 for llama.cpp's Q4_0; Q8 matches an F32 reference, and the
-  output is bit-identical for any thread count.
+- **Decoding at least as fast as llama.cpp** at every ISA level measured, on the
+  same model and formats: 1.2–1.5× with AVX-512 VNNI, 1.0–2.3× with AVX2,
+  2.1–10× with SSE2 and SSE4.1, 1.04–1.7× on AArch64
+  ([comparison](docs/benchmarks.md)).
+- **Old and low-power CPUs:** builds for any x86-64 CPU (SSE2) and for 32-bit
+  ARMv7 NEON boards, with no GPU or external libraries required; static
+  binaries for each ISA.
+- **Lower Q4 perplexity:** with fitted block scales, Qwen2.5 0.5B in Q4_0
+  reaches perplexity 15.1, against 15.8–15.9 for llama.cpp's Q4_0. Q8 matches
+  an F32 reference.
+- **Deterministic:** output is bit-identical for any thread count and prompt
+  batch size.
 - **Models:** Llama 2/3, Mistral, Qwen2.5, Qwen3, SmolLM2, Gemma 2 and Gemma 3
   from Hugging Face safetensors, with their tokenizers and chat templates.
 
-The code is written against a portable baseline. You pick the acceleration when
-you compile, and each op is bound to the best kernel for that ISA, with no
-runtime dispatch:
+The code is written against a portable baseline. You choose the instruction set
+(ISA) when you compile, and each operator is bound to the best kernel for that
+ISA, with no runtime dispatch:
 
 ```sh
 make ISA=avx2                                   # build/avx2/{ml_run,ml_bench,test_*}
@@ -88,8 +92,8 @@ Nehalem and later, both with hand-written int8 SIMD kernels.
 
 ### Is it faster than llama.cpp?
 
-For decoding, yes, at every ISA level measured (above). llama.cpp does much
-more: GPU back ends, K-quants, more architectures and an HTTP server. See the
+Decoding is at least as fast at every ISA level measured, and faster at most
+(above). llama.cpp does much more: GPU back ends, K-quants, more architectures and an HTTP server. See the
 [comparison](docs/benchmarks.md).
 
 ### Does it run on a Raspberry Pi?
@@ -100,14 +104,16 @@ on a Raspberry Pi.
 
 ### How much memory does a model need?
 
-Its `.mlb` file plus the KV cache: Qwen2.5 0.5B takes 265 MB in Q4, Llama 3.2
-1B 663 MB.
+About the size of its `.mlb` file plus the KV cache: in Q4, Qwen2.5 0.5B takes
+265 MiB and Llama 3.2 1B 663 MiB.
 
 More answers in the [FAQ](docs/faq.md).
 
 ## Documentation
 
-Site: <https://jonpark0.github.io/krafla/> · Wiki: <https://github.com/JonPark0/krafla/wiki> (both generated from [`docs/`](docs))
+The [documentation site](https://jonpark0.github.io/krafla/) and the
+[wiki](https://github.com/JonPark0/krafla/wiki) are both generated from
+[`docs/`](docs).
 
 | Document | Contents |
 |----------|----------|
@@ -125,13 +131,13 @@ Site: <https://jonpark0.github.io/krafla/> · Wiki: <https://github.com/JonPark0
 | Area | Status |
 |------|--------|
 | x86 builds | all six ISAs tested natively on an AVX-512 VNNI machine: kernel tests against scalar and double-precision references, end-to-end logits against a numpy reference. CI tests scalar through avx2 natively, and builds avxvnni/avx512vnni (SKIP when the runner CPU lacks them) |
-| ARM builds | tested under qemu (ARMv7 NEON, AArch64 NEON, dotprod, i8mm, SVE at 128-bit and 512-bit vector length) and on real Arm hardware in CI (GitHub `ubuntu-24.04-arm`: scalar, neon, neon with threads, dotprod, i8mm, sve) |
+| ARM builds | tested under qemu (ARMv7 NEON, AArch64 NEON, dotprod, i8mm, SVE at 128-bit and 512-bit vector length) and on native ARM hardware in CI (GitHub's Arm runners `ubuntu-24.04-arm`: scalar, neon, neon with threads, dotprod, i8mm, sve) |
 | Real model | CI downloads llama2.c `stories15M`, converts it to Q8, generates text, and checks scalar and avx2 logits (packed and row-major) against the numpy reference: same argmax, top-5 agreement, KL ≤ 1e-2 |
 | ISA guard | rejects unsupported CPUs with exit code 3, checked under qemu on core2duo/Nehalem/SandyBridge/Haswell and cortex-a53/a76/neoverse-n2 |
 | Performance | weights repacked into row-interleaved layouts for every SIMD build from SSE2 and ARMv7 NEON up (Q4 decoding up to 2.2× faster); prompts prefilled in batches of up to 128 tokens (2–6× faster), on `smmla` with i8mm; software prefetch of the weight stream on x86 (decoding 1.3–2.5× faster on one core); attention 2.4× faster on long contexts, 3.4× with the optional Q8 KV cache (`--kv q8`); an F16 KV cache (`--kv f16`) halves its memory at the same speed; numbers in [Testing](docs/testing.md#benchmarking) |
 | Thread pool | bit-identical results for any thread count; ThreadSanitizer clean; a 4-layer dim-2048 Q4 model decodes at 140 tok/s with `-t 1` and 503 tok/s with `-t 4` (avx512vnni, 4 vCPUs) |
 | Windows | MSVC builds (scalar, SSE2, AVX2) pass the unit tests and match the numpy reference in CI; the MinGW-built release binaries are checked under Wine before publishing |
-| Quantization | Q8_0, Q4_0, and Q4 with chosen matrix classes in Q8 (`--q8 v,o,down`: Llama 3.2 1B perplexity 17.89 at 831 MB, against 17.27 for Q8 at 1252 MB and 19.91 for Q4 at 663 MB); f16 block scales by default (Q4 at 4.5 bits per weight); each Q4 block's scale is fitted rather than rounded from its maximum (Qwen2.5 0.5B: 15.14 against 15.86 for llama.cpp's Q4_0, see the [comparison](docs/benchmarks.md)), except for Gemma 3, whose checkpoints do better with llama.cpp's rounding (its quantization-aware 1B checkpoint: Q4 perplexity 40.50, below its Q8); `tools/perplexity.py` measures it |
+| Quantization | Q8_0, Q4_0, and Q4 with chosen matrix classes in Q8 (`--q8 v,o,down`: Llama 3.2 1B perplexity 17.89 at 831 MiB, against 17.27 for Q8 at 1252 MiB and 19.91 for Q4 at 663 MiB); f16 block scales by default (Q4 at 4.5 bits per weight); each Q4 block's scale is fitted rather than rounded from its maximum (Qwen2.5 0.5B: 15.14 against 15.86 for llama.cpp's Q4_0, see the [comparison](docs/benchmarks.md)), except for Gemma 3, whose checkpoints do better with llama.cpp's rounding (its quantization-aware 1B checkpoint: Q4 perplexity 40.50, below its Q8); `tools/perplexity.py` measures it |
 | Models | Llama 2/3/3.1/3.2, TinyLlama, SmolLM2, Mistral (with its sliding window), Qwen2/2.5 (q/k/v biases), Qwen3 (its own head size, per-head q/k norm), Gemma 2 (soft-capped attention scores and logits) and Gemma 3 (GELU, block output norms, local and global layers; the text model of the 4B and larger image-text checkpoints); RoPE scaling of the llama3, linear and yarn kinds. TinyLlama 1.1B, Llama 3.2 1B, Qwen2.5 0.5B, Qwen3 0.6B, SmolLM2 135M and Gemma 3 1B and 4B were run end to end from their Hugging Face files; Q8 perplexity matches an F32 reference (Qwen2.5 18.98 against 19.00, Qwen3 27.90 against 28.10, Gemma 3 41.97 against 42.32) |
 | Tokenizers | llama2.c `tokenizer.bin`; Hugging Face `tokenizer.json` for SentencePiece-style BPE (Llama 2, TinyLlama, Mistral), Llama 3 byte-level BPE, Qwen2/Qwen3 byte-level BPE with NFC, and GPT-2 byte-level BPE (SmolLM2), converted by `tools/convert_tokenizer.py` and identical to the `tokenizers` library on every text tested |
 | Not implemented | other tokenizers (WordPiece, Unigram), RoPE scaling of the dynamic and longrope kinds, partial rotary embeddings, image input (of Gemma 3's image-text checkpoints only the text model is converted), architectures other than Llama, Mistral, Qwen2, Qwen3, Gemma 2 and Gemma 3 (Phi, mixture of experts) |
@@ -156,23 +162,26 @@ Please also cite the models you run; their licenses are separate from this one.
 
 **Krafla**(크라플라, 옛 이름 isa-lm)는 INT8/INT4로 양자화한 Llama 계열 언어 모델을 CPU에서 실행하는 C11 추론 런타임입니다.
 이름은 지열 발전소가 있는 아이슬란드의 화산 칼데라에서 따왔고, Kernels Retargeted Across Families of Legacy Architectures의 약자이기도 합니다.
-외부 라이브러리 없이 구형·저전력 프로세서까지 지원하는 것이 목표입니다.
+GPU나 외부 라이브러리 없이 구형·저전력 프로세서까지 지원하는 것이 목표입니다.
 
 - **지원 명령어 집합:** x86-64는 SSE2부터 SSE4.1, AVX2, AVX-VNNI, AVX-512 VNNI까지, ARM은 ARMv7 NEON부터
-  NEON dotprod, i8mm, SVE까지 지원합니다. 빌드할 때 명령어 집합을 고르면 연산마다 그에 맞는 커널이 컴파일 단계에서
-  묶입니다. 지원하지 않는 CPU에서 실행하면 비정상 종료 대신 오류 코드 3과 누락된 기능을 알려 줍니다.
-- **양자화:** Q8_0, Q4_0, 그리고 일부 행렬만 Q8로 두는 혼합 정밀도를 지원합니다. KV 캐시도 F16이나 Q8로 줄일 수 있습니다.
+  NEON dotprod, i8mm, SVE까지 지원합니다. 빌드할 때 명령어 집합을 고르면, 연산마다 쓸 커널이 그때 정해집니다.
+  지원하지 않는 CPU에서 실행하면 비정상 종료하지 않고, 빠진 기능을 알린 뒤 종료 코드 3으로 끝납니다.
+- **양자화:** Q8_0, Q4_0, 일부 행렬만 Q8로 두는 혼합 정밀도를 지원합니다. KV 캐시도 F16이나 Q8로 줄일 수 있습니다.
 - **속도:** 명령어 집합별 정수 내적에 맞춘 가중치 재배치, 프롬프트 일괄 처리, 소프트웨어 프리페치, GQA 블록
-  어텐션을 씁니다. 같은 모델·형식에서 llama.cpp보다 디코딩이 측정한 모든 명령어 집합에서 빠릅니다(AVX-512 VNNI
-  1.2–1.5배, AVX2 1.0–2.3배, SSE2·SSE4.1 2.1–10배, AArch64 1.04–1.7배). 스레드 수를 바꿔도 결과는 비트 단위로 같습니다.
+  어텐션을 씁니다. 같은 모델과 형식으로 비교하면 측정한 모든 명령어 집합에서 디코딩이 llama.cpp와 같거나 더
+  빠릅니다(AVX-512 VNNI 1.2–1.5배, AVX2 1.0–2.3배, SSE2·SSE4.1 2.1–10배, AArch64 1.04–1.7배). 스레드 수를
+  바꿔도 결과는 비트 단위로 같습니다.
 - **구형·저전력 기기:** AVX가 없는 x86-64 CPU(Core 2, Athlon 64)와 32비트 ARMv7 보드, 라즈베리 파이 2–5에 맞는
-  빌드가 있습니다(라즈베리 파이 실기에서는 아직 측정하지 않았습니다). GPU나 외부 라이브러리가 필요 없습니다.
+  빌드가 있습니다(실제 라즈베리 파이에서는 아직 측정하지 않았습니다).
 - **모델과 토크나이저:** llama2.c 체크포인트와 Hugging Face safetensors(Llama 2, Llama 3/3.1/3.2, TinyLlama,
-  SmolLM2, Mistral, Qwen2/Qwen2.5, Qwen3, Gemma 2, Gemma 3)를 변환합니다. Hugging Face `tokenizer.json`은 `tokenizers` 라이브러리와 같은 결과로 인코딩합니다.
-- **사용:** 텍스트 생성, 대화 모드(`--chat`), top-k·top-p·반복 패널티, 퍼플렉서티 측정을 제공합니다. 변환된 모델(Qwen2.5,
-  Qwen3, SmolLM2, TinyLlama)은 [Hugging Face](https://huggingface.co/models?other=krafla)에서 바로 받을 수 있습니다.
-- **검증:** 커널은 스칼라·배정밀도 기준과, 전체 결과는 numpy 참조 구현과 비교합니다. ARM과 구형 x86은 qemu로,
-  Arm 실기는 CI에서 확인합니다.
+  SmolLM2, Mistral, Qwen2/Qwen2.5, Qwen3, Gemma 2, Gemma 3)를 변환합니다. Hugging Face `tokenizer.json`도
+  변환하며, 인코딩 결과는 `tokenizers` 라이브러리와 같습니다.
+- **사용:** 텍스트 생성, 대화 모드(`--chat`), top-k·top-p 샘플링과 반복 페널티, 퍼플렉서티 측정을 지원합니다.
+  변환된 모델(Qwen2.5, Qwen3, SmolLM2, TinyLlama)은 [Hugging Face](https://huggingface.co/models?other=krafla)에서
+  바로 받을 수 있습니다.
+- **검증:** 커널 출력은 스칼라 구현, 배정밀도 계산과 비교하고, 모델 전체의 출력은 numpy 참조 구현과 비교합니다.
+  ARM과 구형 x86은 qemu에서, 실제 ARM 하드웨어는 CI(GitHub Arm 러너)에서 확인합니다.
 
 자세한 문서는 [문서 사이트](https://jonpark0.github.io/krafla/)와 [위키](https://github.com/JonPark0/krafla/wiki)를 참고하세요.
 
