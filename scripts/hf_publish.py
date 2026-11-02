@@ -146,8 +146,8 @@ def model_card(model, repo_id, base, files, info):
         lines += ["**Built with Llama.**", ""]
     lines += [
         f"INT4 and INT8 conversions of [{model['source']}](https://huggingface.co/{model['source']}) for "
-        f"[Krafla]({REPO_URL}), a dependency-free C11 runtime that runs language models on CPUs "
-        "without a GPU: x86-64 from SSE2 up to AVX-512 VNNI and ARM from ARMv7 NEON up to i8mm and SVE.",
+        f"[Krafla]({REPO_URL}), a dependency-free C11 runtime for CPU-only inference on x86-64 "
+        "(SSE2 up to AVX-512 VNNI) and ARM (ARMv7 NEON up to i8mm and SVE).",
         "",
         "## Files",
         "",
@@ -157,15 +157,16 @@ def model_card(model, repo_id, base, files, info):
     for f in files:
         m = f["measure"]
         lines.append(f"| `{f['name']}` | {f['desc']} | {f['size'] / 2**20:.0f} MiB | {m['perplexity']:.2f} | "
-                     f"{m['prefill']:.0f} tok/s | {m['decode']:.1f} tok/s | `{f['sha256'][:16]}…` |")
+                     f"{m['prefill']:.0f} tok/s | {m['decode']:.1f} tok/s | `{f['sha256'][:16]}`… |")
     lines += [
-        f"| `tokenizer.mlt` | tokenizer | {info['tok_size'] / 2**10:.0f} KiB | | | | `{info['tok_sha256'][:16]}…` |",
+        f"| `tokenizer.mlt` | tokenizer | {info['tok_size'] / 2**10:.0f} KiB | | | | `{info['tok_sha256'][:16]}`… |",
         "",
         f"Measured on {info['machine']} ({info['cpu']}, {info['threads']} threads) with Krafla's "
-        f"`{info['isa']}` build. Perplexity: wikitext-2 test set, 4 chunks of 512 tokens (`tools/perplexity.py --ctx 512 "
-        "--chunks 4`); lower is better, and only files of the same model compare. Speed: `ml_bench -n 128`, "
-        "128 prompt tokens and 128 decoded tokens. Context: "
-        f"{info['max_seq']} positions. The full hashes are in `SHA256SUMS`.",
+        f"`{info['isa']}` build. Perplexity is measured on the wikitext-2 test set, 4 chunks of 512 tokens "
+        "(`tools/perplexity.py --ctx 512 --chunks 4`). Lower is better, and it is only comparable between "
+        "files of the same model. Speed comes from `ml_bench -n 128` (128 prompt tokens, then 128 decoded "
+        f"tokens). The files are converted with a {info['max_seq']}-position context. "
+        "The full hashes are in `SHA256SUMS`.",
         "",
         "## Run",
         "",
@@ -178,7 +179,7 @@ def model_card(model, repo_id, base, files, info):
         f"./ml_run {q4} -z tokenizer.mlt --chat {model['chat']} -t 4",
         "```",
         "",
-        "`ml_run` picks the fastest build your CPU supports. A greedy one-turn reply from "
+        "The release's `ml_run` runs the most capable build your CPU supports. A greedy one-turn reply from "
         f"`{q4}` to \"{CHAT_PROMPT + model.get('prompt_suffix', '')}\":",
         "",
         "```text",

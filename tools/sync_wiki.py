@@ -28,11 +28,11 @@ SIDEBAR = """**Krafla**
 
 - [[Home]]
 - [[FAQ]]
-- [[User Guide|User-Guide]]
+- [[User guide|User-Guide]]
 - [[Architecture]]
-- [[File Format|File-Format]]
-- [[Writing Kernels|Writing-Kernels]]
-- [[Testing]]
+- [[File formats|File-Format]]
+- [[Writing kernels|Writing-Kernels]]
+- [[Testing and benchmarking|Testing]]
 - [[Comparison with llama.cpp|Comparison-with-llama-cpp]]
 """
 

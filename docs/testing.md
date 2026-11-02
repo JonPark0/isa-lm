@@ -35,7 +35,7 @@ It runs both checks in every build, so one source tests every ISA.
 | Scaled matvec, `rope`, `axpy` | relative 1e-5 of the sum of term magnitudes |
 | `quantize_q8` (zero blocks, tiny blocks, ties) | bit-exact against scalar |
 | Other float kernels | relative 1e-5 |
-| `softmax` | also finite for ±1e4 and −1e30 inputs, and uniform when every input is −inf |
+| `softmax` | also finite for ±1e4 and -1e30 inputs, and uniform when every input is -inf |
 
 The first lines of the output name the kernel each op resolved to, for example
 `matvec_q8 -> ml_k_matvec_q8_avx512vnni`.
@@ -53,42 +53,44 @@ The first lines of the output name the kernel each op resolved to, for example
   more tokens than `max_seq` exits with code 2.
 - **Threads:** `-t 3/4/7` give logits identical to `-t 1`, and `ml_run` reports
   the thread count it used.
-- **Packing:** builds with packed kernels really pack (`packed: G` matches
+- **Packing:** builds with packed kernels do pack (`packed: G` matches
   `--help`), and `--no-pack` also matches the reference.
 - **Batched prefill:** `--batch 1`, `--batch 5` and the default produce
   byte-identical logits, and generated text is the same with and without
-  batching. This also holds with `--kv q8`, and so does `-t 3` against `-t 1`.
-- **Q8 and F16 KV caches:** `--kv q8` and `--kv f16` logits match
-  `tools/ref_forward.py --kv q8` / `--kv f16`, which emulate those caches, by
-  the `--kl` criterion below, and batched prefill matches `--batch 1` with
-  either.
+  batching. Both checks also pass with `--kv q8`, where `-t 3` must also match
+  `-t 1`.
+- **Q8 and F16 KV caches:** logits with `--kv q8` and `--kv f16` match
+  `tools/ref_forward.py` run with the same option (it emulates both caches),
+  under the `--kl` criterion described below. Batched prefill matches
+  `--batch 1` with either cache.
 - **Long context:** a 160-position model runs 150 positions, so attention
   crosses its 64-position blocks. The host scalar build must match the
-  reference within 1e-3 (F32 cache) and 5% (Q8, F16). The build under test is held
-  to 5% without the argmax check (`compare_logits.py --any-argmax`): builds
-  with FMA round some activations differently and drift by up to 2% over 150
-  positions, while a wrong block offset or stride garbles the logits (85%
-  error).
+  reference within 1e-3 (F32 cache) and 5% (Q8, F16). The build under test is
+  held to 5% without the argmax check (`compare_logits.py --any-argmax`):
+  builds with FMA round some activations differently and drift by up to 2%
+  over 150 positions, while a wrong block offset or stride garbles the logits
+  (85% error).
 - **Real model (`make test-all`, needs network):** stories15M logits from the
   scalar and avx2 builds, packed and `--no-pack`, are compared with the numpy
   reference using `compare_logits.py --kl 1e-2`. That mode checks that the
   argmax matches, at least 4 of the top 5 tokens agree, and the KL divergence is
-  small. The avx2 build with `--kv q8` is held to the same bound against
-  the F32 reference (KL about 1e-3). A real model can have an activation sitting exactly on a quantization
-  rounding tie. Two valid implementations can then round it differently, which
-  moves logits by up to about 2% while the distribution stays the same (KL
-  ~1e-3). The random-model tests keep the strict 1e-3 relative bound.
+  small. This criterion is used because a real model can have an activation
+  sitting exactly on a quantization rounding tie. Two valid implementations
+  can then round it differently, which moves logits by up to about 2% while
+  the distribution stays the same (KL about 1e-3). The random-model tests keep
+  the strict 1e-3 relative bound. The avx2 build with `--kv q8` is held to the
+  same KL bound against the F32 reference (KL about 1e-3).
 - **Chat:** `--chat` replies match the scalar build, `-i` equals one line of
   stdin, and a conversation that outgrows the context stops with a message.
-- **Bad input:** malformed options (`-n 5x`, ids out of range, NaN
-  temperature, …) exit with code 2, and `--help` exits with code 0.
+- **Bad input:** malformed options (for example `-n 5x`, ids out of range or
+  a NaN temperature) exit with code 2, and `--help` exits with code 0.
 
 ### Tokenizers
 
 - **`test_tokenizer`:** encodes texts with two small tokenizers trained by the
   `tokenizers` library (`tests/data/spm_tiny.json`, `bpe_tiny.json`, one of
-  each kind) and checks the library's ids, decoding, byte fallback, added
-  tokens, and damaged files.
+  each kind) and checks that the ids match the library's, that decoding, byte
+  fallback and added tokens work, and that damaged files are rejected.
 - **`tests/check_tokenizer.py`:** encodes and decodes a corpus with `ml_tok`
   and with the `tokenizers` library and requires identical results. The corpus
   holds contractions, numbers, accents, CJK, Korean, Hindi, Arabic, emoji,
@@ -107,7 +109,7 @@ The first lines of the output name the kernel each op resolved to, for example
 - `dim` of 48 (not a multiple of 32);
 - bad head counts;
 - unknown `wtype` or `rope_type`;
-- a Q8 quant equal to −128;
+- a Q8 quant equal to -128;
 - `vocab < 3`;
 - dimensions whose sizes would overflow.
 
@@ -142,7 +144,7 @@ make ISA=avx2 THREADS=pthread EXTRA_CFLAGS="-fsanitize=thread -g" EXTRA_LDFLAGS=
   - pytest;
   - a download of `stories15M` from llama2.c, followed by text generation.
 - **`arm64`** (ubuntu-24.04-arm) runs scalar, neon, neon_dotprod, neon_i8mm
-  and sve tests natively on Arm hardware (each only if the CPU has the
+  and sve tests natively on ARM hardware (each only if the CPU has the
   extension), then prints a benchmark.
 
 ## Benchmarking
@@ -154,15 +156,15 @@ make ISA=avx2 BENCH_MODEL=bench.mlb bench
 build/avx2-pt/ml_bench bench.mlb -n 128 -t 4        # THREADS=pthread build
 ```
 
-`ml_bench` reports three kinds of numbers:
+`ml_bench` reports:
 
-- matvec ns/iter, GB/s and GOPS, for 768² and 4096² matrices in Q8 and Q4;
+- matvec ns/iter, GB/s and GOPS, for 768² and 4096² matrices in Q8 and Q4, and
+  for the FFN shapes of a 0.5B model (4864×896, 896×4864);
+- the same for the packed kernels (`matvec_q8_pk`, `matvec_q4_pk`) and the
+  batched ones (`matmul_q8_pk`, `matmul_q4_pk`, 128 tokens per call), when the
+  build has them;
 - `quantize_q8` time for 4096 values;
 - tokens/s on the model you pass, with greedy decoding.
-
-`ml_bench` also times the packed kernels (`matvec_q8_pk`, `matvec_q4_pk`) when
-the build has them, the batched ones (`matmul_q8_pk`, `matmul_q4_pk`, 32
-tokens), and the FFN shapes of a 0.5B model (4864×896, 896×4864).
 
 To compare two versions, build both and run them alternately on one machine,
 so that the machine's noise falls on both:
@@ -174,10 +176,10 @@ python3 scripts/bench.py --new . --base ../krafla-main --model bench.mlb --reps 
 
 `scripts/bench.py` builds `ml_bench` for every ISA the CPU runs and prints
 the best of the alternating runs and the new/base ratio as Markdown. The
-**Benchmark** workflow (`.github/workflows/bench.yml`, run by hand from the
-Actions tab) does the same on GitHub's x86-64 and AArch64 runners, for the
-branch it runs on against `base` (default `main`), with a random
-Qwen2.5-0.5B-shaped model or the real one; the tables land in the run's
+**Benchmark** workflow (`.github/workflows/bench.yml`) does the same on
+GitHub's x86-64 and AArch64 runners; start it by hand from the Actions tab. It
+compares the branch it runs on against `base` (default `main`), with a random
+Qwen2.5-0.5B-shaped model or the real one, and writes the tables to the run's
 summary.
 
 All x86 results below are from a 4-vCPU VM with AVX-512 VNNI. The kernel and
@@ -199,7 +201,7 @@ When the matrix fits in cache (768×768), the packed kernels reach 92 GOPS on
 avx2 and 129–139 GOPS on avx512vnni.
 
 **Decoding**, dim-2048 model (4 layers, hidden 5632, vocab 32000), packed
-weights, tok/s, without → with the software prefetch of the weight stream
+weights, tok/s, without and with the software prefetch of the weight stream
 (`-DML_USE_PREFETCH=0` builds the former):
 
 | ISA | Q8 `-t 1` | Q4 `-t 1` | Q8 `-t 4` | Q4 `-t 4` |
@@ -210,12 +212,10 @@ weights, tok/s, without → with the software prefetch of the weight stream
 | avxvnni    | 34.6 → 53.3 | 56.1 → 141.6 | | |
 | avx512vnni | 46.3 → 58.0 | 73.6 → 140.1 | 192 → 254 | 482 → 503 |
 
-Decoding reads every weight once per token. The hardware prefetchers stop at
-4 KB page boundaries, so one core alone could not keep the stream going; the
-packed matvecs now request the weights 4 KB ahead. On the Arm runner
-(Neoverse) the same prefetch made NEON dotprod Q8 decoding 26% slower (470
-against 638 tok/s, interleaved best of 3) and left Q4 unchanged, so Arm builds
-leave it off.
+See [Prefetch](architecture.md#prefetch) for why the packed matvecs prefetch
+4 KB ahead. On the Arm runner (Neoverse) the same prefetch made NEON dotprod
+Q8 decoding 26% slower (470 against 638 tok/s, interleaved best of 3) and left
+Q4 unchanged, so ARM builds leave it off.
 
 **Prompt prefill**, 64 tokens, dim-2048 model (4 layers, hidden 5632, vocab
 32000), packed weights, `-t 1` (tok/s):
@@ -245,7 +245,7 @@ registers. Before that, GCC kept them on the stack, and batched prefill was
 | row blocks, GQA-shared (`--kv f32`) | 19.0 s | 19% | 40.9 |
 | Q8 cache (`--kv q8`) | 13.4 s | 14% | 43.8 |
 
-**Arm, single thread** (GitHub `ubuntu-24.04-arm` runner, Neoverse-class
+**ARM, single thread** (GitHub `ubuntu-24.04-arm` runner, Neoverse-class
 cores). These numbers come from the CI benchmark step, which publishes them as
 annotations. The model is dim 1024, 4 layers, hidden 2816.
 
@@ -272,10 +272,11 @@ python3 tools/perplexity.py build/avx2/ml_run llama.mlb llama.mlt wikitext-2-tes
 
 ## Docs site and wiki
 
-`docs/` is also the [GitHub Pages site](https://jonpark0.github.io/krafla/)
-(Settings → Pages → Deploy from branch `main`, folder `/docs`;
-`docs/_config.yml`, landing page `docs/index.md`). To preview it with the
-`github-pages` gem: `PAGES_REPO_NWO=JonPark0/krafla bundle exec jekyll serve -s docs`.
+`docs/` is also the [GitHub Pages site](https://jonpark0.github.io/krafla/).
+In the repository settings, under Pages, it is deployed from branch `main`,
+folder `/docs`. Its configuration is `docs/_config.yml` and its landing page
+`docs/index.md`. To preview it with the `github-pages` gem:
+`PAGES_REPO_NWO=JonPark0/krafla bundle exec jekyll serve -s docs`.
 
 The GitHub wiki is generated from `README.md` and `docs/`; edit those, never
 the wiki. `.github/workflows/wiki.yml` runs `tools/sync_wiki.py` on every push

@@ -53,30 +53,32 @@ straight into it without copying. Everything is little-endian.
 | 132 | | padding | zero up to offset 256 |
 
 `dim`, `n_layers`, `n_heads`, `n_kv_heads` and `hidden_dim` are limited to
-65536. `vocab` and `max_seq` are limited to 2^24. Files written before RoPE
-scaling existed have zeros at offsets 52–71, which means plain RoPE.
+65536. `vocab` and `max_seq` are limited to 2^24.
+
+Files written before a field existed have zeros there, and zero keeps the
+earlier behavior. Zeros at offsets 52–71 (RoPE scaling) mean plain RoPE. A zero
+`q8_mask` (offset 72, mixed models) stores no matrix as Q8_0. A zero at offset
+76 means no biases. Zeros at offsets 80–95 mean `head_dim = dim / n_heads`, no
+q/k norm and full attention.
 
 Derived values: `head_dim` (offset 80, or `dim / n_heads` when 0),
 `q_dim = head_dim × n_heads` (a multiple of 32) and
-`kv_dim = head_dim × n_kv_heads`. Files written before these fields existed
-have zeros at offsets 80–95: `dim / n_heads`, no q/k norm, full attention.
+`kv_dim = head_dim × n_kv_heads`.
 
 `q8_mask` bits, one per matrix class: 1 `tok_emb`, 2 `wcls`, 4 `wq` and
 `wk`, 8 `wv`, 16 `wo`, 32 `w1` and `w3`, 64 `w2`. With a shared classifier,
-`tok_emb` is Q8_0 if bit 1 or 2 is set. Files written before mixed models
-existed have 0 there.
+`tok_emb` is Q8_0 if bit 1 or 2 is set.
 
 With `qkv_bias` set, each layer stores `bq`, `bk` and `bv` after `wo`; they
-are added to the projections before RoPE. Files written before biases existed
-have 0 at offset 76. With `qk_norm` set, each layer then stores `q_norm` and
-`k_norm` (`head_dim` floats each), applied to every query and key head after
-the biases and before RoPE, with `norm_eps`.
+are added to the projections before RoPE. With `qk_norm` set, each layer then
+stores `q_norm` and `k_norm` (`head_dim` floats each), applied to every query
+and key head after the biases and before RoPE, with `norm_eps`.
 
-With `layer_flags` set, `n_layers` bytes (padded to 64 like every array)
-come first in the body, one per layer: bit 0, the layer attends through the
-sliding window; bit 1, it rotates with `rope_local_theta` instead of
-`rope_theta` and its scaling; other bits must be 0. Without them the window,
-if any, applies to every layer.
+With `layer_flags` set, `n_layers` bytes (padded to 64 like every array) come
+first in the body, one per layer. Bit 0 puts the layer behind the sliding
+window; bit 1 makes it use `rope_local_theta` instead of `rope_theta` and its
+scaling; other bits must be 0. Without layer flags, the window (if any) applies
+to every layer.
 
 ## Body
 
@@ -128,7 +130,7 @@ activation's sign and `-128` has no int8 negation.
 
 Each block of 32 weights takes 16 bytes. Byte `j` of a block holds element `j`
 in its low nibble and element `j + 16` in its high nibble. Weight
-`w = (nibble − 8) × d`, which gives values in [-8, 7].
+`w = (nibble - 8) × d`, which gives values in [-8, 7].
 
 ### Quantization rule
 
@@ -148,40 +150,48 @@ the nearest `f16`, and the quants are `trunc(x × (1/d) + copysign(0.5, x))`
 against that rounded `d`, clamped to ±127. A scale above 65504 cannot be
 stored, and the writer refuses it.
 
-Q4_0 weights are written once, so `tools/mlb.py` fits each block instead: the
-element of largest magnitude goes to a level between -6 and -8.4 (clamped to
-[-8, 7]) in steps of 0.2, the scale `d` is the least-squares fit for those
-levels with each element weighted by x², and the candidate with the least
-weighted error is kept. A block whose largest magnitude is below 1e-6 is
-fitted scaled up to 1 and its `d` scaled back, so that float32 squares and
-cubes do not underflow. `d` can be negative. With `f16` scales the fitted `d`
-is rounded to the nearest `f16`. Any `d` and nibbles are valid input to the
-runtime.
+Because Q4_0 weights are written only once, `tools/mlb.py` searches for the
+best fit per block. It maps the block's largest-magnitude element to each level
+from -6 to -8.4 in steps of 0.2 (clamped to [-8, 7]). For each candidate, `d`
+is the least-squares fit to those levels with each element weighted by x², and
+the candidate with the smallest weighted error wins. A block whose largest
+magnitude is below 1e-6 is scaled up to 1 before fitting and its `d` scaled
+back, so that float32 squares and cubes do not underflow. `d` can be negative.
+With `f16` scales the fitted `d` is rounded to the nearest `f16`. Any `d` and
+nibbles are valid input to the runtime.
 
 With `tools/convert.py --q4-rule round` (the default for Gemma 3), Q4_0 blocks
-are rounded as llama.cpp does instead: `d` is the element of largest magnitude divided by −8,
-and each level is `trunc(x × (1/d) + 8.5)`, at most 15, minus 8.
+are rounded as llama.cpp does instead: `d` is the element of largest magnitude
+divided by -8, and each level is `trunc(x × (1/d) + 8.5)`, at most 15, minus 8.
 Quantization-aware checkpoints trained for Q4_0 expect exactly this rounding.
 
-With `tools/convert.py --imatrix`, each element's weight is instead, as in
-llama.cpp, `imp × sqrt(s² + x²)`: `s²` is the mean x² of the element's row,
-and `imp` the importance of its input channel, the channel's mean squared
-input (`ml_run --imatrix`) divided by its matrix's mean over channels, and at
-least 0.001.
+With `tools/convert.py --imatrix`, each element is instead weighted as in
+llama.cpp, by `imp × sqrt(s² + x²)`. Here `s²` is the mean x² of the element's
+row, and `imp` is the importance of its input channel: the channel's mean
+squared input (from `ml_run --imatrix`) divided by the mean over all channels
+of that matrix, with a floor of 0.001.
 
 ### Importance matrix file
 
-`ml_run --imatrix FILE` writes, little-endian: `"MLI1"`, then `u32` version
-(1), `n_layers`, `dim`, `hidden_dim`, `0`; `u64` tokens summed into the layers
-and tokens summed into the classifier (prompt tokens prefilled without logits
-skip it); then `float64` sums of squares, per channel: for each layer the
-input of `wq`/`wk`/`wv` (`dim`), of `wo` (`dim`), of `w1`/`w3` (`dim`) and of
-`w2` (`hidden_dim`), then the classifier input (`dim`).
+`ml_run --imatrix FILE` writes a 40-byte header followed by the sums, all
+little-endian:
+
+| Offset | Type | Meaning |
+|-------:|------|---------|
+| 0  | `char[4]` | magic `"MLI1"` |
+| 4  | `u32` | version, `1` |
+| 8  | `u32` | `n_layers` |
+| 12 | `u32` | `dim` |
+| 16 | `u32` | `hidden_dim` |
+| 20 | `u32` | `q_dim` if it differs from `dim`, else 0 |
+| 24 | `u64` | tokens summed into the layers |
+| 32 | `u64` | tokens summed into the classifier (prompt tokens prefilled without logits skip it) |
+| 40 | `float64[]` | sums of squares per channel: for each layer, the input of `wq`/`wk`/`wv` (`dim`), of `wo` (`q_dim`), of `w1`/`w3` (`dim`) and of `w2` (`hidden_dim`); then the classifier input (`dim`) |
 
 ## RoPE
 
 Rotary embeddings act on interleaved pairs `(2i, 2i+1)` of each head. Pair `i`
-uses the inverse frequency `inv_i = rope_theta^(−2i / head_dim)`, as in
+uses the inverse frequency `inv_i = rope_theta^(-2i / head_dim)`, as in
 llama2.c. Hugging Face checkpoints use the rotate-half layout instead; the
 converter permutes the rows of `wq` and `wk` to match.
 
@@ -193,30 +203,32 @@ With `rope_type = 1` (llama3), each frequency is rescaled the same way
 ```
 wavelen < orig / hi     → inv_i                                  (high frequency: unchanged)
 wavelen > orig / lo     → inv_i / f                              (low frequency: scaled)
-otherwise               → (1 − s) · inv_i / f + s · inv_i,  s = (orig / wavelen − lo) / (hi − lo)
+otherwise               → (1 - s) · inv_i / f + s · inv_i,  s = (orig / wavelen - lo) / (hi - lo)
 ```
 
-With `rope_type = 2` (linear), every frequency is divided by `f`. With
-`rope_type = 3` (yarn), as `transformers` computes it, with `d(r)` the
-dimension at which a wavelength fits `r` rotations into `orig`:
+With `rope_type = 2` (linear), every frequency is divided by `f`.
+
+With `rope_type = 3` (yarn), the frequencies are computed as `transformers`
+computes them. Here `d(r)` is the dimension at which a wavelength fits `r`
+rotations into `orig`:
 
 ```
 d(r)  = head_dim · ln(orig / (2π r)) / (2 ln rope_theta)
-lo    = max(floor(d(beta_fast)), 0),  hi = min(ceil(d(beta_slow)), head_dim − 1)
-ramp  = clamp((i − lo) / (hi − lo), 0, 1)
-inv_i → inv_i / f · ramp + inv_i · (1 − ramp)
+lo    = max(floor(d(beta_fast)), 0),  hi = min(ceil(d(beta_slow)), head_dim - 1)
+ramp  = clamp((i - lo) / (hi - lo), 0, 1)
+inv_i → inv_i / f · ramp + inv_i · (1 - ramp)
 ```
 
-and the cos and sin tables are multiplied by `rope_attn_factor` (the
-converter takes `attention_factor` from the config, or computes
-`0.1 ln f + 1`, or the `mscale` / `mscale_all_dim` ratio, as transformers does).
+The cos and sin tables are then multiplied by `rope_attn_factor`. The converter
+takes `attention_factor` from the config, or computes `0.1 ln f + 1` or the
+`mscale` / `mscale_all_dim` ratio, as `transformers` does.
 
 ## Validation done by the loader
 
 | Problem | Status |
 |---------|--------|
 | file cannot be opened | `ML_E_IO` |
-| empty file, file shorter than the header, bad magic or version, unknown `wtype` or `rope_type`, invalid llama3, linear or yarn parameters, a `rope_attn_factor` without yarn, `qkv_bias`, `qk_norm`, `layer_flags`, `post_norms` or `scale_f16` other than 0 or 1, an unknown `act`, a negative or non-finite `embed_scale`, `attn_scale`, `attn_softcap` or `final_softcap`, unknown layer flag bits, a negative `rope_local_theta` or a local-RoPE layer without one, `sliding_window` above 2^24, file shorter than the arrays the header implies, a Q8 quant equal to −128 | `ML_E_FORMAT` |
+| empty file, file shorter than the header, bad magic or version, unknown `wtype` or `rope_type`, invalid llama3, linear or yarn parameters, a `rope_attn_factor` without yarn, `qkv_bias`, `qk_norm`, `layer_flags`, `post_norms` or `scale_f16` other than 0 or 1, an unknown `act`, a negative or non-finite `embed_scale`, `attn_scale`, `attn_softcap` or `final_softcap`, unknown layer flag bits, a negative `rope_local_theta` or a local-RoPE layer without one, `sliding_window` above 2^24, file shorter than the arrays the header implies, a Q8 quant equal to -128 | `ML_E_FORMAT` |
 | zero or over-limit dimension, `dim` or `hidden_dim` not a multiple of 32, `dim % n_heads ≠ 0` without `head_dim`, `n_heads % n_kv_heads ≠ 0`, odd `head_dim`, `q_dim` not a multiple of 32 or above 65536, `vocab < 3` | `ML_E_SHAPE` |
 
 All size arithmetic is overflow-checked, which matters on 32-bit targets.
@@ -233,8 +245,8 @@ All size arithmetic is overflow-checked, which matters on 32-bit targets.
 | 8 | `u32` | `kind` | 1 = SentencePiece-style BPE, 2 = byte-level BPE with the Llama 3 pre-tokenizer |
 | 12 | `u32` | `n_vocab` | tokens, at most the model's `vocab` |
 | 16 | `u32` | `n_merges` | merge rules |
-| 20 | `i32` | `bos` | BOS id, or −1 |
-| 24 | `i32` | `eos` | EOS id, or −1 |
+| 20 | `i32` | `bos` | BOS id, or -1 |
+| 24 | `i32` | `eos` | EOS id, or -1 |
 | 28 | `u32` | `flags` | 1: prepend BOS when encoding; 2: `ignore_merges` (a whole pre-token found in the vocabulary is one token); 4: SentencePiece prefix `▁` only at the start of the text, not after each added token; 8: byte-level, NFC-normalize the text between added tokens; 16: byte-level, numbers are split into single digits (`\p{N}` instead of `\p{N}{1,3}`); 32: byte-level, the GPT-2 regex instead of the Llama 3 one; 64: byte-level, every `\p{N}` is split off before the regex (a `Digits(individual_digits)` pre-tokenizer); other bits must be 0 |
 
 Then `n_vocab` tokens, each `u8 attr`, `u32 len` and `len` bytes:

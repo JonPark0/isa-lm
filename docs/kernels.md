@@ -86,15 +86,18 @@ void ml_k_matmul_q4_pk_<isa>(float *Y, int ldy, const ml_qtensor *W, const ml_qb
 `W->pq` and `W->pd` hold the packed quants and scales. `r0` is a multiple of
 the group size, and rows at or above `r1` must not be written.
 
-To register them, define the following in the ISA header, then add a branch
-for the ISA to both packed `#if` chains in `config/ml_config.h`:
+To register them, define the following macros in the ISA header, then add a
+branch for the ISA to both packed `#if` chains in `config/ml_config.h`:
 
-- `ML_HAS_MATVEC_PK_<ISA>` and, if the matmul exists, `ML_HAS_MATMUL_PK_<ISA>`;
-- the group size `ML_PACK_G`, the Q8 offset `ML_PACK_Q8_OFFSET` (128 if the dot
-  instruction needs unsigned weights), the Q4 xor `ML_PACK_Q4_XOR` (`0x88` to
-  read nibbles as signed `q − 8`, else 0), `ML_PACK_Q8`, set to 0 to leave Q8
-  row-major, and `ML_PACK_D16`, set to 1 if the kernels read f16 scales when a
-  tensor's `pd16` is set (files with f16 scales).
+| Macro | Meaning |
+|-------|---------|
+| `ML_HAS_MATVEC_PK_<ISA>` | the ISA has packed matvecs |
+| `ML_HAS_MATMUL_PK_<ISA>` | the ISA has packed matmuls; define it only if they exist |
+| `ML_PACK_G` | the group size |
+| `ML_PACK_Q8_OFFSET` | the Q8 offset: 128 if the dot instruction needs unsigned weights |
+| `ML_PACK_Q4_XOR` | the Q4 xor: `0x88` to read nibbles as signed `q - 8`, else 0 |
+| `ML_PACK_Q8` | set to 0 to leave Q8 row-major |
+| `ML_PACK_D16` | set to 1 if the kernels read f16 scales when a tensor's `pd16` is set (files with f16 scales) |
 
 An ISA with a packed matvec but no matmul falls back to `ml_k_matmul_*_pk_loop`.
 An ISA may also add only a matmul on another ISA's layout, as `neon_i8mm` does

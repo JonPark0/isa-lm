@@ -1,6 +1,6 @@
 ---
 title: "Architecture: compile-time kernel binding for CPU LLM inference"
-description: "How Krafla binds each operator to a per-ISA SIMD kernel at compile time, guards against unsupported CPUs, packs weights, batches prompts and threads LLM inference."
+description: "How Krafla binds each operator to a per-ISA SIMD kernel at compile time, refuses to run on unsupported CPUs, packs weights, batches prompt prefill and splits inference across threads."
 nav_order: 5
 nav_title: "Architecture"
 mermaid: true
@@ -30,13 +30,13 @@ only `core/ml.h` and their own intrinsics headers.
 
 ## Compile-time kernel selection
 
-There are twelve kernels. Every ISA implements the same C ABI, named
+Every ISA implements the same C ABI for these kernels, named
 `ml_k_<op>_<isa>`:
 
 | Kernel | Purpose |
 |--------|---------|
 | `matvec_q8`, `matvec_q4` | `y[r0..r1) = W · x` for Q8/Q4 weights and Q8 activations |
-| `quantize_q8` | float activations → Q8_0 |
+| `quantize_q8` | float activations to Q8_0 |
 | `rmsnorm`, `softmax`, `silu_mul`, `add`, `rope` | element-wise and normalization ops |
 | `dot_f32`, `axpy_f32` | attention over an F32 KV cache: scores of one query against many strided K rows, and the weighted sum of V rows |
 | `dot_q8`, `axpy_q8` | the same over a Q8 KV cache: integer dot products, one scale per row |
@@ -47,9 +47,9 @@ fallback chain:
 
 ```
 avx512vnni → avx2 → sse41 → sse2 → scalar
-avxvnni    → avx2 → …
+avxvnni    → avx2 → ...
 neon_i8mm  → neon_dotprod → neon → scalar
-sve        → neon_dotprod → …
+sve        → neon_dotprod → ...
 ```
 
 Each enabled `kernels/<i>/k_<i>.h` defines `ML_HAS_<OP>_<I>` for the kernels it
@@ -77,7 +77,7 @@ flowchart TD
     config --> calls["ops/ and model/ call ml_k_&lt;op&gt; directly<br/>(no function pointers; LTO can inline it)"]
 ```
 
-The `avx512vnni` chain skips `avxvnni` on purpose. Some CPUs with AVX512-VNNI
+The `avx512vnni` chain skips `avxvnni` on purpose. Some CPUs with AVX-512 VNNI
 (Ice Lake, Cascade Lake) lack the VEX-encoded AVX-VNNI, and `avxvnni` only
 implements the matvecs, which `avx512vnni` covers itself.
 
@@ -113,7 +113,7 @@ for each layer:
     q, k, v = matvec(Wq|Wk|Wv, qa) (+ biases) ; per-head q/k norm (Qwen3) ; rope(q, k)
                                                       k, v go into the KV cache (F32, or quantized for Q8)
     o  = attention(q, K[w..pos], V[w..pos])           per head, GQA head h → kv head h / (n_heads / n_kv_heads);
-                                                      w = 0, or pos + 1 − sliding_window with a window
+                                                      w = 0, or pos + 1 - sliding_window with a window
     x += matvec(Wo, quantize_q8(o))                   (rmsnorm'd first with post-norms, Gemma 3)
     h  = rmsnorm(x) ; qa = quantize_q8(h)
     g  = act(matvec(W1, qa)) * matvec(W3, qa)         act: SiLU, or GELU (tanh) for Gemma
@@ -151,39 +151,43 @@ repacks every weight matrix, except the embedding table, into a
   reads. f32 scales stay f32, and both give the same floats as the row-major
   kernels.
 - **Signedness:** `vpdpbusd` and `pmaddubsw` need an unsigned operand. Q4
-  nibbles are used raw (0..15); on VNNI and SSE2, Q8 weights are stored +128. The
-  matching `offset × Σx` is subtracted per block in int32, so the result is
-  exact. AVX2 and SSE4.1 keep Q8 signed and use `psignb`. On those two, a Q4
-  block's 8 `pmaddubsw` results are summed in int16 (at most 30480) before a
-  single `pmaddwd`. The NEON dotprod layout stores Q4 bytes `^ 0x88`, so each
-  nibble is `q − 8` as a signed 4-bit value: a shift left by 4 (low nibble) or
-  a mask (high nibble) gives `16 (q − 8)` as a signed byte for `sdot`/`smmla`,
-  and the conversion to float drops the 16 exactly (`vcvtq_n_f32_s32`), so no
-  per-block sum is subtracted.
+  nibbles are used raw (0–15). On VNNI and SSE2, Q8 weights are stored with a
+  +128 offset. The matching `offset × Σx` is subtracted per block in int32, so
+  the result is exact. AVX2 and SSE4.1 keep Q8 signed and use `psignb`. On
+  those two, a Q4 block's 8 `pmaddubsw` results are summed in int16 (at most
+  30480) before a single `pmaddwd`.
+- **Q4 on NEON dotprod:** the layout stores Q4 bytes XORed with 0x88, so each
+  nibble reads as the signed 4-bit value `q - 8`. Shifting left by 4 (low
+  nibble) or masking (high nibble) gives `16 (q - 8)` as a signed byte for
+  `sdot`/`smmla`. The conversion to float (`vcvtq_n_f32_s32`) removes the 16
+  exactly, so no per-block sum is subtracted.
 
 After packing, the original mapped pages are released with
 `madvise(MADV_DONTNEED)`, so resident memory stays about the size of the model.
 `ml_run --no-pack` keeps the row-major kernels. Only the scalar build has no
 packed kernels.
 
+Builds without an 8-bit dot product use other inner loops on the same layout:
+
 - **SSE2** has no 8-bit multiply at all. Each 16-bit lane of a weight step
-  holds two bytes of one row; the kernel splits it into the even byte
-  (`w & 0xFF`) and the odd byte (`w >> 8`) and multiplies each with `pmaddwd`
-  against activations expanded once per call into matching broadcast pairs.
-  Every `pmaddwd` then yields one partial sum per row, and the inner loop has
-  no shuffles, which matters on CPUs with a single shuffle port.
+  holds two bytes of one row. The kernel splits it into the even byte
+  (`w & 0xFF`) and the odd byte (`w >> 8`), and multiplies each with `pmaddwd`
+  against activations that are expanded once per call into matching broadcast
+  pairs. Every `pmaddwd` then yields one partial sum per row, and the inner
+  loop has no shuffles, which matters on CPUs with a single shuffle port.
 - **NEON without a dot product** (ARMv7, Cortex-A53/A72) uses
   `vmull_s8`/`vpadalq_s16` on the same 4-row groups.
-- **sve** builds use the NEON dotprod packed kernels.
+
+SVE builds use the NEON dotprod packed kernels.
 
 ### Pack cache
 
 `ml_run --pack-cache` writes the packed arrays, exactly as laid out in memory,
 to `MODEL.pk<G>` behind a 512-byte header. The header records the pack group,
-the Q8 offset, the Q4 xor, the model's size and header, and a hash of bytes sampled across
-the model file. A later run whose build and model match maps the file instead
-of packing (`ml_model_pack_cached`); otherwise it packs and rewrites it,
-through a temporary file and a rename.
+the Q8 offset, the Q4 xor, the model's size and header, and a hash of bytes
+sampled across the model file. A later run whose build and model match maps
+the file instead of packing (`ml_model_pack_cached`); otherwise it packs and
+rewrites it, through a temporary file and a rename.
 
 ### Prefetch
 
@@ -197,9 +201,9 @@ decoding 26% slower, so it is on by default for x86 only;
 
 ## Batched prompt prefill
 
-Decoding one token reads every weight once, so on large models it is bound by
-memory bandwidth. `ml_prefill` instead processes up to 128 prompt tokens per
-step, and each matrix product becomes a matmul (`ml_k_matmul_*_pk`). Each
+Because decoding is bound by memory bandwidth on large models, `ml_prefill`
+processes up to 128 prompt tokens per step, and each matrix product becomes a
+matmul (`ml_k_matmul_*_pk`). Each
 packed weight vector is loaded once and feeds a tile of 4 tokens (6 on
 AVX-512 VNNI, 8 on the NEON dotprod, i8mm and SVE builds), which makes the
 kernel compute-bound.
@@ -222,8 +226,10 @@ kernel compute-bound.
 ## Attention
 
 For each position, every query head scores all cached positions, takes a
-softmax, and sums the V rows. On long contexts this dominates: a head reads
-`pos × head_dim` K values and as many V values per token.
+softmax, and sums the V rows. Its cost grows with the context: a head reads
+`pos × head_dim` K values and as many V values per token. Over 4096 decoded
+positions it takes 14–19% of the forward pass on the model of the
+long-context table in [Testing](testing.md#benchmarking).
 
 - **Whole rows per call:** `dot_f32` and `axpy_f32` take a block of cached
   positions at once (strided rows of the cache), so the SIMD loops run over
@@ -255,10 +261,10 @@ count, so results stay bit-identical across `-t` and `--batch`.
    - SentencePiece-style: spaces become `▁`, a `▁` is prepended, and each
      character starts as one symbol (or as byte tokens if it is not in the
      vocabulary).
-   - Byte-level: the Llama 3 regex splits the text, matched by hand on code
-     points with letter and number tables generated from Unicode
-     (`tools/gen_unicode.py`); each chunk starts as one symbol per byte, unless
-     the whole chunk is a token.
+   - Byte-level: the text is split by the Llama 3 regex, which is matched by
+     hand on code points using letter and number tables generated from the
+     Unicode data (`tools/gen_unicode.py`). Each chunk starts as one symbol per
+     byte, unless the whole chunk is a token.
 3. **Merges:** the lowest-ranked merge among adjacent symbols is applied, the
    leftmost first, until none applies. Symbols form a linked list and candidate
    pairs sit in a heap, so a piece of n symbols takes O(n log n): 48 KB of text
@@ -269,10 +275,10 @@ count, so results stay bit-identical across `-t` and `--batch`.
 - **Weights:** memory-mapped read-only (`mmap` on POSIX, `CreateFileMapping` on
   Windows, or `fread` with `-DML_NO_MMAP`).
 - **Runtime buffers:** carved from **one** 64-byte-aligned arena, sized from the
-  header. These are the activations (one token, plus 32-token prefill
-  batches), the Q8 activation buffers, the KV cache `[layer][max_seq][kv_dim]`
-  (F32, or int8 plus one scale per position and KV head with `--kv q8`), the
-  RoPE tables and the logits.
+  header. These are the activations (one token, plus the prefill batch), the
+  Q8 activation buffers, the KV cache `[layer][max_seq][kv_dim]` (F32; F16
+  with `--kv f16`; or int8 plus one scale per position and KV head with
+  `--kv q8`), the RoPE tables and the logits.
 - **Packed weights:** one allocation the size of the matrices. The originals'
   pages are released after packing.
 - **Size checks:** every size product is overflow-checked, so on a 32-bit target
@@ -282,25 +288,26 @@ count, so results stay bit-identical across `-t` and `--batch`.
 ## Profiling
 
 `ml_run --profile` times each stage of the forward pass (qkv, attention, wo,
-ffn, classifier, other) and prints the split. On every model measured, the
-matrix products take more than 95% of the time.
+ffn, classifier, other) and prints the split. At short contexts the matrix
+products take more than 95% of the time on every model measured; on long
+contexts attention takes a growing share (see [Attention](#attention) and the
+long-context table in [Testing](testing.md#benchmarking)).
 
 ## Threads
 
 `core/threads.c` provides a pool built with `THREADS=pthread`. With
 `THREADS=1`, all pthread code is compiled out.
 
-- **Caller as thread 0:** the caller works as thread 0, and `n − 1` workers wait
-  on an atomic generation counter.
-- **Waiting:** a worker spins about 20 000 pause iterations, then sleeps on a
-  condition variable. A sequentially consistent `sleepers` counter makes sure
-  `ml_pool_run` never misses a sleeping worker.
-- **Work split:** matvec and matmul split rows into chunks that are multiples
-  of 4, or of the pack group G; attention splits by head.
-- **Serial cut-off:** ops below 2^18 multiply-adds run on the caller alone,
-  because waking threads would cost more than the work.
-- **Determinism:** each output element is computed by exactly one thread in a
-  fixed order, so results are bit-identical for any thread count.
+The caller works as thread 0, and `n - 1` workers wait on an atomic generation
+counter. A waiting worker spins about 20 000 pause iterations, then sleeps on a
+condition variable. A sequentially consistent `sleepers` counter makes sure
+`ml_pool_run` never misses a sleeping worker.
+
+Matvec and matmul split rows into chunks that are multiples of 4, or of the
+pack group G; attention splits by head. Ops below 2^18 multiply-adds run on the
+caller alone, because waking threads would cost more than the work. Each output
+element is computed by exactly one thread in a fixed order, so results are
+bit-identical for any thread count.
 
 ## Error handling
 
@@ -319,5 +326,5 @@ executables map these to exit codes; see the [user guide](user-guide.md#running)
   between ISAs, so outputs agree within 1e-5 of the dot product's magnitude.
 - **exp:** SIMD kernels approximate `exp` with the Cephes `expf` polynomial
   (relative error around 1e-7); scalar kernels use `expf`.
-- **Masked softmax:** if every input is −inf, `softmax` returns a uniform
+- **Masked softmax:** if every input is -inf, `softmax` returns a uniform
   distribution.

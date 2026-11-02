@@ -39,12 +39,13 @@
   `gemma3`) convert to the text model, leaving the vision tower out. Gemma 3
   4B Instruct Q8 logits match an F32 numpy forward (KL 0.002); Q4 takes 2083
   MiB and decodes at 14.8 tok/s on 4 vCPUs.
-- Gemma 2: logit soft-capping of the attention scores and the logits (`.mlb`
-  header offsets 124 and 128), even layers behind the sliding window.
-- F16 KV cache (`--kv f16`): K and V in half precision, half the memory of
-  the F32 cache at the same speed (Qwen2.5 0.5B Q4, 1500 tokens: prefill 722
-  against 718 tok/s), with perplexity within the rounding (21.71 against
-  21.74; the Q8 cache gives 22.82).
+- Gemma 2: soft-capping of attention scores and logits (`.mlb` header
+  offsets 124 and 128), and the sliding window on even-numbered layers.
+- F16 KV cache (`--kv f16`): K and V are stored in half precision, which
+  halves the cache memory compared with F32. Prefill speed is unchanged
+  (Qwen2.5 0.5B Q4, 1500 tokens: 722 tok/s with F16 against 718 with F32),
+  and perplexity barely moves (21.71 with F16 against 21.74 with F32; the Q8
+  cache gives 22.82).
 
 ### Changed
 
@@ -52,10 +53,10 @@
   a 4B model converts in about the memory of its largest tensor instead of
   16 GB.
 - AVX-512 VNNI prompt prefill feeds each weight vector to 6 tokens instead
-  of 4: matmuls 1.05-1.08× and Qwen2.5 0.5B prefill 1.05× faster on one
+  of 4: matmuls 1.05–1.08× and Qwen2.5 0.5B prefill 1.05× faster on one
   thread (GitHub runner; four threads within noise).
 - AVX2 Q8 prompt prefill takes |x| from a buffer made once per tile, saving a
-  `psignb` per token and step: Q8 matmuls 1.10-1.16× and Qwen2.5 0.5B Q8
+  `psignb` per token and step: Q8 matmuls 1.10–1.16× and Qwen2.5 0.5B Q8
   prefill 1.14× faster on one thread (four threads within noise).
 
 ## 0.4.0 — 2026-10-31
